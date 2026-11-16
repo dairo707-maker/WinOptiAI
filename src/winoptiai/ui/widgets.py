@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -18,42 +18,124 @@ from PySide6.QtWidgets import (
 
 
 class NotebookCanvas(QWidget):
-    """Stationery desk notebook paper canvas with fine 24px architectural pencil grid."""
+    """Stationery desk notebook paper canvas with crumpled paper texture & pencil grid."""
 
     def __init__(self, theme_mode: str = "dark", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("RootCanvas")
         self._theme_mode = theme_mode
+        self._paper_cache: dict[tuple[str, int, int], QPixmap] = {}
 
     def set_theme_mode(self, mode: str) -> None:
         self._theme_mode = mode
         self.update()
 
+    def _get_paper_pixmap(self, width: int, height: int) -> QPixmap:
+        w = max(320, width)
+        h = max(240, height)
+        key = (self._theme_mode, w, h)
+        if key in self._paper_cache:
+            return self._paper_cache[key]
+
+        import random
+
+        pix = QPixmap(w, h)
+        is_light = self._theme_mode == "light"
+        base_bg = QColor(244, 239, 228, 240) if is_light else QColor(23, 23, 21, 232)
+        pix.fill(base_bg)
+
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rng = random.Random(202603)
+
+        # Subtle multi-faceted paper creases (shadow + paper-ridge highlight gradients)
+        for _ in range(18):
+            cx = rng.uniform(0, w)
+            cy = rng.uniform(0, h)
+            dx = rng.uniform(110, 320)
+            dy = rng.uniform(-160, 160)
+            nx = -dy * 0.18
+            ny = dx * 0.18
+
+            grad = QLinearGradient(cx, cy, cx + nx, cy + ny)
+            if is_light:
+                grad.setColorAt(0.0, QColor(125, 114, 94, 0))
+                grad.setColorAt(0.42, QColor(125, 114, 94, 18))
+                grad.setColorAt(0.50, QColor(255, 253, 247, 36))
+                grad.setColorAt(0.62, QColor(125, 114, 94, 12))
+                grad.setColorAt(1.0, QColor(125, 114, 94, 0))
+            else:
+                grad.setColorAt(0.0, QColor(0, 0, 0, 0))
+                grad.setColorAt(0.42, QColor(0, 0, 0, 34))
+                grad.setColorAt(0.50, QColor(236, 230, 216, 13))
+                grad.setColorAt(0.62, QColor(0, 0, 0, 22))
+                grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+
+            poly = QPolygonF(
+                [
+                    QPointF(cx - dx, cy - dy),
+                    QPointF(cx + dx, cy + dy),
+                    QPointF(cx + dx + nx, cy + dy + ny),
+                    QPointF(cx - dx + nx, cy - dy + ny),
+                ]
+            )
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(grad)
+            p.drawPolygon(poly)
+
+            # Fine crisp fold ridge line
+            ridge_color = QColor(115, 104, 86, 20) if is_light else QColor(235, 228, 212, 14)
+            p.setPen(QPen(ridge_color, 1))
+            p.drawLine(QPointF(cx - dx * 0.7, cy - dy * 0.7), QPointF(cx + dx * 0.7, cy + dy * 0.7))
+
+        # Organic paper fiber flecks
+        fiber_color = QColor(110, 102, 88, 20) if is_light else QColor(225, 218, 204, 14)
+        p.setPen(QPen(fiber_color, 1))
+        for _ in range(420):
+            fx = rng.randint(0, w)
+            fy = rng.randint(0, h)
+            p.drawLine(fx, fy, fx + rng.randint(-3, 3), fy + rng.randint(-2, 2))
+
+        p.end()
+        if len(self._paper_cache) > 6:
+            self._paper_cache.clear()
+        self._paper_cache[key] = pix
+        return pix
+
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         rect = self.rect()
 
-        if self._theme_mode == "light":
-            bg = QColor(246, 242, 233, 236)
-            grid_color = QColor(124, 117, 102, 28)
-            margin_color = QColor(168, 92, 82, 46)
-        else:
-            bg = QColor(22, 22, 20, 226)
-            grid_color = QColor(228, 222, 208, 16)
-            margin_color = QColor(180, 120, 110, 32)
+        painter.drawPixmap(0, 0, self._get_paper_pixmap(rect.width(), rect.height()))
 
-        painter.fillRect(rect, bg)
+        if self._theme_mode == "light":
+            minor_grid = QColor(126, 118, 102, 34)
+            major_grid = QColor(112, 104, 88, 54)
+            margin_color = QColor(172, 84, 74, 74)
+            tick_color = QColor(58, 54, 48, 85)
+        else:
+            minor_grid = QColor(228, 222, 208, 18)
+            major_grid = QColor(228, 222, 208, 32)
+            margin_color = QColor(196, 128, 116, 48)
+            tick_color = QColor(228, 222, 208, 70)
 
         step = 24
-        painter.setPen(QPen(grid_color, 1))
-        for x in range(step, rect.width(), step):
+        for idx, x in enumerate(range(step, rect.width(), step), start=1):
+            painter.setPen(QPen(major_grid if idx % 5 == 0 else minor_grid, 1))
             painter.drawLine(x, 0, x, rect.height())
-        for y in range(step, rect.height(), step):
+        for idx, y in enumerate(range(step, rect.height(), step), start=1):
+            painter.setPen(QPen(major_grid if idx % 5 == 0 else minor_grid, 1))
             painter.drawLine(0, y, rect.width(), y)
 
-        # Subtle stationery notebook vertical margin line after sidebar
+        # Double stationery notebook vertical margin line after sidebar
         painter.setPen(QPen(margin_color, 1))
-        painter.drawLine(254, 0, 254, rect.height())
+        painter.drawLine(252, 0, 252, rect.height())
+        painter.drawLine(256, 0, 256, rect.height())
+
+        # Architectural corner registration ticks
+        painter.setPen(QPen(tick_color, 1))
+        painter.drawLine(rect.width() - 18, 10, rect.width() - 8, 10)
+        painter.drawLine(rect.width() - 10, 10, rect.width() - 10, 20)
         painter.end()
         super().paintEvent(event)
 

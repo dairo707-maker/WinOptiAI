@@ -245,6 +245,9 @@ class MainWindow(QMainWindow):
         rc_layout.addWidget(self.stack, stretch=1)
         main_layout.addWidget(right_col, stretch=1)
 
+        # Apply active palette icons across all views immediately on first frame
+        self._apply_ui_appearance()
+
         # System Tray
         self.tray = WinOptiTray(
             self,

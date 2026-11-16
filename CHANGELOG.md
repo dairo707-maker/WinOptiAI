@@ -2,6 +2,13 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.3.2] - 2026-11-16
+
+### Mejorado y Corregido
+- **Contraste de Iconos en Tema Claro y Oscuro (`main_window.py`, `theme.py`):** al iniciar la app se sincroniza inmediatamente `icon_inverted` e `explorer_icon` en todas las vistas, corrigiendo los iconos oscuros sobre botones primarios oscuros y el tono tenue del boton de Explorador en modo claro.
+- **Trazos de Boceto a Lapiz y Papel Medio Arrugado de Libreta (`assets/icons/*.svg`, `widgets.py`):** iconos SVG redibujados con doble trazo y sombreado sutil de lapiz tecnico, textura procedural cacheada de papel medio arrugado con pliegues y fibras organicas, cuadricula de cuaderno con guias mayores cada 120 px y doble margen vertical de libreta.
+- **Activacion de Animaciones del Sistema:** guia/soporte para mantener activos los efectos visuales de Windows 11 (`MinAnimate`, `TaskbarAnimations`, `ClientAreaAnimation`).
+
 ## [0.3.1] - 2026-11-16
 
 ### Corregido y Mejorado
