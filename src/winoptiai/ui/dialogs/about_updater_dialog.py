@@ -161,7 +161,11 @@ class AboutUpdaterDialog(QDialog):
             ok, msg = res
             self.status_lbl.setText(msg)
             if ok:
-                QApplication.quit()
+                parent_win = self.parent()
+                if parent_win is not None and hasattr(parent_win, "_quit_app"):
+                    parent_win._quit_app()
+                else:
+                    QApplication.quit()
             else:
                 self.install_btn.setEnabled(True)
 
