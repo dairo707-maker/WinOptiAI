@@ -1,21 +1,23 @@
 # WinOptiAI
 
-Gestor nativo de almacenamiento, optimizacion de procesos para IA agentica, control termico y auditoria UEFI/BIOS para **Windows 11**.
+Gestor nativo de almacenamiento, optimizacion de procesos para IA agentica, telemetria en tiempo real, control termico y auditoria universal de hardware para **Windows 11**.
+
+Creado por **Dairo (`dairo707-maker`)** · Repositorio oficial: `https://github.com/dairo707-maker/WinOptiAI`
 
 ## Capacidades Principales
 
 - **Almacenamiento con Seguridad Kernel:**
   - Proteccion estricta de marcadores **OneDrive Cloud-Only** (`GetFileAttributesW`) para evitar descargas accidentales.
   - Verificacion de bloqueos en tiempo real con **Windows Restart Manager (`Rstrtmgr.dll`)**.
-  - Motor de deduplicacion **BLAKE3 en 4 etapas** con opcion de **Hardlinks NTFS** o traslado a **Boveda de Cuarentena** con restauracion SHA-256.
-  - Escaneo seguro de temporales, caches de desarrollo (`uv`, `pip`, `npm`, `NuGet`, `D3DSCache`) y artefactos huerfanos.
-- **Optimizacion para IA Agentica (Local y Online):**
-  - Politica hibrida **SRE** con histeresis de 5 minutos: monitoreo pasivo ligero y alivio automatico de memoria si la RAM libre cae bajo `1.8 GB`.
-  - Aplicacion nativa de **Windows 11 EcoQoS (Efficiency Mode)** y compactacion segura de Working Set (`EmptyWorkingSet`).
-  - Detector de procesos zombis huerfanos (`node.exe`, `python.exe`, `uv.exe`, servidores MCP).
-- **Control Termico y Auditoria BIOS/UEFI:**
-  - Perfiles termicos oficiales mediante `powercfg` (`PERFBOOSTMODE` y `EPP`) para evitar recalentamiento en laptops Intel Core / Iris Xe.
-  - Auditoria de firmware SMBIOS/WMI, salud SMART/TRIM NVMe, controlador grafico Intel Iris Xe y reinicio asistido a UEFI (`shutdown /r /fw`).
+  - Motor de deduplicacion **BLAKE3 en 4 etapas** con **Vista Previa**, **Autolimpiador por Reglas**, **Hardlinks NTFS** y **Boveda de Cuarentena** con restauracion SHA-256.
+  - **Vista Jerarquica por Carpetas y Formatos**, tablas ordenables por columna y acceso **Ver en Explorador** en cada resultado.
+- **Optimizacion para IA Agentica y Telemetria en Tiempo Real:**
+  - Politica hibrida **SRE** calibrada automaticamente segun la RAM fisica del equipo (`1.2–4.0 GB` umbral, histeresis 5m).
+  - Aplicacion nativa de **Windows 11 EcoQoS (Efficiency Mode)**, compactacion segura de Working Set (`EmptyWorkingSet`), visibilidad de tareas activas y cazador de workers MCP zombis.
+  - Monitoreo en tiempo real via `pdh.dll` de frecuencia CPU (GHz), Turbo (%), carga por nucleo y sensores termicos ACPI/NVMe.
+- **Perfilador Universal de Hardware, Temas y Auto-Actualizacion:**
+  - Compatible con cualquier equipo Windows 11 (Intel/AMD/NVIDIA, portatiles y escritorios) con botones de accion automatica en la tabla de Auditoria.
+  - Tema **Oscuro (Obsidian Acrylic)** y **Claro (Alabaster Frost)** de bordes rectos `0px`, idiomas **ES / EN / PT** en app e instalador Inno Setup 6, y **Auto-actualizador verificado con SHA-256** desde GitHub Releases.
 
 ## Instalacion (Paso a Paso) y Compilacion
 

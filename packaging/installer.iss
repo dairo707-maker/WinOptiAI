@@ -1,11 +1,11 @@
-; Inno Setup 6 script for WinOptiAI — Dual-Mode Windows Installer Wizard
+; Inno Setup 6 script for WinOptiAI — Multilingual Dual-Mode Windows Installer Wizard
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.2.0"
 #endif
 
 #define MyAppName "WinOptiAI"
-#define MyAppPublisher "WinOptiAI Open Source"
-#define MyAppURL "https://github.com/dairo/WinOptiAI"
+#define MyAppPublisher "Dairo (dairo707-maker) - WinOptiAI Open Source"
+#define MyAppURL "https://github.com/dairo707-maker/WinOptiAI"
 #define MyAppExeName "WinOptiAI.exe"
 #define SourcePortableExe "..\dist\WinOptiAI-Portable.exe"
 
@@ -17,9 +17,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-AppUpdatesURL={#MyAppURL}
-; Dual mode: user chooses "Solo para mi" (%LOCALAPPDATA%\Programs\WinOptiAI)
-; or "Todos los usuarios" (C:\Program Files\WinOptiAI) and can browse any directory
+AppUpdatesURL={#MyAppURL}/releases
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\{#MyAppName}
@@ -36,15 +34,49 @@ OutputBaseFilename=WinOptiAI-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-ShowLanguageDialog=no
+ShowLanguageDialog=yes
 
 [Languages]
-Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "pt_br"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "pt"; MessagesFile: "compiler:Languages\Portuguese.isl"
+
+[CustomMessages]
+es.DesktopIcon=Crear un acceso directo en el Escritorio
+en.DesktopIcon=Create a Desktop shortcut
+pt_br.DesktopIcon=Criar um atalho na Area de Trabalho
+pt.DesktopIcon=Criar um atalho no Ambiente de Trabalho
+
+es.StartMenuIcon=Crear acceso directo en el Menu Inicio
+en.StartMenuIcon=Create Start Menu shortcut
+pt_br.StartMenuIcon=Criar atalho no Menu Iniciar
+pt.StartMenuIcon=Criar atalho no Menu Iniciar
+
+es.ShortcutsGroup=Accesos directos:
+en.ShortcutsGroup=Shortcuts:
+pt_br.ShortcutsGroup=Atalhos:
+pt.ShortcutsGroup=Atalhos:
+
+es.AutoStartTask=Iniciar WinOptiAI minimizado en la bandeja al arrancar Windows
+en.AutoStartTask=Start WinOptiAI minimized to system tray on Windows startup
+pt_br.AutoStartTask=Iniciar WinOptiAI minimizado na bandeja ao iniciar o Windows
+pt.AutoStartTask=Iniciar WinOptiAI minimizado na bandeja ao arrancar o Windows
+
+es.SreGroup=Automatizacion SRE:
+en.SreGroup=SRE Automation:
+pt_br.SreGroup=Automacao SRE:
+pt.SreGroup=Automacao SRE:
+
+es.LaunchNow=Ejecutar {#MyAppName} ahora
+en.LaunchNow=Launch {#MyAppName} now
+pt_br.LaunchNow=Executar {#MyAppName} agora
+pt.LaunchNow=Executar {#MyAppName} agora
 
 [Tasks]
-Name: "desktopicon"; Description: "Crear un acceso directo en el Escritorio"; GroupDescription: "Accesos directos:"
-Name: "startmenuicon"; Description: "Crear acceso directo en el Menu Inicio"; GroupDescription: "Accesos directos:"
-Name: "autostart"; Description: "Iniciar WinOptiAI minimizado en la bandeja al arrancar Windows"; GroupDescription: "Automatizacion SRE:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:DesktopIcon}"; GroupDescription: "{cm:ShortcutsGroup}"
+Name: "startmenuicon"; Description: "{cm:StartMenuIcon}"; GroupDescription: "{cm:ShortcutsGroup}"
+Name: "autostart"; Description: "{cm:AutoStartTask}"; GroupDescription: "{cm:SreGroup}"; Flags: unchecked
 
 [Files]
 Source: "{#SourcePortableExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
@@ -56,17 +88,18 @@ Source: "..\docs\BIOS_AND_THERMAL_GUIDE_LENOVO_82FE.md"; DestDir: "{app}\docs"; 
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Guia de Instalacion"; Filename: "{app}\docs\INSTALL_GUIDE.md"
-Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
+Name: "{group}\INSTALL_GUIDE"; Filename: "{app}\docs\INSTALL_GUIDE.md"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startmenuicon
 
 [Registry]
-; Optional minimized startup in user Run key (only if user checks autostart task)
+; Sync installer language to HKCU so WinOptiAI launches in the same language
+Root: HKCU; Subkey: "Software\WinOptiAI"; ValueType: string; ValueName: "Language"; ValueData: "{language}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --minimized"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Ejecutar {#MyAppName} ahora"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\docs"

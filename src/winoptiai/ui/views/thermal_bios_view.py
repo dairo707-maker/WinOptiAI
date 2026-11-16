@@ -1,4 +1,4 @@
-"""Thermal control & BIOS/Hardware Audit view for Windows 11 & Lenovo 82FE."""
+"""Thermal control, real-time CPU/Temp monitor, and actionable Universal Hardware Audit view."""
 
 from __future__ import annotations
 
@@ -16,12 +16,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.i18n import tr
 from ...core.sre_policy import SREPolicyEngine
+from ...core.telemetry import LiveSystemTelemetry, probe_elevated_temperatures
 from ...thermal_bios.bios_auditor import (
     HardwareAuditReport,
-    reboot_to_uefi_firmware,
+    execute_audit_action,
     run_hardware_bios_audit,
-    run_nvme_trim_analysis,
 )
 from ...thermal_bios.thermal_controller import (
     THERMAL_PROFILES,
@@ -29,44 +30,48 @@ from ...thermal_bios.thermal_controller import (
     restore_default_power_scheme,
 )
 from ..svg_icons import load_svg_icon
-from ..widgets import GlassPanel, StatusTag
+from ..widgets import GlassPanel, StatusTag, configure_sortable_table
 
 
 class ThermalBiosView(QWidget):
-    """Thermal profile manager and read-only UEFI/Driver/NVMe hardware auditor."""
+    """Real-time CPU/Thermal telemetry + universal hardware audit with 1-click remediations."""
 
     def __init__(
         self,
         policy: SREPolicyEngine,
         run_async: Callable,
         notify_cb: Callable[[str], None],
+        on_elevated_temps: Callable[[float | None, float | None], None],
+        lang: str = "es",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.policy = policy
         self.run_async = run_async
         self.notify_cb = notify_cb
+        self.on_elevated_temps = on_elevated_temps
+        self.lang = lang
         self.profile_buttons: dict[str, QPushButton] = {}
         self.last_report: HardwareAuditReport | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(14)
+        root.setSpacing(12)
 
         # Header + 1 primary action
         header = QHBoxLayout()
         tbox = QVBoxLayout()
         tbox.setSpacing(3)
-        title = QLabel("Control Termico y Auditoria BIOS")
-        title.setObjectName("PageTitle")
-        sub = QLabel("Regulacion oficial de energia EPP/Turbo Boost, analisis de drivers e integridad UEFI.")
-        sub.setObjectName("PageSubtitle")
-        tbox.addWidget(title)
-        tbox.addWidget(sub)
+        self.title_lbl = QLabel(tr("thermal_title", lang))
+        self.title_lbl.setObjectName("PageTitle")
+        self.sub_lbl = QLabel(tr("thermal_sub", lang))
+        self.sub_lbl.setObjectName("PageSubtitle")
+        tbox.addWidget(self.title_lbl)
+        tbox.addWidget(self.sub_lbl)
         header.addLayout(tbox)
         header.addStretch()
 
-        self.audit_btn = QPushButton(" Auditar Hardware y BIOS")
+        self.audit_btn = QPushButton(" Escanear Hardware y BIOS")
         self.audit_btn.setObjectName("PrimaryAction")
         self.audit_btn.setIcon(load_svg_icon("shield", color="#0B0D10", size=14))
         self.audit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -74,7 +79,27 @@ class ThermalBiosView(QWidget):
         header.addWidget(self.audit_btn)
         root.addLayout(header)
 
-        # Thermal Profiles Strip (3 clean 0px cards)
+        # Real-Time CPU Frequency / Turbo / Per-Core / Temperature strip
+        rt_panel = GlassPanel(elevated=True)
+        rt_layout = QHBoxLayout(rt_panel)
+        rt_layout.setContentsMargins(14, 10, 14, 10)
+        rt_layout.setSpacing(12)
+
+        self.rt_cpu_lbl = QLabel("CPU: --% | Frecuencia: -- GHz | Turbo: --%")
+        self.rt_cpu_lbl.setObjectName("MonoValue")
+        rt_layout.addWidget(self.rt_cpu_lbl, stretch=1)
+
+        self.rt_temp_tag = StatusTag("SENSOR TERMICO", "neutral")
+        rt_layout.addWidget(self.rt_temp_tag)
+
+        self.uac_temp_btn = QPushButton("Leer Sensores (UAC)")
+        self.uac_temp_btn.setObjectName("GhostAction")
+        self.uac_temp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.uac_temp_btn.clicked.connect(self._on_probe_temps)
+        rt_layout.addWidget(self.uac_temp_btn)
+        root.addWidget(rt_panel)
+
+        # Thermal Profiles Strip
         profiles_row = QHBoxLayout()
         profiles_row.setSpacing(10)
         for key, prof in THERMAL_PROFILES.items():
@@ -105,51 +130,71 @@ class ThermalBiosView(QWidget):
             profiles_row.addWidget(card)
         root.addLayout(profiles_row)
 
-        # Hardware spec summary + secondary firmware actions
+        # Hardware inventory summary + power restore
         hw_panel = GlassPanel()
         hw_layout = QHBoxLayout(hw_panel)
-        hw_layout.setContentsMargins(14, 12, 14, 12)
+        hw_layout.setContentsMargins(14, 10, 14, 10)
         hw_layout.setSpacing(12)
 
-        self.hw_lbl = QLabel("Cargando inventario SMBIOS / WMI...")
+        self.hw_lbl = QLabel("Escaneando perfil completo de hardware...")
         self.hw_lbl.setObjectName("MonoValue")
         self.hw_lbl.setWordWrap(True)
         hw_layout.addWidget(self.hw_lbl, stretch=1)
 
-        self.trim_btn = QPushButton("Optimizar TRIM SSD")
-        self.trim_btn.setObjectName("GhostAction")
-        self.trim_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.trim_btn.clicked.connect(self._on_trim)
-        hw_layout.addWidget(self.trim_btn)
-
-        self.uefi_btn = QPushButton("Reiniciar a UEFI BIOS")
-        self.uefi_btn.setObjectName("GhostAction")
-        self.uefi_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.uefi_btn.clicked.connect(self._on_reboot_uefi)
-        hw_layout.addWidget(self.uefi_btn)
-
-        self.reset_pwr_btn = QPushButton("Restaurar Energia")
+        self.reset_pwr_btn = QPushButton("Restaurar Energia Fabrica")
         self.reset_pwr_btn.setObjectName("GhostAction")
         self.reset_pwr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pwr_btn.clicked.connect(self._on_restore_power)
         hw_layout.addWidget(self.reset_pwr_btn)
         root.addWidget(hw_panel)
 
-        # Recommendations table
-        self.rec_table = QTableWidget(0, 3)
-        self.rec_table.setHorizontalHeaderLabels(["SUBSISTEMA", "ESTADO", "DIAGNOSTICO Y RECOMENDACION"])
-        self.rec_table.verticalHeader().setVisible(False)
-        self.rec_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.rec_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        # Sortable Audit Recommendations Table WITH automated 1-click "ACCION" column
+        self.rec_table = QTableWidget(0, 4)
+        self.rec_table.setHorizontalHeaderLabels(
+            ["SUBSISTEMA", "ESTADO", "DIAGNOSTICO Y RECOMENDACION", "ACCION AUTOMATICA"]
+        )
+        configure_sortable_table(self.rec_table)
         self.rec_table.setWordWrap(True)
-        self.rec_table.setAlternatingRowColors(True)
         hdr = self.rec_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self.rec_table, stretch=1)
 
         self._highlight_profile_button(self.policy.config.active_thermal_profile)
+
+    def apply_language_and_theme(self, lang: str, icon_inverted: str) -> None:
+        self.lang = lang
+        self.title_lbl.setText(tr("thermal_title", lang))
+        self.sub_lbl.setText(tr("thermal_sub", lang))
+        self.audit_btn.setIcon(load_svg_icon("shield", color=icon_inverted, size=14))
+
+    def update_live_telemetry(self, live: LiveSystemTelemetry) -> None:
+        freq_ghz = live.cpu_freq_mhz / 1000.0 if live.cpu_freq_mhz else 0.0
+        cores_preview = " ".join(f"{int(c)}%" for c in live.per_core_pct[:8])
+        self.rt_cpu_lbl.setText(
+            f"CPU: {live.cpu_utility_pct:.0f}%  |  Reloj: {freq_ghz:.2f} GHz  |  "
+            f"Turbo: {live.cpu_turbo_pct:.0f}%  |  Nucleos: [{cores_preview}]"
+        )
+        if live.cpu_temp_c is not None:
+            nvme_str = f" / NVMe {live.nvme_temp_c:.0f} C" if live.nvme_temp_c is not None else ""
+            tone = "risk" if live.cpu_temp_c >= 85 else ("warn" if live.cpu_temp_c >= 72 else "ok")
+            self.rt_temp_tag.set_tone(f"CPU {live.cpu_temp_c:.1f} C{nvme_str}", tone)
+        else:
+            self.rt_temp_tag.set_tone("ACPI PROTEGIDO (UAC)", "neutral")
+
+    def _on_probe_temps(self) -> None:
+        self.uac_temp_btn.setEnabled(False)
+        self.notify_cb("Solicitando lectura termica ACPI/NVMe (UAC)...")
+
+        def _done(res: tuple[float | None, float | None, str]) -> None:
+            self.uac_temp_btn.setEnabled(True)
+            cpu_c, nvme_c, msg = res
+            self.on_elevated_temps(cpu_c, nvme_c)
+            self.notify_cb(msg)
+
+        self.run_async(probe_elevated_temperatures, _done, "Lectura termica UAC")
 
     def _highlight_profile_button(self, active_key: str) -> None:
         for key, btn in self.profile_buttons.items():
@@ -177,29 +222,47 @@ class ThermalBiosView(QWidget):
             self.policy.record_audit_event("usuario", "Energia fabrica", msg)
         self.notify_cb(msg)
 
-    def _on_trim(self) -> None:
-        _, msg = run_nvme_trim_analysis()
-        self.notify_cb(msg)
-
-    def _on_reboot_uefi(self) -> None:
-        _, msg = reboot_to_uefi_firmware()
-        self.notify_cb(msg)
-
     def refresh_audit(self) -> None:
         self.audit_btn.setEnabled(False)
-        self.run_async(run_hardware_bios_audit, self._on_audit_ready)
+        self.run_async(run_hardware_bios_audit, self._on_audit_ready, "Auditoria universal hardware")
+
+    def _run_recommendation(self, action_id: str, area: str) -> None:
+        ok, msg = execute_audit_action(action_id)
+        if ok:
+            if action_id == "apply_cool_profile":
+                self.policy.config.active_thermal_profile = "cool"
+                self.policy.save_config()
+                self._highlight_profile_button("cool")
+            elif action_id == "apply_balanced_profile":
+                self.policy.config.active_thermal_profile = "balanced"
+                self.policy.save_config()
+                self._highlight_profile_button("balanced")
+            self.policy.record_audit_event("auditoria", f"Accion {area}", msg)
+        self.notify_cb(msg)
 
     def _on_audit_ready(self, report: HardwareAuditReport) -> None:
         self.audit_btn.setEnabled(True)
         self.last_report = report
+        tipo = "Portatil" if report.is_laptop else "Escritorio"
         self.hw_lbl.setText(
-            f"EQUIPO: {report.manufacturer} {report.model}  |  BIOS: {report.bios_version} ({report.bios_date})\n"
-            f"CPU: {report.cpu_name} ({report.cpu_cores})  |  VIRT: {report.virtualization}  |  SECURE BOOT: {report.secure_boot}\n"
-            f"GPU: {report.gpu_name} (Driver {report.gpu_driver})  |  NVMe: {report.nvme_model} [{report.nvme_health}]"
+            f"EQUIPO: {report.manufacturer} {report.model} ({tipo})  |  BIOS: {report.bios_version} ({report.bios_date})\n"
+            f"CPU: {report.cpu_name} ({report.cpu_cores})  |  RAM: {report.total_ram_gb:.1f} GB (Umbral SRE: {report.recommended_ram_threshold_gb:.1f} GB)\n"
+            f"GPU: {report.gpu_name} ({report.gpu_driver})  |  DISCO: {report.nvme_model} [{report.media_type} - {report.nvme_health}]"
         )
+
+        self.rec_table.setSortingEnabled(False)
         self.rec_table.setRowCount(len(report.recommendations))
         for r, item in enumerate(report.recommendations):
             self.rec_table.setItem(r, 0, QTableWidgetItem(item["area"]))
             self.rec_table.setItem(r, 1, QTableWidgetItem(item["estado"]))
             self.rec_table.setItem(r, 2, QTableWidgetItem(item["detalle"]))
+
+            action_id = item.get("action_id", "")
+            action_label = item.get("action_label", "Ejecutar")
+            btn = QPushButton(action_label)
+            btn.setObjectName("GhostAction")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, aid=action_id, ar=item["area"]: self._run_recommendation(aid, ar))
+            self.rec_table.setCellWidget(r, 3, btn)
+        self.rec_table.setSortingEnabled(True)
         self.rec_table.resizeRowsToContents()

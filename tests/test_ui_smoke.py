@@ -1,4 +1,4 @@
-"""Smoke test for Obsidian Acrylic UI startup, embedded fonts, SVG icons, and 4 views."""
+"""Smoke test for Obsidian/Alabaster Acrylic UI, theme/language toggle, sorting, and About dialog."""
 
 from __future__ import annotations
 
@@ -8,17 +8,18 @@ import time
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
+from winoptiai.ui.dialogs.about_updater_dialog import AboutUpdaterDialog
 from winoptiai.ui.main_window import MainWindow
 from winoptiai.ui.theme import build_obsidian_qss, register_embedded_fonts
 
 
-def test_ui_instantiation_and_embedded_fonts() -> None:
+def test_ui_instantiation_themes_sorting_and_about() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication([])
 
     t0 = time.perf_counter()
     register_embedded_fonts(app)
-    app.setStyleSheet(build_obsidian_qss())
+    app.setStyleSheet(build_obsidian_qss("dark"))
 
     families = set(QFontDatabase.families())
     assert "Instrument Sans" in families
@@ -29,10 +30,29 @@ def test_ui_instantiation_and_embedded_fonts() -> None:
     assert win.stack.count() == 4
     assert elapsed_ms < 2500.0
 
-    # Verify switching through all 4 views raises no errors
+    # Verify sortable tables enabled across views
+    assert win.overview_view.audit_table.isSortingEnabled()
+    assert win.storage_view.table.isSortingEnabled()
+    assert win.storage_view.format_table.isSortingEnabled()
+    assert win.processes_view.proc_table.isSortingEnabled()
+    assert win.thermal_view.rec_table.isSortingEnabled()
+
+    # Switch tabs and storage modes cleanly
     for idx in range(4):
         win._switch_tab(idx)
         assert win.stack.currentIndex() == idx
+    for mode in ("junk", "duplicates", "tree", "orphans", "quarantine"):
+        win.storage_view._switch_mode(mode)
+
+    # Toggle light theme and back to dark
+    win._toggle_theme()
+    assert win.policy.config.theme_mode in {"light", "dark"}
+    win._toggle_theme()
+
+    # Instantiate About & Updater dialog
+    dlg = AboutUpdaterDialog("es", win.policy.config.theme_mode, win._run_async, "Test PC", win)
+    assert "WinOptiAI" in dlg.windowTitle()
+    dlg.close()
 
     win._force_quit = True
     win.close()

@@ -1,4 +1,4 @@
-"""Reusable minimalist Obsidian Acrylic UI components (strictly 0px corners)."""
+"""Reusable minimalist Obsidian/Alabaster Acrylic UI components (strictly 0px corners)."""
 
 from __future__ import annotations
 
@@ -8,12 +8,52 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+
+class NumericTableItem(QTableWidgetItem):
+    """Table item sorting by numeric UserRole key instead of lexicographical text."""
+
+    def __init__(self, display_text: str, sort_value: float | int) -> None:
+        super().__init__(display_text)
+        self.setData(Qt.ItemDataRole.UserRole, float(sort_value))
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        a = self.data(Qt.ItemDataRole.UserRole)
+        b = other.data(Qt.ItemDataRole.UserRole)
+        if a is not None and b is not None:
+            return float(a) < float(b)
+        return super().__lt__(other)
+
+
+class NumericTreeItem(QTreeWidgetItem):
+    """Tree item sorting numerically on columns that store UserRole byte/count values."""
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        col = self.treeWidget().sortColumn() if self.treeWidget() else 0
+        a = self.data(col, Qt.ItemDataRole.UserRole)
+        b = other.data(col, Qt.ItemDataRole.UserRole)
+        if a is not None and b is not None:
+            return float(a) < float(b)
+        return super().__lt__(other)
+
+
+def configure_sortable_table(table: QTableWidget) -> None:
+    """Apply consistent non-editable row-selection and clickable column sorting."""
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    table.setAlternatingRowColors(True)
+    table.setSortingEnabled(True)
+    table.horizontalHeader().setSortIndicatorShown(True)
+
 from .svg_icons import load_svg_pixmap
-from .theme import MONO_FONT_FAMILY, PALETTE
+from .theme import MONO_FONT_FAMILY, get_palette
 
 
 class GlassPanel(QFrame):
@@ -28,11 +68,11 @@ class StatusTag(QLabel):
     """Minimalist custom inline tag badge (0px, 1px hairline border, IBM Plex Mono)."""
 
     TONES = {
-        "neutral": ("#9BA3AE", "rgba(155, 163, 174, 48)", "rgba(155, 163, 174, 14)"),
-        "active": ("#E2E7ED", "rgba(226, 231, 237, 90)", "rgba(226, 231, 237, 24)"),
-        "ok": ("#9BB8AA", "rgba(140, 168, 154, 85)", "rgba(140, 168, 154, 18)"),
-        "warn": ("#D4A76A", "rgba(200, 155, 98, 90)", "rgba(200, 155, 98, 18)"),
-        "risk": ("#CC7A7A", "rgba(184, 106, 106, 95)", "rgba(184, 106, 106, 22)"),
+        "neutral": ("#9BA3AE", "rgba(155, 163, 174, 65)", "rgba(155, 163, 174, 16)"),
+        "active": ("#94A3B8", "rgba(148, 163, 184, 95)", "rgba(148, 163, 184, 24)"),
+        "ok": ("#3D8B68", "rgba(61, 139, 104, 90)", "rgba(61, 139, 104, 20)"),
+        "warn": ("#B47B2B", "rgba(180, 123, 43, 95)", "rgba(180, 123, 43, 20)"),
+        "risk": ("#B44C4C", "rgba(180, 76, 76, 95)", "rgba(180, 76, 76, 22)"),
     }
 
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None) -> None:
@@ -69,19 +109,20 @@ class SharpMetricCell(GlassPanel):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(elevated=False, parent=parent)
+        self._icon_name = icon_name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
         header = QHBoxLayout()
         header.setSpacing(8)
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(load_svg_pixmap(icon_name, color=PALETTE["text_secondary"], size=14))
-        header.addWidget(icon_lbl)
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setPixmap(load_svg_pixmap(icon_name, color=get_palette("dark")["text_secondary"], size=14))
+        header.addWidget(self.icon_lbl)
 
-        title_lbl = QLabel(title.upper())
-        title_lbl.setObjectName("SectionLabel")
-        header.addWidget(title_lbl)
+        self.title_lbl = QLabel(title.upper())
+        self.title_lbl.setObjectName("SectionLabel")
+        header.addWidget(self.title_lbl)
         header.addStretch()
 
         self.tag = StatusTag("LECTURA", "neutral")
@@ -101,6 +142,13 @@ class SharpMetricCell(GlassPanel):
         self.bar.setValue(0)
         self.bar.setTextVisible(False)
         layout.addWidget(self.bar)
+
+    def refresh_theme(self, mode: str) -> None:
+        color = get_palette(mode)["text_secondary"]
+        self.icon_lbl.setPixmap(load_svg_pixmap(self._icon_name, color=color, size=14))
+
+    def set_title(self, title: str) -> None:
+        self.title_lbl.setText(title.upper())
 
     def update_metric(
         self,

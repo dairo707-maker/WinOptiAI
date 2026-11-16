@@ -1,4 +1,7 @@
-"""Obsidian Acrylic design system: strict 0px geometry, Instrument Sans + IBM Plex Mono."""
+"""Dual-theme design system: Obsidian Acrylic (Dark) & Alabaster Frost (Light).
+
+Strict 0px corners, 1px hairline borders, embedded Instrument Sans + IBM Plex Mono.
+"""
 
 from __future__ import annotations
 
@@ -8,26 +11,71 @@ from PySide6.QtWidgets import QApplication
 from .. import get_base_dir
 
 
-PALETTE = {
+DARK_PALETTE = {
+    "mode": "dark",
     "bg_window": "rgba(11, 13, 16, 218)",
-    "bg_sidebar": "rgba(15, 18, 23, 210)",
-    "bg_glass": "rgba(22, 26, 33, 175)",
-    "bg_glass_elevated": "rgba(30, 35, 44, 195)",
-    "bg_hover": "rgba(216, 224, 234, 20)",
-    "bg_active": "rgba(216, 224, 234, 34)",
+    "bg_sidebar": "rgba(15, 18, 23, 212)",
+    "bg_glass": "rgba(22, 26, 33, 178)",
+    "bg_glass_elevated": "rgba(30, 35, 44, 198)",
+    "bg_table": "rgba(13, 16, 20, 170)",
+    "bg_table_alt": "rgba(20, 24, 30, 145)",
+    "bg_header": "rgba(19, 23, 29, 224)",
+    "bg_menu": "#12161C",
+    "bg_hover": "rgba(216, 224, 234, 22)",
+    "bg_active": "rgba(216, 224, 234, 36)",
     "border_hairline": "rgba(255, 255, 255, 24)",
-    "border_strong": "rgba(216, 224, 234, 68)",
+    "border_strong": "rgba(216, 224, 234, 72)",
     "text_primary": "#F1F3F5",
     "text_secondary": "#9BA3AE",
     "text_muted": "#646D78",
+    "primary_bg": "#E2E7ED",
+    "primary_fg": "#0B0D10",
+    "primary_hover": "#FFFFFF",
+    "icon_color": "#D8E0EA",
+    "icon_inverted": "#0B0D10",
     "tag_ice": "#CBD5E1",
     "tag_warn": "#C89B62",
     "tag_risk": "#B86A6A",
     "tag_ok": "#8CA89A",
 }
 
+LIGHT_PALETTE = {
+    "mode": "light",
+    "bg_window": "rgba(244, 246, 248, 236)",
+    "bg_sidebar": "rgba(235, 239, 243, 232)",
+    "bg_glass": "rgba(255, 255, 255, 192)",
+    "bg_glass_elevated": "rgba(248, 250, 252, 225)",
+    "bg_table": "rgba(255, 255, 255, 205)",
+    "bg_table_alt": "rgba(240, 243, 247, 195)",
+    "bg_header": "rgba(232, 236, 241, 235)",
+    "bg_menu": "#F8FAFC",
+    "bg_hover": "rgba(17, 22, 29, 14)",
+    "bg_active": "rgba(17, 22, 29, 24)",
+    "border_hairline": "rgba(17, 22, 29, 28)",
+    "border_strong": "rgba(17, 22, 29, 75)",
+    "text_primary": "#11161D",
+    "text_secondary": "#4B5563",
+    "text_muted": "#6B7280",
+    "primary_bg": "#11161D",
+    "primary_fg": "#F8FAFC",
+    "primary_hover": "#242D38",
+    "icon_color": "#1E2530",
+    "icon_inverted": "#F8FAFC",
+    "tag_ice": "#334155",
+    "tag_warn": "#A16207",
+    "tag_risk": "#991B1B",
+    "tag_ok": "#166534",
+}
+
+# Backward-compatible default reference
+PALETTE = DARK_PALETTE
+
 UI_FONT_FAMILY = "Instrument Sans"
 MONO_FONT_FAMILY = "IBM Plex Mono"
+
+
+def get_palette(mode: str = "dark") -> dict[str, str]:
+    return LIGHT_PALETTE if mode == "light" else DARK_PALETTE
 
 
 def register_embedded_fonts(app: QApplication) -> None:
@@ -56,8 +104,9 @@ def format_bytes(num_bytes: int | float) -> str:
     return f"{val:.2f} TB"
 
 
-def build_obsidian_qss() -> str:
+def build_obsidian_qss(mode: str = "dark") -> str:
     """Return global QSS stylesheet enforcing 0px corners, 1px hairline borders, and glass surfaces."""
+    p = get_palette(mode)
     return f"""
     * {{
         border-radius: 0px;
@@ -66,32 +115,32 @@ def build_obsidian_qss() -> str:
     }}
 
     QMainWindow, QDialog {{
-        background-color: {PALETTE["bg_window"]};
-        color: {PALETTE["text_primary"]};
+        background-color: {p["bg_window"]};
+        color: {p["text_primary"]};
     }}
 
     QWidget#RootCanvas {{
-        background-color: {PALETTE["bg_window"]};
-        border: 1px solid {PALETTE["border_hairline"]};
+        background-color: {p["bg_window"]};
+        border: 1px solid {p["border_hairline"]};
     }}
 
     QWidget#Sidebar {{
-        background-color: {PALETTE["bg_sidebar"]};
-        border-right: 1px solid {PALETTE["border_hairline"]};
+        background-color: {p["bg_sidebar"]};
+        border-right: 1px solid {p["border_hairline"]};
     }}
 
     QWidget#GlassPanel {{
-        background-color: {PALETTE["bg_glass"]};
-        border: 1px solid {PALETTE["border_hairline"]};
+        background-color: {p["bg_glass"]};
+        border: 1px solid {p["border_hairline"]};
     }}
 
     QWidget#GlassPanelElevated {{
-        background-color: {PALETTE["bg_glass_elevated"]};
-        border: 1px solid {PALETTE["border_hairline"]};
+        background-color: {p["bg_glass_elevated"]};
+        border: 1px solid {p["border_hairline"]};
     }}
 
     QLabel {{
-        color: {PALETTE["text_primary"]};
+        color: {p["text_primary"]};
         background: transparent;
         border: none;
     }}
@@ -100,12 +149,12 @@ def build_obsidian_qss() -> str:
         font-size: 20px;
         font-weight: 600;
         letter-spacing: -0.3px;
-        color: {PALETTE["text_primary"]};
+        color: {p["text_primary"]};
     }}
 
     QLabel#PageSubtitle {{
         font-size: 12px;
-        color: {PALETTE["text_secondary"]};
+        color: {p["text_secondary"]};
     }}
 
     QLabel#SectionLabel {{
@@ -113,26 +162,26 @@ def build_obsidian_qss() -> str:
         font-size: 10px;
         font-weight: 500;
         letter-spacing: 1.2px;
-        color: {PALETTE["text_muted"]};
+        color: {p["text_muted"]};
     }}
 
     QLabel#MetricValue {{
         font-family: "{MONO_FONT_FAMILY}", monospace;
-        font-size: 22px;
+        font-size: 21px;
         font-weight: 500;
-        color: {PALETTE["text_primary"]};
+        color: {p["text_primary"]};
     }}
 
     QLabel#MonoValue {{
         font-family: "{MONO_FONT_FAMILY}", monospace;
         font-size: 12px;
-        color: {PALETTE["text_primary"]};
+        color: {p["text_primary"]};
     }}
 
     QPushButton#NavButton {{
         background-color: transparent;
         border: 1px solid transparent;
-        color: {PALETTE["text_secondary"]};
+        color: {p["text_secondary"]};
         text-align: left;
         padding: 10px 14px;
         font-size: 13px;
@@ -140,22 +189,22 @@ def build_obsidian_qss() -> str:
     }}
 
     QPushButton#NavButton:hover {{
-        background-color: {PALETTE["bg_hover"]};
-        color: {PALETTE["text_primary"]};
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
     }}
 
     QPushButton#NavButton[active="true"] {{
-        background-color: {PALETTE["bg_active"]};
-        border-left: 2px solid {PALETTE["tag_ice"]};
-        border-top: 1px solid {PALETTE["border_hairline"]};
-        border-bottom: 1px solid {PALETTE["border_hairline"]};
-        color: {PALETTE["text_primary"]};
+        background-color: {p["bg_active"]};
+        border-left: 2px solid {p["tag_ice"]};
+        border-top: 1px solid {p["border_hairline"]};
+        border-bottom: 1px solid {p["border_hairline"]};
+        color: {p["text_primary"]};
     }}
 
     QPushButton#PrimaryAction {{
-        background-color: #E2E7ED;
-        color: #0B0D10;
-        border: 1px solid #E2E7ED;
+        background-color: {p["primary_bg"]};
+        color: {p["primary_fg"]};
+        border: 1px solid {p["primary_bg"]};
         padding: 9px 18px;
         font-size: 12px;
         font-weight: 600;
@@ -163,72 +212,85 @@ def build_obsidian_qss() -> str:
     }}
 
     QPushButton#PrimaryAction:hover {{
-        background-color: #FFFFFF;
-        border-color: #FFFFFF;
+        background-color: {p["primary_hover"]};
+        border-color: {p["primary_hover"]};
     }}
 
     QPushButton#PrimaryAction:disabled {{
-        background-color: rgba(226, 231, 237, 45);
-        border-color: rgba(226, 231, 237, 45);
-        color: rgba(11, 13, 16, 140);
+        opacity: 0.45;
     }}
 
     QPushButton#GhostAction {{
-        background-color: {PALETTE["bg_glass_elevated"]};
-        color: {PALETTE["text_primary"]};
-        border: 1px solid {PALETTE["border_hairline"]};
-        padding: 8px 14px;
+        background-color: {p["bg_glass_elevated"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_hairline"]};
+        padding: 7px 12px;
         font-size: 12px;
         font-weight: 500;
     }}
 
     QPushButton#GhostAction:hover {{
-        background-color: {PALETTE["bg_hover"]};
-        border-color: {PALETTE["border_strong"]};
+        background-color: {p["bg_hover"]};
+        border-color: {p["border_strong"]};
     }}
 
     QPushButton#GhostAction[selected="true"] {{
-        background-color: {PALETTE["bg_active"]};
-        border-color: {PALETTE["tag_ice"]};
+        background-color: {p["bg_active"]};
+        border-color: {p["tag_ice"]};
     }}
 
-    QTableWidget {{
-        background-color: rgba(13, 16, 20, 165);
-        alternate-background-color: rgba(20, 24, 30, 140);
-        color: {PALETTE["text_primary"]};
-        gridline-color: rgba(255, 255, 255, 14);
-        border: 1px solid {PALETTE["border_hairline"]};
-        selection-background-color: rgba(216, 224, 234, 38);
-        selection-color: #FFFFFF;
+    QComboBox {{
+        background-color: {p["bg_glass_elevated"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_hairline"]};
+        padding: 6px 10px;
+        font-size: 12px;
+    }}
+
+    QComboBox QAbstractItemView {{
+        background-color: {p["bg_menu"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_strong"]};
+        selection-background-color: {p["bg_active"]};
+    }}
+
+    QTableWidget, QTreeWidget, QPlainTextEdit {{
+        background-color: {p["bg_table"]};
+        alternate-background-color: {p["bg_table_alt"]};
+        color: {p["text_primary"]};
+        gridline-color: {p["border_hairline"]};
+        border: 1px solid {p["border_hairline"]};
+        selection-background-color: {p["bg_active"]};
+        selection-color: {p["text_primary"]};
         font-size: 12px;
     }}
 
     QHeaderView::section {{
-        background-color: rgba(19, 23, 29, 220);
-        color: {PALETTE["text_secondary"]};
+        background-color: {p["bg_header"]};
+        color: {p["text_secondary"]};
         font-family: "{MONO_FONT_FAMILY}", monospace;
         font-size: 10px;
         font-weight: 500;
         letter-spacing: 0.8px;
         padding: 8px 10px;
         border: none;
-        border-right: 1px solid rgba(255, 255, 255, 14);
-        border-bottom: 1px solid {PALETTE["border_hairline"]};
+        border-right: 1px solid {p["border_hairline"]};
+        border-bottom: 1px solid {p["border_hairline"]};
     }}
 
     QProgressBar {{
-        background-color: rgba(255, 255, 255, 18);
+        background-color: {p["border_hairline"]};
         border: none;
         height: 3px;
         text-align: center;
     }}
 
     QProgressBar::chunk {{
-        background-color: {PALETTE["tag_ice"]};
+        background-color: {p["tag_ice"]};
     }}
 
     QCheckBox {{
-        color: {PALETTE["text_primary"]};
+        color: {p["text_primary"]};
         spacing: 8px;
         font-size: 12px;
     }}
@@ -236,13 +298,13 @@ def build_obsidian_qss() -> str:
     QCheckBox::indicator {{
         width: 15px;
         height: 15px;
-        border: 1px solid {PALETTE["border_strong"]};
-        background-color: rgba(15, 18, 23, 200);
+        border: 1px solid {p["border_strong"]};
+        background-color: {p["bg_glass"]};
     }}
 
     QCheckBox::indicator:checked {{
-        background-color: #E2E7ED;
-        border-color: #E2E7ED;
+        background-color: {p["primary_bg"]};
+        border-color: {p["primary_bg"]};
     }}
 
     QScrollBar:vertical {{
@@ -252,12 +314,8 @@ def build_obsidian_qss() -> str:
     }}
 
     QScrollBar::handle:vertical {{
-        background: rgba(255, 255, 255, 38);
+        background: {p["border_strong"]};
         min-height: 24px;
-    }}
-
-    QScrollBar::handle:vertical:hover {{
-        background: rgba(255, 255, 255, 68);
     }}
 
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -265,9 +323,9 @@ def build_obsidian_qss() -> str:
     }}
 
     QMenu {{
-        background-color: #12161C;
-        border: 1px solid {PALETTE["border_strong"]};
-        color: {PALETTE["text_primary"]};
+        background-color: {p["bg_menu"]};
+        border: 1px solid {p["border_strong"]};
+        color: {p["text_primary"]};
         padding: 4px;
     }}
 
@@ -277,6 +335,6 @@ def build_obsidian_qss() -> str:
     }}
 
     QMenu::item:selected {{
-        background-color: {PALETTE["bg_active"]};
+        background-color: {p["bg_active"]};
     }}
     """

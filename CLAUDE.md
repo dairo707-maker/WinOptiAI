@@ -1,18 +1,11 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno de **WinOptiAI** (`v0.1.0`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno de **WinOptiAI** (`v0.2.0`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
-- **Propietario:** Dairo (economista; comunicarse en espanol claro en UI y documentacion, codigo y docstrings tecnicos en ingles/espanol consistentes).
-- **Hardware de referencia verificado (no suponer especificaciones):**
-  - Equipo: **Lenovo `82FE` (IdeaPad 5)**
-  - BIOS: **`FKCN51WW(V3.14)`** (UEFI + Secure Boot activo)
-  - CPU: **Intel Core i5-1135G7** (Tiger Lake, 4C / 8T)
-  - GPU: **Intel Iris Xe Graphics** (driver detectado inicialmente `30.0.101.1960`, objetivo recomendado `32.0.101.x`)
-  - Memoria: **16 GB RAM** compartida con Iris Xe (escenario tipico saturado por VS Code, Antigravity, Claude, Chrome y language servers)
-  - Disco: **KINGSTON SNV3S1000G** NVMe 1 TB (`C:\`) + sincronizacion activa con **OneDrive corporativo**
-  - SO: **Windows 11 Home Single Language 25H2 (Build 26200)**
+- **Propietario / Creditos:** Dairo (`dairo707-maker`, `https://github.com/dairo707-maker/WinOptiAI`). Economista; comunicarse en espanol claro en UI y documentacion.
+- **Perfilado Multi-Equipo:** aunque validado inicialmente en Lenovo `82FE` (`FKCN51WW(V3.14)`, i5-1135G7, Iris Xe `30.0.101.1960`, 16 GB RAM, Kingston NVMe, Windows 11 Build 26200), `bios_auditor.py` perfila dinamicamente cualquier hardware (Intel/AMD/ARM64, NVIDIA/AMD/Intel, SSD/HDD, RAM 8–128 GB) y calibra los umbrales SRE automaticamente.
 
 ## Reglas Inviolables de Diseno UI/UX
 

@@ -317,18 +317,18 @@ def send_to_recycle_bin(path: str | Path) -> bool:
     return res == 0 and not op.fAnyOperationsAborted
 
 
-def apply_obsidian_acrylic(hwnd: int) -> bool:
-    """Apply Windows 11 dark Acrylic backdrop and strict 0px sharp corners via dwmapi.dll."""
+def apply_window_theme(hwnd: int, dark: bool = True) -> bool:
+    """Apply Windows 11 Acrylic backdrop (dark or light) and strict 0px sharp corners via dwmapi.dll."""
     if not IS_WINDOWS or not hwnd:
         return False
     try:
         dwmapi = ctypes.windll.dwmapi
-        dark = wintypes.DWORD(1)
+        dark_val = wintypes.DWORD(1 if dark else 0)
         dwmapi.DwmSetWindowAttribute(
             wintypes.HWND(hwnd),
             DWMWA_USE_IMMERSIVE_DARK_MODE,
-            ctypes.byref(dark),
-            ctypes.sizeof(dark),
+            ctypes.byref(dark_val),
+            ctypes.sizeof(dark_val),
         )
         corner_pref = wintypes.DWORD(DWMWCP_DONOTROUND)
         dwmapi.DwmSetWindowAttribute(
@@ -337,7 +337,8 @@ def apply_obsidian_acrylic(hwnd: int) -> bool:
             ctypes.byref(corner_pref),
             ctypes.sizeof(corner_pref),
         )
-        border_color = wintypes.DWORD(0x002C2621)  # subtle slate 1px border (0x00BBGGRR)
+        # 0x00BBGGRR: subtle slate for dark, subtle cool grey for light
+        border_color = wintypes.DWORD(0x002C2621 if dark else 0x00D0C8C0)
         dwmapi.DwmSetWindowAttribute(
             wintypes.HWND(hwnd),
             DWMWA_BORDER_COLOR,
@@ -354,6 +355,11 @@ def apply_obsidian_acrylic(hwnd: int) -> bool:
         return res == 0
     except OSError:
         return False
+
+
+def apply_obsidian_acrylic(hwnd: int) -> bool:
+    """Backward-compatible helper applying dark Obsidian Acrylic 0px."""
+    return apply_window_theme(hwnd, dark=True)
 
 
 def is_user_admin() -> bool:
@@ -379,3 +385,23 @@ def run_elevated_command(executable: str, arguments: str) -> bool:
         1,
     )
     return int(rc) > 32
+
+
+def reveal_in_explorer(path: str | Path) -> bool:
+    """Open Windows Explorer highlighting the target file or folder."""
+    if not IS_WINDOWS:
+        return False
+    import subprocess
+
+    target = Path(path)
+    if not target.exists():
+        parent = target.parent
+        if parent.exists():
+            subprocess.Popen(["explorer.exe", str(parent)])
+            return True
+        return False
+    if target.is_dir():
+        subprocess.Popen(["explorer.exe", str(target)])
+    else:
+        subprocess.Popen(["explorer.exe", f"/select,{target}"])
+    return True

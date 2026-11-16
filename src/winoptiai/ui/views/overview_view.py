@@ -1,4 +1,4 @@
-"""Resumen view: clean non-redundant live telemetry, SRE status, and 1 primary AI Boost action."""
+"""Resumen view: live RAM/CPU/MHz/Temp telemetry, active tasks banner, SRE status, and 1 primary action."""
 
 from __future__ import annotations
 
@@ -14,36 +14,38 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.i18n import tr
+from ...core.telemetry import LiveSystemTelemetry
 from ..svg_icons import load_svg_icon
-from ..theme import PALETTE
-from ..widgets import GlassPanel, SharpMetricCell, StatusTag
+from ..widgets import GlassPanel, NumericTableItem, SharpMetricCell, StatusTag, configure_sortable_table
 
 
 class OverviewView(QWidget):
-    """Dashboard overview with zero visual clutter and 1 primary action."""
+    """Dashboard overview with real-time CPU/Temp/RAM telemetry and active task visibility."""
 
     trigger_ai_boost = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, lang: str = "es", parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.lang = lang
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(16)
+        root.setSpacing(14)
 
         # Header row: Title + single primary action
         header = QHBoxLayout()
         title_box = QVBoxLayout()
         title_box.setSpacing(3)
-        title = QLabel("Estado del Sistema")
-        title.setObjectName("PageTitle")
-        subtitle = QLabel("Telemetria en vivo, guardrails SRE y preparacion de memoria para IA.")
-        subtitle.setObjectName("PageSubtitle")
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
+        self.title_lbl = QLabel(tr("overview_title", lang))
+        self.title_lbl.setObjectName("PageTitle")
+        self.sub_lbl = QLabel(tr("overview_sub", lang))
+        self.sub_lbl.setObjectName("PageSubtitle")
+        title_box.addWidget(self.title_lbl)
+        title_box.addWidget(self.sub_lbl)
         header.addLayout(title_box)
         header.addStretch()
 
-        self.boost_btn = QPushButton(" Ejecutar AI Boost")
+        self.boost_btn = QPushButton(f" {tr('btn_ai_boost', lang)}")
         self.boost_btn.setObjectName("PrimaryAction")
         self.boost_btn.setIcon(load_svg_icon("process", color="#0B0D10", size=15))
         self.boost_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -51,33 +53,45 @@ class OverviewView(QWidget):
         header.addWidget(self.boost_btn)
         root.addLayout(header)
 
-        # 4 non-redundant metric cells in a crisp 2x2 grid
+        # 4 non-redundant metric cells
         row1 = QHBoxLayout()
         row1.setSpacing(12)
-        self.ram_cell = SharpMetricCell("Memoria Fisica", "process")
-        self.disk_cell = SharpMetricCell("Almacenamiento C:", "storage")
+        self.ram_cell = SharpMetricCell(tr("metric_ram", lang), "process")
+        self.disk_cell = SharpMetricCell(tr("metric_disk", lang), "storage")
         row1.addWidget(self.ram_cell)
         row1.addWidget(self.disk_cell)
         root.addLayout(row1)
 
         row2 = QHBoxLayout()
         row2.setSpacing(12)
-        self.cpu_cell = SharpMetricCell("Carga de CPU", "thermal")
-        self.sre_cell = SharpMetricCell("Guardia SRE", "shield")
+        self.cpu_cell = SharpMetricCell(tr("metric_cpu_temp", lang), "thermal")
+        self.sre_cell = SharpMetricCell(tr("metric_sre", lang), "shield")
         row2.addWidget(self.cpu_cell)
         row2.addWidget(self.sre_cell)
         root.addLayout(row2)
 
-        # Minimalist operational audit feed
+        # Active Tasks strip (shows live background scans/optimizations running right now)
+        tasks_panel = GlassPanel()
+        tl = QHBoxLayout(tasks_panel)
+        tl.setContentsMargins(14, 9, 14, 9)
+        tl.setSpacing(10)
+        self.active_tag = StatusTag("EN REPOSO", "neutral")
+        tl.addWidget(self.active_tag)
+        self.active_tasks_lbl = QLabel("Sin tareas pesadas activas en segundo plano.")
+        self.active_tasks_lbl.setObjectName("MonoValue")
+        tl.addWidget(self.active_tasks_lbl, stretch=1)
+        root.addWidget(tasks_panel)
+
+        # Minimalist operational audit feed (sortable)
         audit_panel = GlassPanel()
         audit_layout = QVBoxLayout(audit_panel)
         audit_layout.setContentsMargins(16, 14, 16, 14)
         audit_layout.setSpacing(10)
 
         audit_hdr = QHBoxLayout()
-        lbl = QLabel("REGISTRO DE OPERACIONES")
-        lbl.setObjectName("SectionLabel")
-        audit_hdr.addWidget(lbl)
+        self.audit_lbl = QLabel(tr("audit_feed", lang))
+        self.audit_lbl.setObjectName("SectionLabel")
+        audit_hdr.addWidget(self.audit_lbl)
         audit_hdr.addStretch()
         self.policy_tag = StatusTag("HIBRIDO SRE", "active")
         audit_hdr.addWidget(self.policy_tag)
@@ -85,11 +99,8 @@ class OverviewView(QWidget):
 
         self.audit_table = QTableWidget(0, 4)
         self.audit_table.setHorizontalHeaderLabels(["HORA", "ORIGEN", "ACCION", "RESULTADO"])
-        self.audit_table.verticalHeader().setVisible(False)
-        self.audit_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        configure_sortable_table(self.audit_table)
         self.audit_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.audit_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.audit_table.setAlternatingRowColors(True)
         self.audit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.audit_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.audit_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -97,10 +108,32 @@ class OverviewView(QWidget):
         audit_layout.addWidget(self.audit_table)
         root.addWidget(audit_panel, stretch=1)
 
+    def apply_language_and_theme(self, lang: str, theme_mode: str, icon_inverted: str) -> None:
+        self.lang = lang
+        self.title_lbl.setText(tr("overview_title", lang))
+        self.sub_lbl.setText(tr("overview_sub", lang))
+        self.boost_btn.setText(f" {tr('btn_ai_boost', lang)}")
+        self.boost_btn.setIcon(load_svg_icon("process", color=icon_inverted, size=15))
+        self.ram_cell.set_title(tr("metric_ram", lang))
+        self.disk_cell.set_title(tr("metric_disk", lang))
+        self.cpu_cell.set_title(tr("metric_cpu_temp", lang))
+        self.sre_cell.set_title(tr("metric_sre", lang))
+        self.audit_lbl.setText(tr("audit_feed", lang))
+        for cell in (self.ram_cell, self.disk_cell, self.cpu_cell, self.sre_cell):
+            cell.refresh_theme(theme_mode)
+
+    def set_active_tasks(self, task_names: list[str]) -> None:
+        if task_names:
+            self.active_tag.set_tone(f"{len(task_names)} ACTIVAS", "active")
+            self.active_tasks_lbl.setText("Ejecutando ahora: " + " | ".join(task_names))
+        else:
+            self.active_tag.set_tone("EN REPOSO", "neutral")
+            self.active_tasks_lbl.setText("Monitoreo pasivo ligero activo (sin tareas pesadas en curso).")
+
     def update_telemetry(
         self,
         ram: dict[str, float],
-        cpu_pct: float,
+        live: LiveSystemTelemetry,
         disk_free_gb: float,
         disk_total_gb: float,
         sre_active: bool,
@@ -110,8 +143,8 @@ class OverviewView(QWidget):
         free_gb = ram["free_gb"]
         total_gb = ram["total_gb"]
         used_pct = int(ram["used_pct"])
-        ram_tone = "risk" if free_gb < threshold_gb else ("warn" if free_gb < 3.0 else "ok")
-        ram_tag = "PRESION" if free_gb < threshold_gb else ("AJUSTADA" if free_gb < 3.0 else "ESTABLE")
+        ram_tone = "risk" if free_gb < threshold_gb else ("warn" if free_gb < threshold_gb + 1.0 else "ok")
+        ram_tag = "PRESION" if free_gb < threshold_gb else ("AJUSTADA" if free_gb < threshold_gb + 1.0 else "ESTABLE")
         self.ram_cell.update_metric(
             f"{free_gb:.2f} GB libres",
             f"{ram['used_gb']:.2f} GB en uso de {total_gb:.1f} GB totales",
@@ -130,28 +163,33 @@ class OverviewView(QWidget):
             "ok" if disk_pct < 85 else "warn",
         )
 
-        cpu_int = int(cpu_pct)
+        freq_ghz = live.cpu_freq_mhz / 1000.0 if live.cpu_freq_mhz else 0.0
+        temp_part = f" | {live.cpu_temp_c:.1f} C" if live.cpu_temp_c is not None else ""
+        cpu_int = int(live.cpu_utility_pct)
+        cpu_tone = "risk" if (live.cpu_temp_c or 0) >= 85 or cpu_int >= 90 else ("warn" if cpu_int >= 70 else "neutral")
         self.cpu_cell.update_metric(
-            f"{cpu_pct:.0f} %",
-            f"Perfil termico activo: {thermal_label}",
+            f"{live.cpu_utility_pct:.0f}% ({freq_ghz:.2f} GHz){temp_part}",
+            f"Turbo {live.cpu_turbo_pct:.0f}% | Perfil: {thermal_label}",
             cpu_int,
-            "CARGA ALTA" if cpu_int >= 75 else "NORMAL",
-            "warn" if cpu_int >= 75 else "neutral",
+            f"{live.cpu_temp_c:.0f} C" if live.cpu_temp_c else ("CARGA ALTA" if cpu_int >= 75 else "NORMAL"),
+            cpu_tone,
         )
 
         self.sre_cell.update_metric(
             "Activo" if sre_active else "Manual",
-            f"Umbral automatico < {threshold_gb:.1f} GB (histeresis 5m)",
+            f"Umbral calibrado < {threshold_gb:.1f} GB (histeresis 5m)",
             100 if sre_active else 0,
             "GUARDRAIL" if sre_active else "PAUSADO",
             "active" if sre_active else "neutral",
         )
 
     def set_audit_rows(self, rows: list[dict]) -> None:
+        self.audit_table.setSortingEnabled(False)
         self.audit_table.setRowCount(len(rows))
         for r, item in enumerate(rows):
             ts = str(item.get("timestamp", ""))[11:19]
-            self.audit_table.setItem(r, 0, QTableWidgetItem(ts))
+            self.audit_table.setItem(r, 0, NumericTableItem(ts, r))
             self.audit_table.setItem(r, 1, QTableWidgetItem(str(item.get("actor", "")).upper()))
             self.audit_table.setItem(r, 2, QTableWidgetItem(str(item.get("action", ""))))
             self.audit_table.setItem(r, 3, QTableWidgetItem(str(item.get("detail", ""))))
+        self.audit_table.setSortingEnabled(True)

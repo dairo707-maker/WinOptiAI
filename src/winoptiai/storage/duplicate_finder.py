@@ -215,3 +215,41 @@ def deduplicate_group_via_hardlink(
         except OSError:
             skipped += 1
     return {"linked": linked, "skipped": skipped, "freed_bytes": freed}
+
+
+def choose_primary_copy(paths: list[Path], rule: str = "keep_oldest") -> Path:
+    """Select which copy to preserve inside a duplicate group according to an auto-clean rule."""
+    if len(paths) <= 1:
+        return paths[0]
+
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return float("inf")
+
+    if rule == "keep_newest":
+        return max(paths, key=_mtime)
+    if rule == "keep_shortest_path":
+        return min(paths, key=lambda p: (len(str(p)), str(p).lower()))
+    if rule == "keep_outside_downloads":
+        return min(
+            paths,
+            key=lambda p: (1 if "downloads" in str(p).lower() else 0, len(str(p)), _mtime(p)),
+        )
+    # Default: keep_oldest
+    return min(paths, key=lambda p: (_mtime(p), len(str(p))))
+
+
+def select_duplicates_by_rule(
+    groups: list[DuplicateGroup],
+    rule: str = "keep_oldest",
+) -> list[tuple[DuplicateGroup, Path, list[Path]]]:
+    """Return [(group, keep_path, remove_paths)] computed for smart auto-cleaning."""
+    plan: list[tuple[DuplicateGroup, Path, list[Path]]] = []
+    for grp in groups:
+        keep = choose_primary_copy(grp.paths, rule=rule)
+        remove = [p for p in grp.paths if p != keep]
+        if remove:
+            plan.append((grp, keep, remove))
+    return plan

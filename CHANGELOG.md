@@ -2,6 +2,17 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.2.0] - 2026-11-16
+
+### Agregado
+- **Perfilador Universal Multi-Hardware (`bios_auditor.py`):** deteccion dinamica de CPU (Intel/AMD/ARM64), GPU (NVIDIA/AMD/Intel), tipo de disco (NVMe/SSD/HDD), RAM total con calibracion dinamica SRE y acciones automaticas 1-clic directamente desde la tabla de Auditoria.
+- **Telemetria en Tiempo Real (`telemetry.py`):** lectura independiente de idioma via `pdh.dll` de frecuencia real (GHz), Turbo Boost (%), carga por nucleo y sensores termicos ACPI/NVMe (con lectura elevada UAC bajo demanda).
+- **Vista Previa y Autolimpiador Inteligente de Duplicados (`storage_view.py`, `duplicate_finder.py`):** previsualizacion de imagenes, texto y binarios, selector automatico (*mas antiguo*, *mas reciente*, *ruta mas corta*, *fuera de Descargas*) y autolimpieza hacia Cuarentena.
+- **Vista Jerarquica por Carpetas y Formatos (`tree_analyzer.py`):** arbol expandible de carpetas por peso real y desglose por extension/categoria con envio directo del archivo mas pesado a Cuarentena.
+- **Acceso Directo al Explorador y Tablas Ordenables (`widgets.py`, `win32_bridge.py`):** ordenamiento numerico/alfabetico en todas las tablas y arboles, boton *Ver en Explorador*, doble clic y menu contextual para inspeccionar cualquier resultado antes de limpiar.
+- **Temas Claro / Oscuro, Multi-Idioma e Instalador Multilingue (`theme.py`, `i18n.py`, `installer.iss`):** conmutador *Obsidian Acrylic* (oscuro) <-> *Alabaster Frost* (claro) manteniendo `0px`, soporte **ES / EN / PT** en la app e instalador Inno Setup 6.
+- **Acerca de y Auto-Actualizador (`about_updater_dialog.py`, `updater.py`):** creditos de **Dairo (`dairo707-maker`)**, verificacion contra GitHub Releases y descarga/instalacion verificada por SHA-256.
+
 ## [0.1.0] - 2026-11-16
 
 ### Agregado

@@ -15,7 +15,19 @@ import json
 from pathlib import Path
 import time
 
+from .i18n import detect_default_language
 from .safety_guard import default_app_data_dir
+
+
+def recommended_ram_threshold_gb() -> float:
+    """Calibrate RAM pressure threshold dynamically based on total physical RAM."""
+    try:
+        import psutil
+
+        total_gb = psutil.virtual_memory().total / (1024**3)
+        return max(1.2, min(4.0, round(total_gb * 0.115, 1)))
+    except Exception:  # noqa: BLE001
+        return 1.8
 
 
 @dataclass(slots=True)
@@ -30,6 +42,8 @@ class SREPolicyConfig:
     storage_alert_threshold_gb: float = 2.0
     start_minimized_to_tray: bool = False
     active_thermal_profile: str = "balanced"
+    theme_mode: str = "dark"       # "dark" | "light"
+    language: str = "es"           # "es" | "en" | "pt"
 
 
 class SREPolicyEngine:
@@ -46,10 +60,18 @@ class SREPolicyEngine:
 
     def load_config(self) -> SREPolicyConfig:
         if not self.config_path.exists():
-            return SREPolicyConfig()
+            return SREPolicyConfig(
+                ram_threshold_gb=recommended_ram_threshold_gb(),
+                language=detect_default_language(),
+            )
         try:
             raw = json.loads(self.config_path.read_text(encoding="utf-8"))
-            defaults = asdict(SREPolicyConfig())
+            defaults = asdict(
+                SREPolicyConfig(
+                    ram_threshold_gb=recommended_ram_threshold_gb(),
+                    language=detect_default_language(),
+                )
+            )
             defaults.update({k: v for k, v in raw.items() if k in defaults})
             return SREPolicyConfig(**defaults)
         except (OSError, json.JSONDecodeError, TypeError):
