@@ -1,0 +1,8 @@
+Verificacion v0.5.2: uv run --no-sync pytest -v -> 60 passed (incluye cero emojis).
+Evidencia: Visor de eventos 17:37:44 APPCRASH shiboken6.abi3.dll 0xc0000005 offset 0x2fa09
+(mismo offset que los cierres de 16:30 y 16:44 en v0.5.0). crash.log (faulthandler) mostro
+recursion en ui/widgets.py:167 NumericTreeItem.__lt__ mientras find_duplicates corria en otro hilo.
+Reproducido aislado (arbol linea 167 y tabla linea 155) y verificado tras el fix.
+Nota: el diagnostico de v0.5.1 (cell widgets en Termica) era un endurecimiento valido pero
+probablemente no la causa de esos cierres.
+Decisiones del usuario: max 2 tareas de almacenamiento, confirmar Hardlink, publicar release.
