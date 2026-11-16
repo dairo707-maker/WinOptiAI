@@ -2,6 +2,15 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.3.0] - 2026-11-16
+
+### Agregado y Mejorado
+- **Concurrencia RAM-Aware y Progreso % en Segundo Plano (`workers.py`, `main_window.py`):** ejecucion simultanea de hasta 4 tareas en segundo plano mientras la RAM libre sea >= `1.0 GB`, sin bloquear otras vistas/acciones y con porcentaje real (`0-100%`) por tarea.
+- **Campana Moderna y Centro de Notificaciones (`notifications.py`, `notifications_drawer.py`):** boton campana SVG con contador de no leidas en la barra superior, panel desplegable con barras de progreso individuales, historial persistente de tareas/sugerencias y eliminacion individual o masiva manual.
+- **Asesor Periodico de Baja Frecuencia (`PeriodicAdvisor`):** verifica cambios relevantes cada 15 min (con enfriamiento de 2 horas por categoria) sin saturar al usuario.
+- **Estetica Papeleria / Cuaderno hecho a Lapiz (`widgets.py`, `theme.py`, `assets/icons/*.svg`):** fondo de papel cuadriculado (`NotebookCanvas`, 24px con linea de margen), trazos de boceto a lapiz en todos los iconos SVG y conmutador Claro/Oscuro minimalista con iconos de sol y luna (`sun.svg` / `moon.svg`).
+- **Permisos UAC bajo Demanda (`main_window.py`, `junk_scanner.py`, `safety_guard.py`):** soporte para elevar a Administrador al limpiar residuos de Windows (`Windows\Temp`, `Minidump`, `WER\ReportArchive`) manteniendo intactas las listas blancas del sistema operativo.
+
 ## [0.2.2] - 2026-11-16
 
 ### Agregado y Corregido

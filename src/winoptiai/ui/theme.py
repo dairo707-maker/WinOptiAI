@@ -13,58 +13,66 @@ from .. import get_base_dir
 
 DARK_PALETTE = {
     "mode": "dark",
-    "bg_window": "rgba(11, 13, 16, 218)",
-    "bg_sidebar": "rgba(15, 18, 23, 212)",
-    "bg_glass": "rgba(22, 26, 33, 178)",
-    "bg_glass_elevated": "rgba(30, 35, 44, 198)",
-    "bg_table": "rgba(13, 16, 20, 170)",
-    "bg_table_alt": "rgba(20, 24, 30, 145)",
-    "bg_header": "rgba(19, 23, 29, 224)",
-    "bg_menu": "#12161C",
-    "bg_hover": "rgba(216, 224, 234, 22)",
-    "bg_active": "rgba(216, 224, 234, 36)",
-    "border_hairline": "rgba(255, 255, 255, 24)",
-    "border_strong": "rgba(216, 224, 234, 72)",
-    "text_primary": "#F1F3F5",
-    "text_secondary": "#9BA3AE",
-    "text_muted": "#646D78",
-    "primary_bg": "#E2E7ED",
-    "primary_fg": "#0B0D10",
-    "primary_hover": "#FFFFFF",
-    "icon_color": "#D8E0EA",
-    "icon_inverted": "#0B0D10",
-    "tag_ice": "#CBD5E1",
+    "bg_window": "rgba(22, 22, 20, 224)",
+    "bg_sidebar": "rgba(26, 26, 23, 212)",
+    "bg_glass": "rgba(31, 31, 28, 184)",
+    "bg_glass_elevated": "rgba(39, 38, 34, 204)",
+    "bg_table": "rgba(24, 24, 21, 188)",
+    "bg_table_alt": "rgba(32, 31, 28, 160)",
+    "bg_header": "rgba(29, 28, 25, 226)",
+    "bg_menu": "#1C1C19",
+    "bg_hover": "rgba(234, 229, 218, 22)",
+    "bg_active": "rgba(234, 229, 218, 36)",
+    "border_hairline": "rgba(234, 229, 218, 38)",
+    "border_strong": "rgba(234, 229, 218, 86)",
+    "text_primary": "#EFEAE0",
+    "text_secondary": "#B2ACA0",
+    "text_muted": "#7D786E",
+    "primary_bg": "#EAE5DA",
+    "primary_fg": "#181815",
+    "primary_hover": "#F8F4EC",
+    "icon_color": "#E6E0D4",
+    "icon_inverted": "#181815",
+    "tag_ice": "#D4CFC4",
     "tag_warn": "#C89B62",
     "tag_risk": "#B86A6A",
     "tag_ok": "#8CA89A",
+    "explorer_bg": "rgba(68, 128, 175, 48)",
+    "explorer_border": "rgba(128, 182, 222, 120)",
+    "explorer_hover": "rgba(68, 128, 175, 86)",
+    "explorer_icon": "#A5D0F4",
 }
 
 LIGHT_PALETTE = {
     "mode": "light",
-    "bg_window": "rgba(244, 246, 248, 236)",
-    "bg_sidebar": "rgba(235, 239, 243, 232)",
-    "bg_glass": "rgba(255, 255, 255, 192)",
-    "bg_glass_elevated": "rgba(248, 250, 252, 225)",
-    "bg_table": "rgba(255, 255, 255, 205)",
-    "bg_table_alt": "rgba(240, 243, 247, 195)",
-    "bg_header": "rgba(232, 236, 241, 235)",
-    "bg_menu": "#F8FAFC",
-    "bg_hover": "rgba(17, 22, 29, 14)",
-    "bg_active": "rgba(17, 22, 29, 24)",
-    "border_hairline": "rgba(17, 22, 29, 28)",
-    "border_strong": "rgba(17, 22, 29, 75)",
-    "text_primary": "#11161D",
-    "text_secondary": "#4B5563",
-    "text_muted": "#6B7280",
-    "primary_bg": "#11161D",
-    "primary_fg": "#F8FAFC",
-    "primary_hover": "#242D38",
-    "icon_color": "#1E2530",
-    "icon_inverted": "#F8FAFC",
-    "tag_ice": "#334155",
+    "bg_window": "rgba(246, 242, 233, 236)",
+    "bg_sidebar": "rgba(239, 234, 222, 224)",
+    "bg_glass": "rgba(252, 250, 244, 198)",
+    "bg_glass_elevated": "rgba(255, 253, 248, 228)",
+    "bg_table": "rgba(253, 251, 246, 212)",
+    "bg_table_alt": "rgba(242, 237, 226, 198)",
+    "bg_header": "rgba(235, 229, 216, 235)",
+    "bg_menu": "#FAF7F0",
+    "bg_hover": "rgba(44, 42, 39, 16)",
+    "bg_active": "rgba(44, 42, 39, 28)",
+    "border_hairline": "rgba(44, 42, 39, 44)",
+    "border_strong": "rgba(44, 42, 39, 92)",
+    "text_primary": "#262421",
+    "text_secondary": "#57534C",
+    "text_muted": "#7A746A",
+    "primary_bg": "#2B2926",
+    "primary_fg": "#FAF7F0",
+    "primary_hover": "#3D3A35",
+    "icon_color": "#2D2B27",
+    "icon_inverted": "#FAF7F0",
+    "tag_ice": "#47443E",
     "tag_warn": "#A16207",
     "tag_risk": "#991B1B",
     "tag_ok": "#166534",
+    "explorer_bg": "rgba(46, 98, 158, 24)",
+    "explorer_border": "rgba(46, 98, 158, 118)",
+    "explorer_hover": "rgba(46, 98, 158, 46)",
+    "explorer_icon": "#1E4E8C",
 }
 
 # Backward-compatible default reference
@@ -120,13 +128,45 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QWidget#RootCanvas {{
-        background-color: {p["bg_window"]};
+        background-color: transparent;
         border: 1px solid {p["border_hairline"]};
     }}
 
     QWidget#Sidebar {{
         background-color: {p["bg_sidebar"]};
         border-right: 1px solid {p["border_hairline"]};
+    }}
+
+    QWidget#TopBar {{
+        background-color: {p["bg_sidebar"]};
+        border-bottom: 1px solid {p["border_hairline"]};
+    }}
+
+    QPushButton#ExplorerBtn {{
+        background-color: {p["explorer_bg"]};
+        border: 1px solid {p["explorer_border"]};
+        padding: 6px 10px;
+        min-width: 34px;
+        max-width: 36px;
+    }}
+
+    QPushButton#ExplorerBtn:hover {{
+        background-color: {p["explorer_hover"]};
+        border-color: {p["explorer_icon"]};
+    }}
+
+    QPushButton#BellBtn {{
+        background-color: {p["bg_glass_elevated"]};
+        border: 1px solid {p["border_hairline"]};
+        color: {p["text_primary"]};
+        padding: 5px 10px;
+        font-family: "{MONO_FONT_FAMILY}", monospace;
+        font-size: 11px;
+    }}
+
+    QPushButton#BellBtn:hover {{
+        background-color: {p["bg_hover"]};
+        border-color: {p["border_strong"]};
     }}
 
     QWidget#GlassPanel {{

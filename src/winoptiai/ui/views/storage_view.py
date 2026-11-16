@@ -40,7 +40,7 @@ from ...storage.junk_scanner import JunkTarget, clean_junk_target, scan_junk_tar
 from ...storage.orphan_hunter import OrphanCandidate, quarantine_orphans, scan_orphan_artifacts
 from ...storage.tree_analyzer import FolderNode, StorageHierarchyReport, analyze_storage_hierarchy
 from ..svg_icons import load_svg_icon
-from ..theme import format_bytes
+from ..theme import format_bytes, get_palette
 from ..widgets import (
     GlassPanel,
     NumericTableItem,
@@ -107,9 +107,9 @@ class StorageView(QWidget):
         header.addWidget(self.primary_btn)
         root.addLayout(header)
 
-        # Mode switch bar + contextual secondary controls
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
+        # Row 1: Clean 5 Mode Tabs (never clipped)
+        tabs_bar = QHBoxLayout()
+        tabs_bar.setSpacing(6)
         self.mode_buttons: dict[str, QPushButton] = {}
         modes = [
             ("junk", tr("mode_junk", lang)),
@@ -124,29 +124,36 @@ class StorageView(QWidget):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, m=key: self._switch_mode(m))
             self.mode_buttons[key] = btn
-            bar.addWidget(btn)
+            tabs_bar.addWidget(btn)
+        tabs_bar.addStretch()
+        root.addLayout(tabs_bar)
 
-        bar.addStretch()
+        # Row 2: Contextual Actions + Icon-only Explorer button (distinct color, hover tooltip)
+        actions_bar = QHBoxLayout()
+        actions_bar.setSpacing(8)
         self.secondary_btn = QPushButton("Ejecutar Limpieza Segura")
         self.secondary_btn.setObjectName("GhostAction")
         self.secondary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.secondary_btn.clicked.connect(self._on_secondary_action)
-        bar.addWidget(self.secondary_btn)
+        actions_bar.addWidget(self.secondary_btn)
 
         self.tertiary_btn = QPushButton("Hardlink NTFS")
         self.tertiary_btn.setObjectName("GhostAction")
         self.tertiary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tertiary_btn.clicked.connect(self._on_hardlink_duplicates)
         self.tertiary_btn.setVisible(False)
-        bar.addWidget(self.tertiary_btn)
+        actions_bar.addWidget(self.tertiary_btn)
 
-        self.reveal_btn = QPushButton("Ver en Explorador")
-        self.reveal_btn.setObjectName("GhostAction")
-        self.reveal_btn.setIcon(load_svg_icon("folder", color="#9BA3AE", size=13))
+        actions_bar.addStretch()
+
+        self.reveal_btn = QPushButton()
+        self.reveal_btn.setObjectName("ExplorerBtn")
+        self.reveal_btn.setIcon(load_svg_icon("folder", color=get_palette("dark")["explorer_icon"], size=16))
+        self.reveal_btn.setToolTip("Ver en el Explorador de Windows (seleccione un archivo o carpeta)")
         self.reveal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reveal_btn.clicked.connect(self._reveal_selected_item)
-        bar.addWidget(self.reveal_btn)
-        root.addLayout(bar)
+        actions_bar.addWidget(self.reveal_btn)
+        root.addLayout(actions_bar)
 
         # Smart Auto-Cleaner bar (visible only in Duplicates mode)
         self.dup_autoclean_panel = GlassPanel()
@@ -187,7 +194,7 @@ class StorageView(QWidget):
         self.table = QTableWidget(0, 4)
         configure_sortable_table(self.table)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        self.table.itemSelectionChanged.connect(self._preview_selected_group)
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.cellDoubleClicked.connect(lambda _r, _c: self._reveal_selected_item())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(lambda pos: self._show_explorer_menu(self.table, pos))
@@ -234,6 +241,7 @@ class StorageView(QWidget):
         self.folder_tree.setAlternatingRowColors(True)
         self.folder_tree.setSortingEnabled(True)
         self.folder_tree.itemDoubleClicked.connect(lambda _it, _col: self._reveal_selected_item())
+        self.folder_tree.itemSelectionChanged.connect(self._update_explorer_tooltip)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(
             lambda pos: self._show_explorer_menu(self.folder_tree, pos)
@@ -249,6 +257,7 @@ class StorageView(QWidget):
         self.format_table.setHorizontalHeaderLabels(["EXTENSION", "TIPO", "ARCHIVOS", "PESO TOTAL", "MAS PESADO"])
         configure_sortable_table(self.format_table)
         self.format_table.cellDoubleClicked.connect(lambda _r, _c: self._reveal_selected_item())
+        self.format_table.itemSelectionChanged.connect(self._update_explorer_tooltip)
         self.format_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.format_table.customContextMenuRequested.connect(
             lambda pos: self._show_explorer_menu(self.format_table, pos)
@@ -268,11 +277,14 @@ class StorageView(QWidget):
 
         self._switch_mode("junk")
 
-    def apply_language_and_theme(self, lang: str, icon_inverted: str) -> None:
+    def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
         self.lang = lang
         self.title_lbl.setText(tr("storage_title", lang))
         self.sub_lbl.setText(tr("storage_sub", lang))
         self.primary_btn.setIcon(load_svg_icon("refresh", color=icon_inverted, size=14))
+        self.reveal_btn.setIcon(
+            load_svg_icon("folder", color=get_palette(theme_mode)["explorer_icon"], size=16)
+        )
         for key, k_tr in (
             ("junk", "mode_junk"),
             ("duplicates", "mode_dups"),
@@ -281,6 +293,17 @@ class StorageView(QWidget):
             ("quarantine", "mode_quarantine"),
         ):
             self.mode_buttons[key].setText(tr(k_tr, lang))
+
+    def _on_selection_changed(self) -> None:
+        self._update_explorer_tooltip()
+        self._preview_selected_group()
+
+    def _update_explorer_tooltip(self) -> None:
+        target = self._get_selected_explorer_path()
+        if target is not None:
+            self.reveal_btn.setToolTip(f"Ver en el Explorador de Windows\n{target}")
+        else:
+            self.reveal_btn.setToolTip("Ver en el Explorador de Windows (seleccione un elemento)")
 
     def _switch_mode(self, mode: str) -> None:
         self.mode = mode
@@ -330,9 +353,8 @@ class StorageView(QWidget):
 
     def _on_primary_action(self) -> None:
         if self.mode == "junk":
-            self.primary_btn.setEnabled(False)
-            self.summary_lbl.setText("Escaneando temporales y caches seguros...")
-            self.run_async(scan_junk_targets, self._on_junk_scanned, "Escaneo temporales")
+            self.summary_lbl.setText("Escaneando temporales en segundo plano...")
+            self.run_async(scan_junk_targets, self._on_junk_scanned, "Escaneo de temporales")
         elif self.mode == "duplicates":
             chosen = QFileDialog.getExistingDirectory(
                 self, "Seleccionar carpeta para duplicados BLAKE3", str(self.scan_root)
@@ -340,9 +362,8 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            self.primary_btn.setEnabled(False)
-            self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {self.scan_root}...")
-            self.run_async(lambda: find_duplicates([self.scan_root]), self._on_dups_scanned, "Duplicados BLAKE3")
+            self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {self.scan_root} (en segundo plano)...")
+            self.run_async(lambda progress_cb=None: find_duplicates([self.scan_root], progress_cb=progress_cb), self._on_dups_scanned, f"Duplicados BLAKE3 ({self.scan_root.name})")
         elif self.mode == "tree":
             chosen = QFileDialog.getExistingDirectory(
                 self, "Seleccionar carpeta o unidad para vista jerarquica", str(self.scan_root)
@@ -350,17 +371,15 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            self.primary_btn.setEnabled(False)
-            self.summary_lbl.setText(f"Construyendo arbol jerarquico y formatos en {self.scan_root}...")
+            self.summary_lbl.setText(f"Analizando arbol y formatos en {self.scan_root} (en segundo plano)...")
             self.run_async(
-                lambda: analyze_storage_hierarchy(self.scan_root),
+                lambda progress_cb=None: analyze_storage_hierarchy(self.scan_root, progress_cb=progress_cb),
                 self._on_tree_scanned,
-                "Arbol almacenamiento",
+                f"Arbol almacenamiento ({self.scan_root.name})",
             )
         elif self.mode == "orphans":
-            self.primary_btn.setEnabled(False)
-            self.summary_lbl.setText("Analizando artefactos sueltos y bloqueos del sistema...")
-            self.run_async(scan_orphan_artifacts, self._on_orphans_scanned, "Deteccion huerfanos")
+            self.summary_lbl.setText("Analizando artefactos sueltos en segundo plano...")
+            self.run_async(scan_orphan_artifacts, self._on_orphans_scanned, "Deteccion de huerfanos")
         else:
             self._render_quarantine()
 
@@ -675,19 +694,25 @@ class StorageView(QWidget):
                     "limpieza_temporales",
                     [{"path": str(t.path), "files": t.file_count, "bytes": t.reclaimable_bytes} for t in targets],
                 )
-                freed = removed = skipped = 0
+                freed = removed = skipped = perm = 0
                 for t in targets:
                     res = clean_junk_target(t, self.vault, use_quarantine=True)
                     freed += res["freed_bytes"]
                     removed += res["removed"]
                     skipped += res["skipped_locked"]
-                return {"freed": freed, "removed": removed, "skipped": skipped}
+                    perm += res.get("permission_denied", 0)
+                return {"freed": freed, "removed": removed, "skipped": skipped, "perm": perm}
 
             def _done(res: dict[str, int]) -> None:
                 self.secondary_btn.setEnabled(True)
+                uac_note = (
+                    f" ({res['perm']} requieren 'Elevar Admin UAC' para residuos de Windows)"
+                    if res.get("perm", 0) > 0
+                    else ""
+                )
                 msg = (
-                    f"Limpieza segura: {res['removed']} archivos depurados, "
-                    f"{format_bytes(res['freed'])} liberados ({res['skipped']} en uso omitidos)."
+                    f"Limpieza segura: {res['removed']} archivos a Cuarentena, "
+                    f"{format_bytes(res['freed'])} liberados ({res['skipped']} omitidos).{uac_note}"
                 )
                 self.policy.record_audit_event("usuario", "Limpieza temporales", msg, res["freed"] / (1024 * 1024))
                 self.notify_cb(msg)

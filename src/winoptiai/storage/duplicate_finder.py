@@ -64,10 +64,13 @@ def _full_blake3(path: Path) -> str | None:
 def find_duplicates(
     roots: list[Path],
     min_size_bytes: int = 1024,
-    progress_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> list[DuplicateGroup]:
     """Scan roots and return groups of true duplicate files (excluding existing hardlinks)."""
     size_buckets: dict[int, list[tuple[Path, int, int]]] = defaultdict(list)
+
+    if progress_cb:
+        progress_cb(8, "Indexando archivos y tamanos...")
 
     for root in roots:
         if not root.exists() or is_protected_path(root):
@@ -97,13 +100,12 @@ def find_duplicates(
                 size_buckets[st.st_size].append((fpath, st.st_dev, st.st_ino))
 
     if progress_cb:
-        progress_cb("Agrupando candidatos por tamano...")
+        progress_cb(40, "Calculando pre-hash 4KB de candidatos...")
 
+    candidate_sizes = [(sz, items) for sz, items in size_buckets.items() if len(items) >= 2]
     partial_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
-    for size, items in size_buckets.items():
-        if len(items) < 2:
-            continue
-        # Filter out entries that already point to the exact same inode on the same device
+    total_cand = max(1, len(candidate_sizes))
+    for idx, (size, items) in enumerate(candidate_sizes, start=1):
         unique_inodes = {(dev, ino) for _, dev, ino in items if ino != 0}
         if ino_all_nonzero(items) and len(unique_inodes) < 2:
             continue
@@ -111,18 +113,22 @@ def find_duplicates(
             ph = _partial_hash(fpath, size)
             if ph is not None:
                 partial_buckets[(size, ph)].append((fpath, dev, ino))
+        if progress_cb and idx % 20 == 0:
+            progress_cb(40 + int(idx * 30 / total_cand), "Pre-hash 4KB en curso...")
 
     if progress_cb:
-        progress_cb("Verificando identidad criptografica BLAKE3...")
+        progress_cb(72, "Verificando firmas BLAKE3 completas...")
 
+    partial_cand = [(k, items) for k, items in partial_buckets.items() if len(items) >= 2]
     full_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
-    for (size, _), items in partial_buckets.items():
-        if len(items) < 2:
-            continue
+    total_part = max(1, len(partial_cand))
+    for idx, ((size, _), items) in enumerate(partial_cand, start=1):
         for fpath, dev, ino in items:
             fh = _full_blake3(fpath)
             if fh is not None:
                 full_buckets[(size, fh)].append((fpath, dev, ino))
+        if progress_cb:
+            progress_cb(72 + int(idx * 25 / total_part), "Verificando BLAKE3...")
 
     groups: list[DuplicateGroup] = []
     for (size, digest), items in full_buckets.items():

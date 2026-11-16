@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+from typing import Callable
 
 from ..core.safety_guard import is_protected_path
 from ..core.win32_bridge import is_cloud_only_file, is_reparse_or_system_file
@@ -97,6 +98,7 @@ def analyze_storage_hierarchy(
     root: Path,
     max_depth: int = 4,
     top_formats: int = 40,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> StorageHierarchyReport:
     """Analyze folder hierarchy and file-type distribution safely."""
     resolved = root.resolve()
@@ -104,8 +106,16 @@ def analyze_storage_hierarchy(
     ext_counts: dict[str, int] = defaultdict(int)
     ext_heaviest: dict[str, tuple[Path, int]] = {}
     all_heavy: list[tuple[Path, str, int]] = []
+    top_entries: list[str] = []
+    try:
+        top_entries = [e.name for e in os.scandir(resolved)]
+    except OSError:
+        pass
+    total_top = max(1, len(top_entries))
+    done_top = 0
 
     def _walk_dir(current: Path, depth: int) -> FolderNode:
+        nonlocal done_top
         node = FolderNode(name=current.name or str(current), path=current)
         if not current.exists() or is_protected_path(current):
             return node
@@ -116,6 +126,10 @@ def analyze_storage_hierarchy(
             return node
 
         for entry in entries:
+            if depth == 0:
+                done_top += 1
+                if progress_cb:
+                    progress_cb(min(92, int(done_top * 90 / total_top)), f"Analizando {entry.name}...")
             ep = Path(entry.path)
             if is_cloud_only_file(ep) or is_reparse_or_system_file(ep):
                 continue

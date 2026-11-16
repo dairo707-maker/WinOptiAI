@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import time
+from typing import Callable
 
 from ..core.safety_guard import QuarantineVault, is_protected_path
 from ..core.win32_bridge import get_locking_processes, is_cloud_only_file, is_reparse_or_system_file
@@ -21,6 +22,7 @@ class JunkTarget:
     path: Path
     allow_system_temp: bool
     min_age_days: int = 0
+    requires_admin: bool = False
     file_count: int = 0
     reclaimable_bytes: int = 0
     locked_skipped: int = 0
@@ -30,11 +32,14 @@ def _build_default_targets() -> list[JunkTarget]:
     local_app = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
     user_temp = Path(os.environ.get("TEMP", str(local_app / "Temp")))
     win_root = Path(os.environ.get("WINDIR", "C:\\Windows"))
+    prog_data = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData"))
 
     candidates = [
         JunkTarget("user_temp", "Temporales de usuario", "Sistema", user_temp, False, min_age_days=1),
-        JunkTarget("win_temp", "Temporales de Windows", "Sistema", win_root / "Temp", True, min_age_days=2),
-        JunkTarget("crash_dumps", "Volcados de fallos", "Sistema", local_app / "CrashDumps", False, min_age_days=7),
+        JunkTarget("win_temp", "Temporales residuales de Windows", "Sistema", win_root / "Temp", True, min_age_days=2, requires_admin=True),
+        JunkTarget("win_minidump", "Volcados de error Minidump", "Registros Error", win_root / "Minidump", True, min_age_days=7, requires_admin=True),
+        JunkTarget("wer_archive", "Informes residuales de errores (WER)", "Registros Error", prog_data / "Microsoft" / "Windows" / "WER" / "ReportArchive", True, min_age_days=7, requires_admin=True),
+        JunkTarget("crash_dumps", "Volcados de fallos usuario", "Registros Error", local_app / "CrashDumps", False, min_age_days=7),
         JunkTarget("d3d_cache", "Cache de sombreadores DirectX", "GPU", local_app / "D3DSCache", False, min_age_days=3),
         JunkTarget("uv_cache", "Cache de paquetes uv", "IA y Dev", local_app / "uv" / "cache", False, min_age_days=7),
         JunkTarget("pip_cache", "Cache de paquetes pip", "IA y Dev", local_app / "pip" / "Cache", False, min_age_days=7),
@@ -85,11 +90,17 @@ def _iter_eligible_files(target: JunkTarget, now_ts: float) -> list[Path]:
     return eligible
 
 
-def scan_junk_targets(targets: list[JunkTarget] | None = None) -> list[JunkTarget]:
+def scan_junk_targets(
+    targets: list[JunkTarget] | None = None,
+    progress_cb: Callable[[int, str], None] | None = None,
+) -> list[JunkTarget]:
     """Scan all configured safe junk targets and compute reclaimable bytes."""
     resolved = targets if targets is not None else _build_default_targets()
     now_ts = time.time()
-    for target in resolved:
+    total_targets = max(1, len(resolved))
+    for idx, target in enumerate(resolved, start=1):
+        if progress_cb:
+            progress_cb(int((idx - 1) * 100 / total_targets), f"Analizando {target.label}...")
         files = _iter_eligible_files(target, now_ts)
         total = 0
         for f in files:
@@ -100,6 +111,8 @@ def scan_junk_targets(targets: list[JunkTarget] | None = None) -> list[JunkTarge
         target.file_count = len(files)
         target.reclaimable_bytes = total
         target.locked_skipped = 0
+    if progress_cb:
+        progress_cb(100, "Temporales analizados")
     return resolved
 
 
@@ -128,6 +141,7 @@ def clean_junk_target(
 
     removed = 0
     skipped = 0
+    permission_denied = 0
     freed = 0
 
     for fpath in files:
@@ -136,12 +150,16 @@ def clean_junk_target(
             continue
         try:
             size = fpath.stat().st_size
+        except PermissionError:
+            permission_denied += 1
+            skipped += 1
+            continue
         except OSError:
             skipped += 1
             continue
 
         if use_quarantine:
-            ok, _, _ = vault.quarantine_path(
+            ok, reason, _ = vault.quarantine_path(
                 fpath,
                 category=f"Basura:{target.category}",
                 allow_system_temp=target.allow_system_temp,
@@ -150,14 +168,24 @@ def clean_junk_target(
                 removed += 1
                 freed += size
             else:
+                if "Permiso" in reason or "Acceso denegado" in reason:
+                    permission_denied += 1
                 skipped += 1
         else:
             try:
                 fpath.unlink()
                 removed += 1
                 freed += size
+            except PermissionError:
+                permission_denied += 1
+                skipped += 1
             except OSError:
                 skipped += 1
 
     target.locked_skipped = skipped
-    return {"removed": removed, "skipped_locked": skipped, "freed_bytes": freed}
+    return {
+        "removed": removed,
+        "skipped_locked": skipped,
+        "permission_denied": permission_denied,
+        "freed_bytes": freed,
+    }

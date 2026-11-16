@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -14,6 +15,47 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class NotebookCanvas(QWidget):
+    """Stationery desk notebook paper canvas with fine 24px architectural pencil grid."""
+
+    def __init__(self, theme_mode: str = "dark", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("RootCanvas")
+        self._theme_mode = theme_mode
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = mode
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        rect = self.rect()
+
+        if self._theme_mode == "light":
+            bg = QColor(246, 242, 233, 236)
+            grid_color = QColor(124, 117, 102, 28)
+            margin_color = QColor(168, 92, 82, 46)
+        else:
+            bg = QColor(22, 22, 20, 226)
+            grid_color = QColor(228, 222, 208, 16)
+            margin_color = QColor(180, 120, 110, 32)
+
+        painter.fillRect(rect, bg)
+
+        step = 24
+        painter.setPen(QPen(grid_color, 1))
+        for x in range(step, rect.width(), step):
+            painter.drawLine(x, 0, x, rect.height())
+        for y in range(step, rect.height(), step):
+            painter.drawLine(0, y, rect.width(), y)
+
+        # Subtle stationery notebook vertical margin line after sidebar
+        painter.setPen(QPen(margin_color, 1))
+        painter.drawLine(254, 0, 254, rect.height())
+        painter.end()
+        super().paintEvent(event)
 
 
 class NumericTableItem(QTableWidgetItem):

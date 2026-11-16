@@ -40,11 +40,13 @@ PROTECTED_PATH_PREFIXES: tuple[str, ...] = (
     "c:\\users\\default",
 )
 
-# Exceptions inside C:\Windows explicitly allowed ONLY for temporary junk scanning
+# Exceptions inside C:\Windows / ProgramData explicitly allowed ONLY for residual logs & dumps
 EXPLICIT_TEMP_ALLOWLIST: tuple[str, ...] = (
     "c:\\windows\\temp",
     "c:\\windows\\prefetch",
     "c:\\windows\\minidump",
+    "c:\\programdata\\microsoft\\windows\\wer\\reportarchive",
+    "c:\\programdata\\microsoft\\windows\\wer\\reportqueue",
 )
 
 # Critical OS, security, and hardware processes that MUST NEVER be throttled or trimmed

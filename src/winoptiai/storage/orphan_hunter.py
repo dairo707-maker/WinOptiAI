@@ -15,6 +15,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import time
+from typing import Callable
 
 from ..core.safety_guard import QuarantineVault, is_protected_path
 from ..core.win32_bridge import (
@@ -136,8 +137,11 @@ def _dir_size(path: Path) -> int:
 def scan_orphan_artifacts(
     extra_roots: list[Path] | None = None,
     stale_days: int = 45,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> list[OrphanCandidate]:
     """Scan user directories and AppData for loose unused files and abandoned artifacts."""
+    if progress_cb:
+        progress_cb(12, "Escaneando archivos sueltos y entornos inactivos...")
     now = time.time()
     cutoff_stale = now - (stale_days * 86400)
     cutoff_installer = now - (30 * 86400)
@@ -219,6 +223,8 @@ def scan_orphan_artifacts(
                     )
 
     # 2. Leftover AppData folders not matching installed programs (only when scanning system user)
+    if progress_cb:
+        progress_cb(60, "Verificando residuos en AppData contra registro de Windows...")
     if extra_roots is None:
         installed_tokens = _get_installed_program_tokens()
         for appdata_env in ("LOCALAPPDATA", "APPDATA"):

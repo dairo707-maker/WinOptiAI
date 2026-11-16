@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 import psutil
 
 from ..core.safety_guard import PROTECTED_PROCESS_NAMES
@@ -192,6 +193,7 @@ def run_ai_boost(
     trim_heavy_apps: bool = True,
     apply_ecoqos: bool = True,
     min_ram_mb_to_trim: float = 120.0,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> dict[str, float | int]:
     """Execute safe RAM compaction & EcoQoS throttling for Agentic AI workloads.
 
@@ -201,7 +203,11 @@ def run_ai_boost(
     ecoqos_count = 0
     trimmed_count = 0
 
-    for proc in psutil.process_iter(["pid", "name", "memory_info"]):
+    procs = list(psutil.process_iter(["pid", "name", "memory_info"]))
+    total_procs = max(1, len(procs))
+    for idx, proc in enumerate(procs, start=1):
+        if progress_cb and idx % 15 == 0:
+            progress_cb(10 + int(idx * 85 / total_procs), "Aplicando EcoQoS y compactando RAM...")
         try:
             pid = int(proc.info["pid"])
             name = (proc.info["name"] or "").strip().lower()

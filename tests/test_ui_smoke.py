@@ -9,6 +9,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from winoptiai.ui.dialogs.about_updater_dialog import AboutUpdaterDialog
+from winoptiai.ui.dialogs.notifications_drawer import NotificationsTasksDialog
 from winoptiai.ui.main_window import MainWindow
 from winoptiai.ui.theme import build_obsidian_qss, register_embedded_fonts
 
@@ -49,10 +50,26 @@ def test_ui_instantiation_themes_sorting_and_about() -> None:
     assert win.policy.config.theme_mode in {"light", "dark"}
     win._toggle_theme()
 
-    # Instantiate About & Updater dialog
+    # Verify Explorer & Theme buttons are icon-only with tooltips
+    assert win.storage_view.reveal_btn.text() == ""
+    assert "Explorador" in win.storage_view.reveal_btn.toolTip()
+    assert win.theme_btn.text() == ""
+    assert win.theme_btn.toolTip()
+
+    # Instantiate About & Notifications drawers
     dlg = AboutUpdaterDialog("es", win.policy.config.theme_mode, win._run_async, "Test PC", win)
     assert "WinOptiAI" in dlg.windowTitle()
     dlg.close()
+
+    ndlg = NotificationsTasksDialog(
+        win.notif_center,
+        lambda: list(win._active_workers),
+        win._switch_tab,
+        win.policy.config.theme_mode,
+        win,
+    )
+    assert "Notificaciones" in ndlg.windowTitle()
+    ndlg.close()
 
     win._force_quit = True
     win.close()

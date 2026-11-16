@@ -60,12 +60,24 @@ def test_hardware_audit_and_power_scheme() -> None:
 
 def test_assets_and_zero_emoji_ui_policy() -> None:
     base = get_base_dir()
-    assert get_version() == "0.2.2"
+    assert get_version() == "0.3.0"
     assert (base / "assets" / "fonts" / "InstrumentSans.ttf").exists()
     assert (base / "assets" / "fonts" / "IBMPlexMono-Regular.ttf").exists()
 
     svg_dir = base / "assets" / "icons"
-    for name in ("brand", "overview", "storage", "process", "thermal", "shield"):
+    for name in (
+        "brand",
+        "overview",
+        "storage",
+        "process",
+        "thermal",
+        "shield",
+        "bell",
+        "close",
+        "folder",
+        "sun",
+        "moon",
+    ):
         assert (svg_dir / f"{name}.svg").exists()
 
     # Enforce strict zero-emoji rule across all Python UI modules
