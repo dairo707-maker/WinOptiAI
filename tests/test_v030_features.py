@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from winoptiai.core.notifications import NotificationCenter, PeriodicAdvisor
+from winoptiai.core.updater import build_detached_update_script, detect_installed_dir
 from winoptiai.storage.duplicate_finder import find_duplicates
 from winoptiai.storage.junk_scanner import JunkTarget, scan_junk_targets
 from winoptiai.storage.tree_analyzer import analyze_storage_hierarchy
@@ -86,3 +87,14 @@ def test_progress_callbacks_on_engines(tmp_path: Path) -> None:
         progress_cb=lambda p, _s: junk_pcts.append(p),
     )
     assert junk_pcts[-1] == 100
+
+
+def test_detached_updater_script_generation(tmp_path: Path) -> None:
+    setup = tmp_path / "WinOptiAI-Setup.exe"
+    inst = Path(r"D:\Custom\WinOptiAI")
+    log = tmp_path / "install.log"
+    script = build_detached_update_script(setup, inst, log)
+    assert "taskkill /F /T /IM WinOptiAI.exe" in script
+    assert "/SILENT /CURRENTUSER /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS" in script
+    assert str(inst) in script
+    assert detect_installed_dir() is not None

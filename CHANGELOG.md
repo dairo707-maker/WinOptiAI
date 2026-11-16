@@ -2,6 +2,12 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.3.1] - 2026-11-16
+
+### Corregido y Mejorado
+- **Actualizador Desacoplado con Proceso Puente Independiente (`updater.py`, `about_updater_dialog.py`):** al actualizar desde PyInstaller `--onefile`, `ShellExecuteW` lanza `apply_update.cmd` completamente fuera del Job Object padre, termina `WinOptiAI.exe` si sigue activo (`taskkill /F /T`), ejecuta `WinOptiAI-Setup.exe /SP- /SILENT /CURRENTUSER` preservando la ruta de instalacion y reabre WinOptiAI automaticamente al finalizar.
+- **Aviso de Tareas Activas y Barra de Progreso % en Actualizacion:** antes de actualizar, verifica tareas en ejecucion mostrando su nombre y `%`; durante la descarga muestra barra `0–100%` y MB descargados en tiempo real.
+
 ## [0.3.0] - 2026-11-16
 
 ### Agregado y Mejorado

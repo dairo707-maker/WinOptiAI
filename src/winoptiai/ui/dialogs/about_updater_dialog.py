@@ -1,18 +1,19 @@
-"""About & Self-Updater dialog with author credits and GitHub Release SHA-256 update flow."""
+"""About & Self-Updater dialog with active-task warning, download % bar, and detached launch."""
 
 from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -29,10 +30,11 @@ from ...core.updater import (
 from ..svg_icons import load_svg_pixmap
 from ..theme import get_palette
 from ..widgets import GlassPanel, StatusTag
+from ..workers import AsyncTask
 
 
 class AboutUpdaterDialog(QDialog):
-    """0px architectural About dialog with Dairo's credits and verified GitHub self-updater."""
+    """0px architectural About dialog with Dairo's credits, active-task check, and % updater."""
 
     def __init__(
         self,
@@ -40,21 +42,23 @@ class AboutUpdaterDialog(QDialog):
         theme_mode: str,
         run_async: Callable,
         hardware_summary: str,
+        active_tasks_fn: Callable[[], list[AsyncTask]] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.lang = lang
         self.theme_mode = theme_mode
         self.run_async = run_async
+        self.active_tasks_fn = active_tasks_fn
         self.latest_release: ReleaseInfo | None = None
 
         self.setWindowTitle(tr("about_title", lang))
-        self.setFixedSize(560, 440)
+        self.setFixedSize(570, 470)
 
         p = get_palette(theme_mode)
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 20)
-        root.setSpacing(14)
+        root.setSpacing(12)
 
         # Header
         hdr = QHBoxLayout()
@@ -93,10 +97,17 @@ class AboutUpdaterDialog(QDialog):
         il.addWidget(meta)
         root.addWidget(info_panel)
 
-        # Release notes / Update status
+        # Release notes / Update status + Progress bar
         self.status_lbl = QLabel("Pulse 'Buscar Actualizaciones' para consultar GitHub Releases.")
         self.status_lbl.setObjectName("PageSubtitle")
         root.addWidget(self.status_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setVisible(False)
+        root.addWidget(self.progress_bar)
 
         self.notes_box = QPlainTextEdit()
         self.notes_box.setReadOnly(True)
@@ -129,7 +140,7 @@ class AboutUpdaterDialog(QDialog):
     def _on_check(self) -> None:
         self.check_btn.setEnabled(False)
         self.status_lbl.setText("Consultando GitHub Releases...")
-        self.run_async(lambda: check_for_updates(__version__), self._on_check_done)
+        self.run_async(lambda: check_for_updates(__version__), self._on_check_done, "Buscar actualizacion")
 
     def _on_check_done(self, result: tuple[bool, ReleaseInfo | None, str]) -> None:
         self.check_btn.setEnabled(True)
@@ -150,17 +161,47 @@ class AboutUpdaterDialog(QDialog):
     def _on_install_update(self) -> None:
         if not self.latest_release:
             return
-        self.install_btn.setEnabled(False)
-        self.status_lbl.setText("Descargando instalador y verificando SHA-256...")
 
-        def _dl() -> tuple[bool, str]:
+        # Warn explicitly if any background tasks are currently running, showing exact %
+        if self.active_tasks_fn is not None:
+            running = self.active_tasks_fn()
+            if running:
+                lines = "\n".join(
+                    f"  - {t.title}: {t.percent}% ({t.stage})" for t in running
+                )
+                reply = QMessageBox.warning(
+                    self,
+                    "Tareas en ejecucion detectadas",
+                    "Tienes estas tareas activas en este momento:\n\n"
+                    f"{lines}\n\n"
+                    "Si actualizas ahora, se cerrara la aplicacion y estas tareas quedaran incompletas.\n"
+                    "Deseas cancelar las tareas y actualizar ahora?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.status_lbl.setText("Actualizacion pospuesta hasta que terminen tus tareas activas.")
+                    return
+
+        self.install_btn.setEnabled(False)
+        self.check_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(2)
+        self.status_lbl.setText("Preparando descarga de actualizacion...")
+
+        def _dl(progress_cb=None) -> tuple[bool, str]:
             assert self.latest_release is not None
-            return download_and_launch_update(self.latest_release)
+            return download_and_launch_update(self.latest_release, progress_cb=progress_cb)
+
+        def _on_progress(pct: int, stage: str) -> None:
+            self.progress_bar.setValue(pct)
+            self.status_lbl.setText(f"[{pct}%] {stage}")
 
         def _done(res: tuple[bool, str]) -> None:
             ok, msg = res
             self.status_lbl.setText(msg)
             if ok:
+                self.progress_bar.setValue(100)
                 parent_win = self.parent()
                 if parent_win is not None and hasattr(parent_win, "_quit_app"):
                     parent_win._quit_app()
@@ -168,5 +209,7 @@ class AboutUpdaterDialog(QDialog):
                     QApplication.quit()
             else:
                 self.install_btn.setEnabled(True)
+                self.check_btn.setEnabled(True)
 
-        self.run_async(_dl, _done)
+        # Pass optional progress callback hook if supported by MainWindow._run_async
+        self.run_async(_dl, _done, "Descarga actualizacion", progress_ui_cb=_on_progress)

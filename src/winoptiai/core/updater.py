@@ -1,14 +1,17 @@
-"""GitHub Releases self-updater with SemVer comparison, native curl fallback, and SHA-256 check."""
+"""GitHub Releases self-updater with streaming % progress, SHA-256 check, and detached Shell bridge."""
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+from typing import Callable
 import urllib.error
 import urllib.request
 
@@ -19,6 +22,7 @@ GITHUB_OWNER = "dairo707-maker"
 GITHUB_REPO = "WinOptiAI"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 REPO_WEB_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
+APP_UNINSTALL_GUID = r"{8F9D4A1C-3E2B-49A7-9C5D-7F120A98B31E}_is1"
 
 
 @dataclass(slots=True)
@@ -35,7 +39,7 @@ class ReleaseInfo:
 
 
 def parse_semver(version_str: str) -> tuple[int, ...]:
-    """Parse 'v0.2.1' or '0.2.1' into comparable integer tuple."""
+    """Parse 'v0.3.1' or '0.3.1' into comparable integer tuple."""
     clean = version_str.strip().lstrip("vV").split("-")[0]
     parts: list[int] = []
     for p in clean.split("."):
@@ -44,6 +48,32 @@ def parse_semver(version_str: str) -> tuple[int, ...]:
         except ValueError:
             parts.append(0)
     return tuple(parts or [0])
+
+
+def _curl_get_bytes(url: str, timeout: int, accept: str | None = None) -> bytes:
+    curl_exe = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "curl.exe"
+    if not curl_exe.exists():
+        raise urllib.error.URLError("curl.exe not found")
+    cmd = [
+        str(curl_exe),
+        "-fsSL",
+        "--max-time",
+        str(timeout),
+        "-A",
+        f"WinOptiAI/{__version__}",
+    ]
+    if accept:
+        cmd.extend(["-H", f"Accept: {accept}"])
+    cmd.append(url)
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if res.returncode != 0:
+        err = res.stderr.decode("utf-8", errors="replace").strip()
+        raise urllib.error.URLError(err or f"curl exit {res.returncode}")
+    return res.stdout
 
 
 def _http_get_bytes(url: str, timeout: int = 15, accept: str | None = None) -> bytes:
@@ -58,29 +88,46 @@ def _http_get_bytes(url: str, timeout: int = 15, accept: str | None = None) -> b
     except (urllib.error.URLError, OSError):
         if os.name != "nt":
             raise
-        curl_exe = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "curl.exe"
-        if not curl_exe.exists():
+        return _curl_get_bytes(url, timeout=timeout, accept=accept)
+
+
+def _download_file_with_progress(
+    url: str,
+    dest: Path,
+    progress_cb: Callable[[int, str], None] | None = None,
+    timeout: int = 90,
+) -> None:
+    """Stream download to disk reporting 5%..88% progress, with curl.exe fallback."""
+    headers = {"User-Agent": f"WinOptiAI/{__version__}"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            downloaded = 0
+            with dest.open("wb") as fh:
+                while chunk := resp.read(65536):
+                    fh.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb:
+                        if total > 0:
+                            pct = 5 + int((downloaded / total) * 83)
+                            mb_done = downloaded / (1024 * 1024)
+                            mb_tot = total / (1024 * 1024)
+                            progress_cb(pct, f"Descargando {mb_done:.1f} / {mb_tot:.1f} MB ({pct}%)")
+                        else:
+                            mb_done = downloaded / (1024 * 1024)
+                            progress_cb(45, f"Descargando {mb_done:.1f} MB...")
+        return
+    except (urllib.error.URLError, OSError):
+        if os.name != "nt":
             raise
-        cmd = [
-            str(curl_exe),
-            "-fsSL",
-            "--max-time",
-            str(timeout),
-            "-A",
-            f"WinOptiAI/{__version__}",
-        ]
-        if accept:
-            cmd.extend(["-H", f"Accept: {accept}"])
-        cmd.append(url)
-        res = subprocess.run(
-            cmd,
-            capture_output=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if res.returncode != 0:
-            err = res.stderr.decode("utf-8", errors="replace").strip()
-            raise urllib.error.URLError(err or f"curl exit {res.returncode}")
-        return res.stdout
+        if progress_cb:
+            progress_cb(25, "Descargando instalador via Windows TLS (curl)...")
+        data = _curl_get_bytes(url, timeout=timeout)
+        dest.write_bytes(data)
+        if progress_cb:
+            mb_tot = len(data) / (1024 * 1024)
+            progress_cb(88, f"Descargado {mb_tot:.1f} MB (100%)")
 
 
 def check_for_updates(current_version: str = __version__, timeout: int = 10) -> tuple[bool, ReleaseInfo | None, str]:
@@ -138,19 +185,85 @@ def _parse_expected_sha256(checksums_text: str, filename: str) -> str | None:
     return None
 
 
-def download_and_launch_update(info: ReleaseInfo) -> tuple[bool, str]:
-    """Download WinOptiAI-Setup.exe, verify SHA-256 against SHA256SUMS.txt, and launch updater."""
+def detect_installed_dir() -> Path:
+    """Resolve the active WinOptiAI installation folder from registry, frozen exe, or default."""
+    if os.name == "nt":
+        import winreg
+
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for sub in (
+                rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_UNINSTALL_GUID}",
+                rf"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{APP_UNINSTALL_GUID}",
+            ):
+                try:
+                    with winreg.OpenKey(hive, sub) as k:
+                        loc, _ = winreg.QueryValueEx(k, "InstallLocation")
+                        if isinstance(loc, str) and loc.strip():
+                            return Path(loc.strip())
+                except OSError:
+                    continue
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Programs" / "WinOptiAI"
+
+
+def build_detached_update_script(
+    setup_path: Path,
+    install_dir: Path,
+    log_path: Path,
+) -> str:
+    """Build an independent .cmd bridge script that force-closes WinOptiAI, installs, and relaunches."""
+    exe_path = install_dir / "WinOptiAI.exe"
+    return (
+        "@echo off\r\n"
+        "timeout /t 2 /nobreak >nul\r\n"
+        "taskkill /F /T /IM WinOptiAI.exe >nul 2>&1\r\n"
+        "timeout /t 1 /nobreak >nul\r\n"
+        f'"{setup_path}" /SP- /SILENT /CURRENTUSER /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS '
+        f'/DIR="{install_dir}" /LOG="{log_path}"\r\n'
+        f'if exist "{exe_path}" (\r\n'
+        f'    start "" "{exe_path}"\r\n'
+        ")\r\n"
+    )
+
+
+def _launch_detached_cmd(cmd_script: Path, work_dir: Path) -> bool:
+    """Launch bridge script completely detached from parent PyInstaller Job Object via ShellExecuteW."""
+    if os.name != "nt":
+        return False
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "open",
+        "cmd.exe",
+        f'/c "{cmd_script}"',
+        str(work_dir),
+        0,
+    )
+    return int(rc) > 32
+
+
+def download_and_launch_update(
+    info: ReleaseInfo,
+    progress_cb: Callable[[int, str], None] | None = None,
+) -> tuple[bool, str]:
+    """Download WinOptiAI-Setup.exe with % progress, verify SHA-256, and spawn detached updater."""
     if not info.setup_url:
         return False, "El release no contiene WinOptiAI-Setup.exe adjunto."
 
     dl_dir = Path(tempfile.gettempdir()) / "WinOptiAI-Update"
     dl_dir.mkdir(parents=True, exist_ok=True)
     setup_path = dl_dir / "WinOptiAI-Setup.exe"
+    log_path = dl_dir / "install.log"
+    bridge_cmd = dl_dir / "apply_update.cmd"
 
     try:
-        setup_path.write_bytes(_http_get_bytes(info.setup_url, timeout=90))
+        if progress_cb:
+            progress_cb(3, "Conectando con GitHub Releases...")
+        _download_file_with_progress(info.setup_url, setup_path, progress_cb=progress_cb, timeout=120)
 
         if info.checksums_url:
+            if progress_cb:
+                progress_cb(91, "Verificando firma SHA-256...")
             sums_text = _http_get_bytes(info.checksums_url, timeout=20).decode("utf-8", errors="replace")
             expected = _parse_expected_sha256(sums_text, "WinOptiAI-Setup.exe")
             if expected:
@@ -159,12 +272,21 @@ def download_and_launch_update(info: ReleaseInfo) -> tuple[bool, str]:
                     setup_path.unlink(missing_ok=True)
                     return False, "Error de integridad SHA-256 en el instalador descargado."
 
-        if os.name == "nt":
-            subprocess.Popen(
-                [str(setup_path), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"],
-                cwd=str(dl_dir),
-            )
-            return True, "Actualizador verificado e iniciado. La aplicacion se reiniciara."
-        return False, "Actualizacion solo soportada en Windows."
+        if os.name != "nt":
+            return False, "Actualizacion solo soportada en Windows."
+
+        if progress_cb:
+            progress_cb(96, "Iniciando proceso puente de instalacion independiente...")
+        install_dir = detect_installed_dir()
+        bridge_cmd.write_text(
+            build_detached_update_script(setup_path, install_dir, log_path),
+            encoding="utf-8",
+        )
+        if not _launch_detached_cmd(bridge_cmd, dl_dir):
+            return False, "No se pudo iniciar el proceso puente de actualizacion."
+
+        if progress_cb:
+            progress_cb(100, "Instalador lanzado en proceso separado. Reiniciando...")
+        return True, "Actualizador independiente iniciado. WinOptiAI se cerrara y reabrira actualizado."
     except (OSError, urllib.error.URLError, TimeoutError) as exc:
         return False, f"Fallo al descargar la actualizacion: {exc}"

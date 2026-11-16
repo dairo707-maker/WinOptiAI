@@ -424,6 +424,7 @@ class MainWindow(QMainWindow):
             theme_mode=self.policy.config.theme_mode,
             run_async=self._run_async,
             hardware_summary=hw_summary,
+            active_tasks_fn=lambda: list(self._active_workers),
             parent=self,
         )
         dlg.exec()
@@ -451,6 +452,7 @@ class MainWindow(QMainWindow):
         callback,
         task_label: str = "Tarea en segundo plano",
         notify_on_complete: bool = True,
+        progress_ui_cb=None,
     ) -> None:
         # RAM-aware concurrency guardrail
         free_gb = get_memory_snapshot()["free_gb"]
@@ -472,8 +474,13 @@ class MainWindow(QMainWindow):
         self._active_workers.append(worker)
         self._sync_active_task_indicators()
 
-        def _on_progress(_tid: str, _pct: int, _stage: str) -> None:
+        def _on_progress(_tid: str, pct: int, stage: str) -> None:
             self._sync_active_task_indicators()
+            if progress_ui_cb is not None:
+                try:
+                    progress_ui_cb(pct, stage)
+                except RuntimeError:
+                    pass
 
         def _cleanup_common(tid: str) -> None:
             self._active_workers[:] = [w for w in self._active_workers if w.task_id != tid]
