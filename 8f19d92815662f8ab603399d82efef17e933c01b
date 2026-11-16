@@ -1,0 +1,4 @@
+Verificacion v0.5.1: uv run --no-sync pytest -v -> 50 passed (incluye cero emojis).
+Causa raiz 0xc0000005: slot clicked de cell widget reconstruia rec_table y
+ShellExecuteW (UAC) bombeaba mensajes Qt de forma reentrante en el hilo UI.
+Pendiente: prueba manual en la app real; dist/ sin modificar; uv.lock sigue en 0.3.3.
