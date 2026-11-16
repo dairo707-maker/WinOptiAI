@@ -1,0 +1,1 @@
+CI fix: iscc /? devuelve exit code 1 por diseno en Inno Setup 6; reemplazado por Get-Command iscc.
