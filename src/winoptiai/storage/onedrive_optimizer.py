@@ -229,7 +229,8 @@ def scan_local_onedrive_candidates(
                     size = int(st.st_size)
                     if size < min_bytes:
                         continue
-                    last_touch = max(st.st_atime, st.st_mtime)
+                    # Use mtime rather than atime because AV/Windows Search/OneDrive sync touch atime
+                    last_touch = st.st_mtime
                     if last_touch > cutoff_ts:
                         continue
                     days_idle = max(0, int((now_ts - last_touch) / 86400))
