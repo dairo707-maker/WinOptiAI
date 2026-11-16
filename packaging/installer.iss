@@ -110,6 +110,10 @@ var
   ResultCode: Integer;
 begin
   Exec('taskkill.exe', '/F /T /IM WinOptiAI.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(400);
-  Result := '';
+  Sleep(500);
+  Exec('cmd.exe', '/c tasklist /FI "IMAGENAME eq WinOptiAI.exe" | find /I "WinOptiAI.exe" >nul', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode = 0 then
+    Result := 'WinOptiAI sigue activo (probablemente ejecutandose como Administrador en la bandeja del reloj). Haga clic derecho en su icono junto al reloj -> "Salir de WinOptiAI", o ejecute este instalador como Administrador y vuelva a intentarlo.'
+  else
+    Result := '';
 end;

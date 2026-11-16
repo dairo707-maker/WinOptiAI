@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import subprocess
 
@@ -46,6 +47,10 @@ class HardwareAuditReport:
     virtualization: str
     battery_pct: int | None
     recommendations: list[dict[str, str]]
+    smart_summary: str = "N/D"
+    disk_events_count: int = 0
+    security_posture: str = "N/D"
+    oem_tool: str = ""
 
 
 def _ps_json(script: str) -> dict:
@@ -126,14 +131,36 @@ $cs = Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer, Model, 
 $bios = Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors, VirtualizationFirmwareEnabled
 $gpus = @(Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion)
-$disk = Get-PhysicalDisk | Where-Object { $_.BusType -notlike '*Virtual*' -and $_.FriendlyName -notlike '*Virtual*' } | Sort-Object @{E={if($_.BusType -eq 'NVMe'){0}elseif($_.MediaType -eq 'SSD'){1}else{2}};Descending=$false}, @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType
+$disk = Get-PhysicalDisk | Where-Object { $_.BusType -notlike '*Virtual*' -and $_.FriendlyName -notlike '*Virtual*' } | Sort-Object @{E={if($_.BusType -eq 'NVMe'){0}elseif($_.MediaType -eq 'SSD'){1}else{2}};Descending=$false}, @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType, DeviceId
 if (-not $disk) {
-  $disk = Get-PhysicalDisk | Sort-Object @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType
+  $disk = Get-PhysicalDisk | Sort-Object @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType, DeviceId
 }
+$smart = $null
+try { if ($disk) { $smart = $disk | Get-StorageReliabilityCounter -EA SilentlyContinue | Select-Object Temperature, Wear, ReadErrorsTotal, WriteErrorsTotal, PowerOnHours } } catch {}
+$diskErrs = 0
+try {
+  $since = (Get-Date).AddDays(-14)
+  $ev = @(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='disk','ntfs','Ntfs','WHEA-Logger','stornvme'; Level=1,2,3; StartTime=$since} -MaxEvents 40 -EA SilentlyContinue)
+  $diskErrs = $ev.Count
+} catch {}
+$hvci = 'Desconocido'
+try {
+  $dg = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -EA SilentlyContinue
+  if ($dg -and $dg.Enabled -eq 1) { $hvci = 'Activo' } else { $hvci = 'Inactivo' }
+} catch {}
+$fastBoot = $null
+try {
+  $fb = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -EA SilentlyContinue
+  if ($null -ne $fb.HiberbootEnabled) { $fastBoot = [int]$fb.HiberbootEnabled }
+} catch {}
+$tpmReady = 'N/D'
+try { $t = Get-Tpm -EA SilentlyContinue; if ($t) { $tpmReady = if ($t.TpmReady) { 'TPM 2.0 OK' } else { 'Revisar TPM' } } } catch {}
+$bl = 'N/D'
+try { $bv = Get-BitLockerVolume -MountPoint 'C:' -EA SilentlyContinue; if ($bv) { $bl = [string]$bv.ProtectionStatus } } catch {}
 $vol = Get-PSDrive -Name C -PSProvider FileSystem | Select-Object @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}}, @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,2)}}
 $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1 EstimatedChargeRemaining
 $sb = 'Desconocido'
-try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } } catch { $sb = 'Protegido (requiere admin)' }
+try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } } catch { $sb = 'Protegido (admin)' }
 
 [PSCustomObject]@{
   Manufacturer = $cs.Manufacturer
@@ -148,6 +175,16 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
   NvmeModel = $disk.FriendlyName
   NvmeHealth = [string]$disk.HealthStatus
   MediaType = if($disk.BusType -eq 'NVMe'){'NVMe SSD'}elseif($disk.MediaType){[string]$disk.MediaType}else{'SSD'}
+  SmartTemp = if($smart -and $null -ne $smart.Temperature){[int]$smart.Temperature}else{$null}
+  SmartWear = if($smart -and $null -ne $smart.Wear){[int]$smart.Wear}else{$null}
+  SmartReadErr = if($smart -and $null -ne $smart.ReadErrorsTotal){[int]$smart.ReadErrorsTotal}else{0}
+  SmartWriteErr = if($smart -and $null -ne $smart.WriteErrorsTotal){[int]$smart.WriteErrorsTotal}else{0}
+  SmartHours = if($smart -and $null -ne $smart.PowerOnHours){[int]$smart.PowerOnHours}else{$null}
+  DiskEvents14d = $diskErrs
+  Hvci = $hvci
+  FastBoot = $fastBoot
+  Tpm = $tpmReady
+  BitLocker = $bl
   DiskFreeGB = $vol.FreeGB
   DiskTotalGB = $vol.TotalGB
   HasBattery = ($null -ne $bat)
@@ -293,7 +330,105 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             }
         )
 
-    # 5. Battery / Conservation Mode (laptops)
+    # 5. Deep Disk Integrity, SMART & Windows System Repair (CHKDSK /scan, SFC/DISM, WinSxS)
+    smart_parts: list[str] = []
+    if raw.get("SmartWear") is not None:
+        smart_parts.append(f"Desgaste {raw['SmartWear']}%")
+    if raw.get("SmartTemp") is not None:
+        smart_parts.append(f"{raw['SmartTemp']} C")
+    if raw.get("SmartHours") is not None:
+        smart_parts.append(f"{raw['SmartHours']}h")
+    read_err = int(raw.get("SmartReadErr") or 0)
+    write_err = int(raw.get("SmartWriteErr") or 0)
+    if read_err or write_err:
+        smart_parts.append(f"Err R/W: {read_err}/{write_err}")
+    smart_summary = " | ".join(smart_parts) if smart_parts else "SMART protegido (eleva UAC en disco)"
+    disk_events = int(raw.get("DiskEvents14d") or 0)
+
+    recs.append(
+        {
+            "area": "Salud Disco & SMART",
+            "estado": "ALERTA" if (disk_events > 0 or read_err > 0 or write_err > 0) else "VERIFICAR",
+            "reinicio": "NO (en linea)",
+            "detalle": (
+                f"SMART: {smart_summary} | Eventos NTFS/Disk/WHEA (14d): {disk_events}. "
+                "Ejecutar CHKDSK C: /scan en linea sin desmontar el volumen."
+            ),
+            "action_id": "run_chkdsk_scan",
+            "action_label": "CHKDSK /scan",
+        }
+    )
+    recs.append(
+        {
+            "area": "Integridad SO (SFC/DISM)",
+            "estado": "MANTENIMIENTO",
+            "reinicio": "NO (inmediato)",
+            "detalle": "Verificar y reparar archivos protegidos de Windows e imagen WinSxS.",
+            "action_id": "run_sfc_dism",
+            "action_label": "Reparar SFC+DISM",
+        }
+    )
+    recs.append(
+        {
+            "area": "Almacen WinSxS",
+            "estado": "ESPACIO",
+            "reinicio": "NO (inmediato)",
+            "detalle": "Depurar componentes obsoletos de actualizaciones de Windows (/StartComponentCleanup).",
+            "action_id": "run_winsxs_cleanup",
+            "action_label": "Limpiar WinSxS",
+        }
+    )
+
+    # 6. OEM Firmware Updater + BIOS Age & Fast Startup
+    mfg_low = manufacturer.lower()
+    oem_tool = "Windows Update"
+    oem_action = "open_windows_update"
+    if "lenovo" in mfg_low:
+        oem_tool = "Lenovo Vantage"
+        oem_action = "launch_lenovo_vantage"
+    elif "dell" in mfg_low:
+        oem_tool = "Dell Command Update"
+        oem_action = "launch_dell_command"
+    elif "hp" in mfg_low or "hewlett" in mfg_low:
+        oem_tool = "HP Support"
+        oem_action = "launch_hp_support"
+    elif "asus" in mfg_low:
+        oem_tool = "MyASUS"
+        oem_action = "launch_asus_myasus"
+
+    bios_date_str = str(raw.get("BiosDate") or "N/D")
+    bios_old = False
+    if bios_date_str != "N/D":
+        try:
+            bdt = datetime.strptime(bios_date_str, "%Y-%m-%d")
+            bios_old = (datetime.now() - bdt).days > 730
+        except ValueError:
+            pass
+    if oem_action != "open_windows_update" or bios_old:
+        recs.append(
+            {
+                "area": f"Firmware OEM ({manufacturer})",
+                "estado": "ANTIGUA (>2a)" if bios_old else "ACTUALIZAR",
+                "reinicio": "SI (si hay BIOS)",
+                "detalle": f"BIOS actual {bios_ver} ({bios_date_str}). Revisar BIOS y drivers oficiales en {oem_tool}.",
+                "action_id": oem_action,
+                "action_label": f"Abrir {oem_tool[:14]}",
+            }
+        )
+
+    if raw.get("FastBoot") == 1:
+        recs.append(
+            {
+                "area": "Inicio Rapido (Kernel)",
+                "estado": "OPCIONAL",
+                "reinicio": "Prox. apagado",
+                "detalle": "Fast Startup (Hiberboot) esta activo; desactivarlo evita sesiones sucias de drivers y RAM tras apagar.",
+                "action_id": "disable_fast_startup",
+                "action_label": "Desactivar FastBoot",
+            }
+        )
+
+    # 7. Battery / Conservation Mode (laptops)
     if is_laptop:
         recs.append(
             {
@@ -309,12 +444,18 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             }
         )
 
+    sec_posture = (
+        f"SecureBoot: {raw.get('SecureBoot', 'N/D')} | "
+        f"HVCI: {raw.get('Hvci', 'N/D')} | "
+        f"{raw.get('Tpm', 'TPM N/D')} | BitLocker C: {raw.get('BitLocker', 'N/D')}"
+    )
+
     return HardwareAuditReport(
         manufacturer=manufacturer,
         model=model,
         is_laptop=is_laptop,
         bios_version=bios_ver,
-        bios_date=str(raw.get("BiosDate") or "N/D"),
+        bios_date=bios_date_str,
         cpu_name=cpu_name,
         cpu_vendor=cpu_vendor,
         cpu_cores=str(raw.get("CpuCores") or "N/D"),
@@ -333,6 +474,10 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
         virtualization=str(raw.get("Virt") or "N/D"),
         battery_pct=raw.get("BatteryPct"),
         recommendations=recs,
+        smart_summary=smart_summary,
+        disk_events_count=disk_events,
+        security_posture=sec_posture,
+        oem_tool=oem_tool,
     )
 
 
@@ -402,5 +547,44 @@ def execute_audit_action(action_id: str) -> tuple[bool, str]:
     if action_id == "open_power_settings":
         subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:powersleep"])
         return True, "Abriendo configuracion de energia y bateria de Windows."
+
+    if action_id == "run_chkdsk_scan":
+        ok = run_elevated_command(
+            "powershell.exe",
+            '-NoProfile -Command "chkdsk C: /scan; Write-Host; Pause"',
+        )
+        return ok, "CHKDSK C: /scan en linea lanzado en consola elevada." if ok else "Operacion cancelada."
+
+    if action_id == "run_sfc_dism":
+        ok = run_elevated_command(
+            "powershell.exe",
+            '-NoProfile -Command "DISM /Online /Cleanup-Image /RestoreHealth; sfc /scannow; Write-Host; Pause"',
+        )
+        return ok, "Reparacion DISM + SFC /scannow lanzada en consola elevada." if ok else "Operacion cancelada."
+
+    if action_id == "run_winsxs_cleanup":
+        ok = run_elevated_command(
+            "powershell.exe",
+            '-NoProfile -Command "Dism.exe /Online /Cleanup-Image /StartComponentCleanup; Write-Host; Pause"',
+        )
+        return ok, "Limpieza profunda WinSxS lanzada en consola elevada." if ok else "Operacion cancelada."
+
+    if action_id == "disable_fast_startup":
+        ok = run_elevated_command(
+            "reg.exe",
+            r'add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d 0 /f',
+        )
+        return ok, "Fast Startup desactivado (aplicara en el proximo apagado/inicio)." if ok else "Operacion cancelada."
+
+    oem_urls = {
+        "launch_lenovo_vantage": ("lenovo-vantage:", "https://pcsupport.lenovo.com/"),
+        "launch_dell_command": ("https://www.dell.com/support/home", "https://www.dell.com/support/home"),
+        "launch_hp_support": ("https://support.hp.com/", "https://support.hp.com/"),
+        "launch_asus_myasus": ("https://www.asus.com/support/", "https://www.asus.com/support/"),
+    }
+    if action_id in oem_urls:
+        uri, fallback_url = oem_urls[action_id]
+        subprocess.Popen(["cmd", "/c", "start", "", uri])
+        return True, f"Abriendo soporte/actualizador oficial OEM ({fallback_url})."
 
     return False, f"Accion no reconocida: {action_id}"

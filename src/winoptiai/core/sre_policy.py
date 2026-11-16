@@ -16,7 +16,7 @@ from pathlib import Path
 import time
 
 from .i18n import detect_default_language
-from .safety_guard import default_app_data_dir
+from .safety_guard import atomic_write_text, default_app_data_dir
 
 
 def recommended_ram_threshold_gb() -> float:
@@ -81,12 +81,10 @@ class SREPolicyEngine:
     def save_config(self, config: SREPolicyConfig | None = None) -> None:
         if config is not None:
             self.config = config
-        tmp = self.config_path.with_suffix(".tmp")
-        tmp.write_text(
+        atomic_write_text(
+            self.config_path,
             json.dumps(asdict(self.config), indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
-        tmp.replace(self.config_path)
 
     def evaluate_ram_pressure(
         self,

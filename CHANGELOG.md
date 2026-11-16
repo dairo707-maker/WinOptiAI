@@ -2,6 +2,27 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.0] - 2026-11-16
+
+### Agregado y Mejorado (Auditoria Experta v0.5.0)
+- **Control Cooperativo de Procesos y Sesiones Retomables (`core/task_control.py`, `workers.py`, `main_window.py`, `notifications_drawer.py`, `junk_scanner.py`):**
+  - Nuevos controles globales en barra superior y panel de Tareas: **`Pausar` / `Reanudar`**, **`Guardar Pausa`** (persiste el progreso pendiente en `%LOCALAPPDATA%\WinOptiAI\sessions\<id>.json` tras asegurar en Cuarentena lo ya procesado) y **`Cancelar`**.
+  - Nuevo boton **`Retomar Sesion (N)`** y lista interactiva de sesiones guardadas para continuar limpiezas largas tras cerrar o reiniciar el equipo (`resume_junk_session()`).
+  - Cancelacion cooperativa tambien integrada en escaneo de temporales, duplicados BLAKE3 (`duplicate_finder.py`), arbol de almacenamiento (`tree_analyzer.py`) y OneDrive local (`onedrive_optimizer.py`).
+- **Diagnostico Profundo de Disco S.M.A.R.T., Eventos NTFS/WHEA e Integridad OS (`thermal_bios/bios_auditor.py`, `thermal_bios_view.py`):**
+  - Telemetria real S.M.A.R.T. NVMe/SSD (`Wear`, `Temperature`, `ReadErrorsTotal`, `WriteErrorsTotal`, `PowerOnHours`) y conteo de errores criticos `Disk` / `Ntfs` / `stornvme` / `WHEA-Logger` de los ultimos 14 dias.
+  - Remediaciones en 1 clic con elevacion UAC: **`CHKDSK C: /scan`**, **`DISM /RestoreHealth + sfc /scannow`** y **`DISM StartComponentCleanup`** (limpieza de WinSxS).
+  - Nuevas rutas profundas de limpieza (`junk_scanner.py`, `safety_guard.py`): `Windows\SoftwareDistribution\Download`, `DeliveryOptimization`, `VS Code CachedData` y bloqueos temporales `HuggingFace .locks`.
+- **Auditoria UEFI/OEM, Seguridad Hardware y Verificacion Termica (`thermal_bios/`, `bios_auditor.py`):**
+  - Alerta automatica si el BIOS tiene mas de 2 anos de antiguedad con deteccion multi-OEM (`Lenovo Vantage`, `Dell Command Update`, `HP Support Assistant`, `MyASUS`).
+  - Auditoria de postura de seguridad: **TPM 2.0**, **BitLocker**, **HVCI / Integridad de memoria (Core Isolation)** y **Inicio Rapido (`HiberbootEnabled`)** con accion 1-clic `disable_fast_startup`.
+  - Lectura de verificacion post-aplicacion via `powercfg /q` en `apply_thermal_profile()`.
+- **Proteccion Activa en `AI Boost`, CPU% en Vivo y Retencion 30d (`process_manager.py`, `win32_bridge.py`, `safety_guard.py`, `installer.iss`):**
+  - `run_ai_boost()` protege ahora su propio PID, la ventana en primer plano activa (`get_foreground_pid()`) y agentes IA/IDE (`AI_FOREGROUND_AGENTS`).
+  - `list_top_processes()` mantiene cache de handles `psutil.Process` para reportar consumo real `% CPU` por proceso.
+  - Expiracion automatica en arranque (`_phase2_warmup`) de lotes `Basura:*` en Cuarentena con mas de 30 dias (`purge_expired_items()`).
+  - Escudo `[Code] PrepareToInstall` en Inno Setup 6 para detectar instancias elevadas de `WinOptiAI.exe` antes de sobrescribir binarios y escrituras atomicas compartidas (`atomic_write_text`).
+
 ## [0.4.2] - 2026-11-16
 
 ### Corregido y Optimizado

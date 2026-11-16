@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import time
-from typing import Callable
+from typing import Any, Callable
 import uuid
 
 from .win32_bridge import (
@@ -47,6 +47,8 @@ EXPLICIT_TEMP_ALLOWLIST: tuple[str, ...] = (
     "c:\\windows\\temp",
     "c:\\windows\\prefetch",
     "c:\\windows\\minidump",
+    "c:\\windows\\softwaredistribution\\download",
+    "c:\\windows\\softwaredistribution\\deliveryoptimization",
     "c:\\programdata\\microsoft\\windows\\wer\\reportarchive",
     "c:\\programdata\\microsoft\\windows\\wer\\reportqueue",
 )
@@ -92,6 +94,21 @@ PROTECTED_PROCESS_NAMES: frozenset[str] = frozenset(
         "winoptiai.exe",
     }
 )
+
+
+def atomic_write_text(path: Path, text: str, retries: int = 5) -> None:
+    """Atomically replace a local JSON/config file with retry backoff against AV locks."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for attempt in range(retries):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(0.06 * (attempt + 1))
 
 
 def default_app_data_dir() -> Path:
@@ -198,17 +215,10 @@ class QuarantineVault:
             return []
 
     def _save_manifest(self, records: list[dict]) -> None:
-        self.root_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.manifest_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
-        for attempt in range(5):
-            try:
-                tmp.replace(self.manifest_path)
-                return
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.06 * (attempt + 1))
+        atomic_write_text(
+            self.manifest_path,
+            json.dumps(records, indent=2, ensure_ascii=False),
+        )
 
     def list_items(self) -> list[QuarantineRecord]:
         with self._lock:
@@ -350,13 +360,28 @@ class QuarantineVault:
         category: str,
         allow_system_temp: bool = False,
         progress_cb: Callable[[int, str], None] | None = None,
-    ) -> dict[str, int]:
-        """Move thousands of disposable/temp files into ONE reversible batch bundle in O(N) time."""
+        controller: Any = None,
+    ) -> dict[str, Any]:
+        """Move disposable/temp files into ONE reversible batch bundle with cooperative pause/cancel."""
         if not sources:
-            return {"moved": 0, "skipped": 0, "permission_denied": 0, "freed_bytes": 0}
+            return {
+                "moved": 0,
+                "skipped": 0,
+                "permission_denied": 0,
+                "freed_bytes": 0,
+                "interrupted": "",
+                "remaining_sources": [],
+            }
 
         if is_protected_path(base_dir, allow_system_temp=allow_system_temp):
-            return {"moved": 0, "skipped": len(sources), "permission_denied": 0, "freed_bytes": 0}
+            return {
+                "moved": 0,
+                "skipped": len(sources),
+                "permission_denied": 0,
+                "freed_bytes": 0,
+                "interrupted": "",
+                "remaining_sources": [],
+            }
 
         batch_id = uuid.uuid4().hex[:12]
         safe_slug = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in bundle_name)[:40]
@@ -375,8 +400,16 @@ class QuarantineVault:
         files_dir_str = str(files_dir)
         made_dirs: set[str] = {files_dir_str}
         bundle_entries: list[list[str]] = []
+        interrupted = ""
+        remaining_sources: list[tuple[Path, int]] = []
 
         for idx, (src, est_size) in enumerate(sources, start=1):
+            if controller is not None and (idx == 1 or idx % 50 == 0):
+                state = controller.checkpoint()
+                if state in ("cancel", "save_pause"):
+                    interrupted = state
+                    remaining_sources = sources[idx - 1 :]
+                    break
             if progress_cb and (idx == 1 or idx % 250 == 0 or idx == total):
                 pct = 15 + int(idx * 80 / total)
                 progress_cb(pct, f"Moviendo a respaldo seguro ({idx}/{total})...")
@@ -414,6 +447,8 @@ class QuarantineVault:
                 "skipped": skipped,
                 "permission_denied": perm_denied,
                 "freed_bytes": 0,
+                "interrupted": interrupted,
+                "remaining_sources": remaining_sources,
             }
 
         bundle_meta = bundle_dir / "_bundle_manifest.json"
@@ -438,6 +473,8 @@ class QuarantineVault:
             "skipped": skipped,
             "permission_denied": perm_denied,
             "freed_bytes": freed_bytes,
+            "interrupted": interrupted,
+            "remaining_sources": remaining_sources,
         }
 
     def restore_item(self, item_id: str) -> tuple[bool, str]:
@@ -534,6 +571,30 @@ class QuarantineVault:
                 cur = self._load_manifest()
                 self._save_manifest([r for r in cur if r.get("item_id") not in purged_ids])
         return {"purged": len(purged_ids), "freed_bytes": freed_bytes}
+
+    def purge_expired_items(
+        self,
+        max_age_days: int = 30,
+        only_junk_categories: bool = True,
+    ) -> dict[str, int]:
+        """Auto-purge old temporary Quarantine bundles beyond retention days to keep C: healthy."""
+        cutoff_ts = time.time() - (max(1, max_age_days) * 86400)
+        with self._lock:
+            records = self._load_manifest()
+        expired_ids: list[str] = []
+        for rec in records:
+            if only_junk_categories and not str(rec.get("category") or "").startswith("Basura:"):
+                continue
+            raw_ts = str(rec.get("quarantined_at") or "")
+            try:
+                dt = datetime.fromisoformat(raw_ts)
+                if dt.timestamp() <= cutoff_ts:
+                    expired_ids.append(str(rec["item_id"]))
+            except ValueError:
+                continue
+        if not expired_ids:
+            return {"purged": 0, "freed_bytes": 0}
+        return self.purge_items(expired_ids, use_recycle_bin=False)
 
 
 class PreOpBackupManager:

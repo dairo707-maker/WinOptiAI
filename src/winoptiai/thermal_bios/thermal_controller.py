@@ -128,7 +128,10 @@ def apply_thermal_profile(profile_key: str) -> tuple[bool, str]:
         if not ok:
             return False, f"Error en powercfg {' '.join(cmd)}: {msg}"
 
-    return True, f"Perfil termico '{profile.title}' aplicado correctamente"
+    # Read back EPP index to verify Windows power policy accepted the update
+    q_ok, q_out = _run_powercfg(["/q", "SCHEME_CURRENT", SUB_PROCESSOR, PERFEPP])
+    verified = "verificado" if q_ok and f"0x{profile.epp_ac:08x}" in q_out.lower() else "aplicado"
+    return True, f"Perfil termico '{profile.title}' {verified} (EPP AC {profile.epp_ac}%)"
 
 
 def restore_default_power_scheme() -> tuple[bool, str]:

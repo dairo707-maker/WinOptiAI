@@ -1,4 +1,4 @@
-"""Modern Notification Bell & Concurrent Background Task Progress Dialog."""
+"""Modern Notification Bell, Live Task Controls (Pause/Save/Cancel), and Resumable Sessions Drawer."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.notifications import NotificationCenter
+from ...core.task_control import SessionManager, TaskSessionRecord
 from ..svg_icons import load_svg_icon
 from ..theme import get_palette
 from ..widgets import GlassPanel, StatusTag
@@ -24,7 +25,7 @@ from ..workers import AsyncTask
 
 
 class NotificationsTasksDialog(QDialog):
-    """0px drawer showing live concurrent tasks (with % bars) and dismissible notifications."""
+    """0px drawer showing live concurrent tasks (Pause/Save/Cancel), saved sessions, and notifications."""
 
     def __init__(
         self,
@@ -33,21 +34,27 @@ class NotificationsTasksDialog(QDialog):
         on_jump_tab: Callable[[int], None],
         theme_mode: str = "dark",
         parent: QWidget | None = None,
+        session_mgr: SessionManager | None = None,
+        on_resume_session: Callable[[TaskSessionRecord], None] | None = None,
+        on_sync_tasks: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.center = center
         self.active_tasks_fn = active_tasks_fn
         self.on_jump_tab = on_jump_tab
         self.theme_mode = theme_mode
+        self.session_mgr = session_mgr
+        self.on_resume_session = on_resume_session
+        self.on_sync_tasks = on_sync_tasks
 
-        self.setWindowTitle("Procesos Activos y Notificaciones")
-        self.resize(560, 560)
+        self.setWindowTitle("Procesos Activos, Sesiones y Notificaciones")
+        self.resize(610, 620)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setSpacing(10)
 
-        # Section 1: Live Concurrent Tasks
+        # Section 1: Live Concurrent Tasks + Controls
         t_hdr = QHBoxLayout()
         t_lbl = QLabel("PROCESOS EN SEGUNDO PLANO")
         t_lbl.setObjectName("SectionLabel")
@@ -63,7 +70,23 @@ class NotificationsTasksDialog(QDialog):
         tasks_host.setLayout(self.tasks_container)
         root.addWidget(tasks_host)
 
-        # Section 2: Persistent Notifications + Clear controls
+        # Section 2: Saved Resumable Sessions
+        s_hdr = QHBoxLayout()
+        s_lbl = QLabel("SESIONES GUARDADAS (RETOMAR DESPUES)")
+        s_lbl.setObjectName("SectionLabel")
+        s_hdr.addWidget(s_lbl)
+        s_hdr.addStretch()
+        self.sessions_tag = StatusTag("0 GUARDADAS", "neutral")
+        s_hdr.addWidget(self.sessions_tag)
+        root.addLayout(s_hdr)
+
+        self.sessions_container = QVBoxLayout()
+        self.sessions_container.setSpacing(6)
+        self.sessions_host = GlassPanel()
+        self.sessions_host.setLayout(self.sessions_container)
+        root.addWidget(self.sessions_host)
+
+        # Section 3: Persistent Notifications + Clear controls
         n_hdr = QHBoxLayout()
         n_lbl = QLabel("CENTRO DE NOTIFICACIONES")
         n_lbl.setObjectName("SectionLabel")
@@ -104,7 +127,27 @@ class NotificationsTasksDialog(QDialog):
 
     def refresh(self) -> None:
         self._render_tasks()
+        self._render_sessions()
         self._render_notifications()
+
+    def _toggle_pause(self, task: AsyncTask) -> None:
+        if task.controller.is_paused:
+            task.controller.resume()
+        else:
+            task.controller.pause()
+        self._render_tasks()
+        if self.on_sync_tasks is not None:
+            self.on_sync_tasks()
+
+    def _save_and_pause(self, task: AsyncTask) -> None:
+        task.controller.pause_and_save()
+        if self.on_sync_tasks is not None:
+            self.on_sync_tasks()
+
+    def _cancel_task(self, task: AsyncTask) -> None:
+        task.controller.cancel()
+        if self.on_sync_tasks is not None:
+            self.on_sync_tasks()
 
     def _render_tasks(self) -> None:
         self._clear_layout(self.tasks_container)
@@ -123,7 +166,7 @@ class NotificationsTasksDialog(QDialog):
             row_w = QWidget()
             rl = QVBoxLayout(row_w)
             rl.setContentsMargins(10, 8, 10, 8)
-            rl.setSpacing(4)
+            rl.setSpacing(6)
             top = QHBoxLayout()
             title = QLabel(f"{task.title} ({task.started_at})")
             title.setStyleSheet("font-size: 12px; font-weight: 600;")
@@ -141,7 +184,72 @@ class NotificationsTasksDialog(QDialog):
             bar.setValue(task.percent)
             bar.setTextVisible(False)
             rl.addWidget(bar)
+
+            ctl = QHBoxLayout()
+            ctl.setSpacing(6)
+            ctl.addStretch()
+            pause_btn = QPushButton("Reanudar" if task.controller.is_paused else "Pausar")
+            pause_btn.setObjectName("GhostAction")
+            pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            pause_btn.clicked.connect(lambda _=False, t=task: self._toggle_pause(t))
+            ctl.addWidget(pause_btn)
+
+            save_btn = QPushButton("Guardar Sesion")
+            save_btn.setObjectName("GhostAction")
+            save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            save_btn.clicked.connect(lambda _=False, t=task: self._save_and_pause(t))
+            ctl.addWidget(save_btn)
+
+            cancel_btn = QPushButton("Cancelar")
+            cancel_btn.setObjectName("GhostAction")
+            cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            cancel_btn.clicked.connect(lambda _=False, t=task: self._cancel_task(t))
+            ctl.addWidget(cancel_btn)
+            rl.addLayout(ctl)
             self.tasks_container.addWidget(row_w)
+
+    def _render_sessions(self) -> None:
+        self._clear_layout(self.sessions_container)
+        sessions = self.session_mgr.list_sessions() if self.session_mgr else []
+        self.sessions_tag.set_tone(f"{len(sessions)} GUARDADAS", "warn" if sessions else "neutral")
+        self.sessions_host.setVisible(bool(sessions))
+        if not sessions:
+            return
+        for rec in sessions:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(10, 6, 10, 6)
+            rl.setSpacing(8)
+            info = QLabel(
+                f"{rec.title} — {rec.percent}% | {len(rec.pending_paths)} pendientes ({rec.created_at})"
+            )
+            info.setObjectName("MonoValue")
+            rl.addWidget(info, stretch=1)
+
+            res_btn = QPushButton("Reanudar")
+            res_btn.setObjectName("PrimaryAction")
+            res_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            res_btn.clicked.connect(lambda _=False, s=rec: self._resume_saved(s))
+            rl.addWidget(res_btn)
+
+            drop_btn = QPushButton("Descartar")
+            drop_btn.setObjectName("GhostAction")
+            drop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            drop_btn.clicked.connect(lambda _=False, sid=rec.session_id: self._discard_saved(sid))
+            rl.addWidget(drop_btn)
+            self.sessions_container.addWidget(row)
+
+    def _resume_saved(self, rec: TaskSessionRecord) -> None:
+        if self.on_resume_session is not None:
+            self.on_resume_session(rec)
+            self.refresh()
+
+    def _discard_saved(self, sid: str) -> None:
+        if self.session_mgr is not None:
+            self.session_mgr.remove_session(sid)
+        self._render_sessions()
+        if self.on_sync_tasks is not None:
+            self.on_sync_tasks()
 
     def _render_notifications(self) -> None:
         self._clear_layout(self.notif_layout)

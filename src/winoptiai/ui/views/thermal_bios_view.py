@@ -323,7 +323,8 @@ class ThermalBiosView(QWidget):
         self.hw_lbl.setText(
             f"EQUIPO: {report.manufacturer} {report.model} ({tipo})  |  BIOS: {report.bios_version} ({report.bios_date})\n"
             f"CPU: {report.cpu_name} ({report.cpu_cores})  |  RAM: {report.total_ram_gb:.1f} GB (Umbral SRE: {report.recommended_ram_threshold_gb:.1f} GB)\n"
-            f"GPU: {report.gpu_name} ({report.gpu_driver})  |  DISCO: {report.nvme_model} [{report.media_type} - {report.nvme_health}]"
+            f"GPU: {report.gpu_name} ({report.gpu_driver})  |  DISCO: {report.nvme_model} [{report.media_type} - {report.nvme_health}]\n"
+            f"SMART: {report.smart_summary} (Evt14d: {report.disk_events_count})  |  {report.security_posture}"
         )
         self._render_recommendations(report)
 

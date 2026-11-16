@@ -497,3 +497,18 @@ def dehydrate_onedrive_file(path: str | Path) -> tuple[bool, str]:
     if not ok:
         return False, "No se pudo cambiar atributo Files On-Demand"
     return True, "Marcado como Solo en la nube"
+
+
+def get_foreground_pid() -> int | None:
+    """Return PID of the active foreground window so AI Boost never trims user focus."""
+    if not IS_WINDOWS:
+        return None
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid = wintypes.DWORD(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(pid.value) if pid.value > 4 else None
+    except OSError:
+        return None

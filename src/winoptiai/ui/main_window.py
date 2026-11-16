@@ -29,9 +29,10 @@ from ..core.i18n import tr
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
+from ..core.task_control import SessionManager, TaskSessionRecord
 from ..core.telemetry import PdhTelemetryReader
 from ..core.win32_bridge import apply_window_theme, is_user_admin, run_elevated_command
-from ..storage.junk_scanner import scan_junk_targets
+from ..storage.junk_scanner import resume_junk_session, scan_junk_targets
 from ..thermal_bios.thermal_controller import THERMAL_PROFILES, apply_thermal_profile
 from .dialogs.about_updater_dialog import AboutUpdaterDialog
 from .dialogs.notifications_drawer import NotificationsTasksDialog
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         self.backup_mgr = PreOpBackupManager()
         self.policy = SREPolicyEngine()
         self.notif_center = NotificationCenter()
+        self.session_mgr = SessionManager()
         self.advisor = PeriodicAdvisor(cooldown_seconds=7200)
         self.telemetry_reader = PdhTelemetryReader()
         self._disk_free_gb = 0.0
@@ -187,6 +189,34 @@ class MainWindow(QMainWindow):
         self.task_pill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.task_pill_btn.clicked.connect(self._open_notifications_drawer)
         tb_layout.addWidget(self.task_pill_btn)
+
+        self.pause_top_btn = QPushButton("Pausar")
+        self.pause_top_btn.setObjectName("GhostAction")
+        self.pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_top_btn.clicked.connect(self._toggle_lead_pause)
+        self.pause_top_btn.setVisible(False)
+        tb_layout.addWidget(self.pause_top_btn)
+
+        self.save_pause_top_btn = QPushButton("Guardar Pausa")
+        self.save_pause_top_btn.setObjectName("GhostAction")
+        self.save_pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_pause_top_btn.clicked.connect(self._save_and_pause_lead)
+        self.save_pause_top_btn.setVisible(False)
+        tb_layout.addWidget(self.save_pause_top_btn)
+
+        self.cancel_top_btn = QPushButton("Cancelar")
+        self.cancel_top_btn.setObjectName("GhostAction")
+        self.cancel_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cancel_top_btn.clicked.connect(self._cancel_lead_task)
+        self.cancel_top_btn.setVisible(False)
+        tb_layout.addWidget(self.cancel_top_btn)
+
+        self.resume_session_btn = QPushButton("Retomar Sesion")
+        self.resume_session_btn.setObjectName("PrimaryAction")
+        self.resume_session_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.resume_session_btn.clicked.connect(self._open_notifications_drawer)
+        self.resume_session_btn.setVisible(False)
+        tb_layout.addWidget(self.resume_session_btn)
         tb_layout.addStretch()
 
         is_admin = is_user_admin()
@@ -342,6 +372,9 @@ class MainWindow(QMainWindow):
                 active_tasks_fn=lambda: list(self._active_workers),
                 on_jump_tab=self._switch_tab,
                 theme_mode=self.policy.config.theme_mode,
+                session_mgr=self.session_mgr,
+                on_resume_session=self._resume_saved_session,
+                on_sync_tasks=self._sync_active_task_indicators,
                 parent=self,
             )
         self._notif_dialog.theme_mode = self.policy.config.theme_mode
@@ -441,6 +474,64 @@ class MainWindow(QMainWindow):
         self.telemetry_reader.set_elevated_temps(cpu_c, nvme_c)
         self._sample_telemetry()
 
+    def _toggle_lead_pause(self) -> None:
+        if not self._active_workers:
+            return
+        lead = self._active_workers[0]
+        if lead.controller.is_paused:
+            lead.controller.resume()
+        else:
+            lead.controller.pause()
+        self._sync_active_task_indicators()
+
+    def _save_and_pause_lead(self) -> None:
+        if not self._active_workers:
+            return
+        self._active_workers[0].controller.pause_and_save()
+        self._set_status("Guardando sesion en punto seguro...")
+
+    def _cancel_lead_task(self) -> None:
+        if not self._active_workers:
+            return
+        self._active_workers[0].controller.cancel()
+        self._set_status("Cancelando proceso de forma segura...")
+
+    def _resume_saved_session(self, session: TaskSessionRecord) -> None:
+        if session.kind != "junk_clean":
+            self.session_mgr.remove_session(session.session_id)
+            self._sync_active_task_indicators()
+            return
+
+        def _work(progress_cb=None, controller=None) -> dict[str, int]:
+            return resume_junk_session(
+                session,
+                self.vault,
+                session_mgr=self.session_mgr,
+                progress_cb=progress_cb,
+                controller=controller,
+            )
+
+        def _done(res: dict[str, int]) -> None:
+            from .theme import format_bytes
+
+            msg = (
+                f"Sesion retomada completada: {res['removed']} archivos asegurados, "
+                f"{format_bytes(res['freed'])} recuperados."
+            )
+            self.policy.record_audit_event("usuario", "Reanudacion sesion", msg, res["freed"] / (1024 * 1024))
+            self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+            self._set_status(msg)
+            self._notify_user("COMPLETADO", session.title, msg, action_tab=1, tray_toast=True)
+            self._sync_active_task_indicators()
+
+        self._run_async(
+            _work,
+            _done,
+            f"Retomando: {session.title}",
+            notify_on_complete=False,
+            progress_ui_cb=lambda p, s: self.storage_view._progress_summary(p, s),
+        )
+
     def _sync_active_task_indicators(self) -> None:
         summaries: list[str] = []
         for w in self._active_workers:
@@ -448,10 +539,22 @@ class MainWindow(QMainWindow):
             summaries.append(f"{w.title} ({w.percent}%{' · ' + eta if eta else ''})")
         self.overview_view.set_active_tasks(summaries)
         self.processes_view.set_active_tasks(summaries)
-        if self._active_workers:
+
+        has_active = bool(self._active_workers)
+        self.pause_top_btn.setVisible(has_active)
+        self.save_pause_top_btn.setVisible(has_active)
+        self.cancel_top_btn.setVisible(has_active)
+
+        saved_sessions = self.session_mgr.list_sessions()
+        self.resume_session_btn.setVisible(bool(saved_sessions))
+        if saved_sessions:
+            self.resume_session_btn.setText(f"Retomar Sesion ({len(saved_sessions)})")
+
+        if has_active:
             if not self.task_eta_timer.isActive():
                 self.task_eta_timer.start()
             lead = self._active_workers[0]
+            self.pause_top_btn.setText("Reanudar" if lead.controller.is_paused else "Pausar")
             eta = lead.eta_label()
             eta_part = f" · {eta}" if eta else ""
             extra = f" (+{len(self._active_workers) - 1})" if len(self._active_workers) > 1 else ""
@@ -462,6 +565,7 @@ class MainWindow(QMainWindow):
             self.task_pill_btn.setText("Sin procesos en segundo plano")
         if self._notif_dialog is not None and self._notif_dialog.isVisible():
             self._notif_dialog._render_tasks()
+            self._notif_dialog._render_sessions()
 
     def _run_async(
         self,
@@ -519,6 +623,20 @@ class MainWindow(QMainWindow):
                     tray_toast=True,
                 )
 
+        def _cleanup_on_paused_saved(tid: str, _sid: str, pct: int, detail: str) -> None:
+            _cleanup_common(tid)
+            self._set_status(detail)
+            self._notify_user("AVISO", f"{task_label} (Pausado {pct}%)", detail, action_tab=1, tray_toast=True)
+            if on_error is not None:
+                on_error(detail)
+
+        def _cleanup_on_canceled(tid: str, detail: str) -> None:
+            _cleanup_common(tid)
+            self._set_status(detail)
+            self._notify_user("AVISO", f"{task_label} (Cancelado)", detail, tray_toast=False)
+            if on_error is not None:
+                on_error(detail)
+
         def _cleanup_on_err(tid: str, err: str) -> None:
             _cleanup_common(tid)
             self._set_status(f"Aviso: {err}")
@@ -528,14 +646,32 @@ class MainWindow(QMainWindow):
 
         worker.signals.progress.connect(_on_progress)
         worker.signals.finished.connect(_cleanup_and_emit)
+        worker.signals.paused_saved.connect(_cleanup_on_paused_saved)
+        worker.signals.canceled.connect(_cleanup_on_canceled)
         worker.signals.error.connect(_cleanup_on_err)
         self.pool.start(worker)
 
     def _phase2_warmup(self) -> None:
         self._refresh_disk_stats()
         self._sample_telemetry()
+        self._sync_active_task_indicators()
         self.overview_view.set_audit_rows(self.policy.read_recent_audit())
         self.thermal_view.refresh_audit()
+
+        def _retain_quarantine() -> dict[str, int]:
+            return self.vault.purge_expired_items(max_age_days=30, only_junk_categories=True)
+
+        def _on_retained(res: dict[str, int]) -> None:
+            if res.get("purged", 0) > 0:
+                self.policy.record_audit_event(
+                    "sre_auto",
+                    "Auto-expiracion Cuarentena (30d)",
+                    f"Purgados {res['purged']} lotes temporales expirados",
+                    res.get("freed_bytes", 0) / (1024 * 1024),
+                )
+                self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+
+        self._run_async(_retain_quarantine, _on_retained, "Retencion Cuarentena 30d", notify_on_complete=False)
 
     def _refresh_disk_stats(self) -> None:
         try:

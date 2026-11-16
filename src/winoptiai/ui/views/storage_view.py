@@ -462,7 +462,9 @@ class StorageView(QWidget):
             self.scan_root = Path(chosen)
             self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {self.scan_root} (en segundo plano)...")
             self.run_async(
-                lambda progress_cb=None: find_duplicates([self.scan_root], progress_cb=progress_cb),
+                lambda progress_cb=None, controller=None: find_duplicates(
+                    [self.scan_root], progress_cb=progress_cb, controller=controller
+                ),
                 self._on_dups_scanned,
                 f"Duplicados BLAKE3 ({self.scan_root.name})",
                 progress_ui_cb=self._progress_summary,
@@ -476,7 +478,9 @@ class StorageView(QWidget):
             self.scan_root = Path(chosen)
             self.summary_lbl.setText(f"Analizando arbol y formatos en {self.scan_root} (en segundo plano)...")
             self.run_async(
-                lambda progress_cb=None: analyze_storage_hierarchy(self.scan_root, progress_cb=progress_cb),
+                lambda progress_cb=None, controller=None: analyze_storage_hierarchy(
+                    self.scan_root, progress_cb=progress_cb, controller=controller
+                ),
                 self._on_tree_scanned,
                 f"Arbol almacenamiento ({self.scan_root.name})",
                 progress_ui_cb=self._progress_summary,
@@ -890,12 +894,18 @@ class StorageView(QWidget):
                     return
             self.secondary_btn.setEnabled(False)
 
-            def _clean(progress_cb=None) -> dict[str, int]:
+            def _clean(progress_cb=None, controller=None) -> dict[str, int]:
                 self.backup_mgr.create_operation_snapshot(
                     "limpieza_temporales",
                     [{"path": str(t.path), "files": t.file_count, "bytes": t.reclaimable_bytes} for t in targets],
                 )
-                return clean_junk_targets(targets, self.vault, use_quarantine=True, progress_cb=progress_cb)
+                return clean_junk_targets(
+                    targets,
+                    self.vault,
+                    use_quarantine=True,
+                    progress_cb=progress_cb,
+                    controller=controller,
+                )
 
             def _done(res: dict[str, int]) -> None:
                 self.secondary_btn.setEnabled(True)
@@ -937,7 +947,9 @@ class StorageView(QWidget):
                 self.policy.record_audit_event("usuario", "Duplicados BLAKE3", msg, freed / (1024 * 1024))
                 self.notify_cb(msg)
                 self.run_async(
-                    lambda progress_cb=None: find_duplicates([self.scan_root], progress_cb=progress_cb),
+                    lambda progress_cb=None, controller=None: find_duplicates(
+                        [self.scan_root], progress_cb=progress_cb, controller=controller
+                    ),
                     self._on_dups_scanned,
                     "Reescaneo BLAKE3",
                     progress_ui_cb=self._progress_summary,
@@ -971,7 +983,9 @@ class StorageView(QWidget):
                     self.policy.record_audit_event("usuario", "Cuarentena por formato", f"{heavy.name}: {msg}", rec.size_bytes / (1024 * 1024))
                     self.notify_cb(f"Movido a Cuarentena: {heavy.name}")
                     self.run_async(
-                        lambda progress_cb=None: analyze_storage_hierarchy(self.scan_root, progress_cb=progress_cb),
+                        lambda progress_cb=None, controller=None: analyze_storage_hierarchy(
+                            self.scan_root, progress_cb=progress_cb, controller=controller
+                        ),
                         self._on_tree_scanned,
                         "Actualizar arbol",
                         progress_ui_cb=self._progress_summary,
@@ -1226,11 +1240,12 @@ class StorageView(QWidget):
         if scope == "local_hydrated":
             self.summary_lbl.setText("Escaneando OneDrive local (Files On-Demand)...")
             self.run_async(
-                lambda progress_cb=None: (
+                lambda progress_cb=None, controller=None: (
                     scan_local_onedrive_candidates(
                         min_size_mb=float(min_mb),
                         min_inactive_days=int(min_days),
                         progress_cb=progress_cb,
+                        controller=controller,
                     ),
                     None,
                 ),

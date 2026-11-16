@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.safety_guard import is_protected_path
+from ..core.task_control import TaskCanceledError, TaskController
 from ..core.win32_bridge import attrs_is_cloud_only, attrs_is_reparse_or_system
 
 
@@ -99,6 +100,7 @@ def analyze_storage_hierarchy(
     max_depth: int = 4,
     top_formats: int = 40,
     progress_cb: Callable[[int, str], None] | None = None,
+    controller: TaskController | None = None,
 ) -> StorageHierarchyReport:
     """Analyze folder hierarchy and file-type distribution safely."""
     resolved = root.resolve()
@@ -116,6 +118,8 @@ def analyze_storage_hierarchy(
 
     def _walk_dir(current: Path, depth: int) -> FolderNode:
         nonlocal done_top
+        if controller is not None and controller.checkpoint() == "cancel":
+            raise TaskCanceledError("Analisis de arbol cancelado por el usuario")
         node = FolderNode(name=current.name or str(current), path=current)
         if not current.exists() or is_protected_path(current):
             return node

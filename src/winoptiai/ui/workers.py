@@ -1,4 +1,4 @@
-"""Concurrent RAM-aware QThreadPool task runner with per-task progress (%) and ETA."""
+"""Concurrent RAM-aware QThreadPool task runner with Pause, Save Session, Cancel, and ETA."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from typing import Any, Callable
 import uuid
 
 from PySide6.QtCore import QObject, QRunnable, Signal
+
+from ..core.task_control import TaskCanceledError, TaskController, TaskPausedAndSaved
 
 
 def format_eta_seconds(seconds: float) -> str:
@@ -24,13 +26,15 @@ def format_eta_seconds(seconds: float) -> str:
 
 
 class WorkerSignals(QObject):
-    progress = Signal(str, int, str)  # task_id, percent (0..100), stage_text
-    finished = Signal(str, object)    # task_id, result
-    error = Signal(str, str)          # task_id, error_msg
+    progress = Signal(str, int, str)        # task_id, percent (0..100), stage_text
+    finished = Signal(str, object)          # task_id, result
+    paused_saved = Signal(str, str, int, str)  # task_id, session_id, percent, detail
+    canceled = Signal(str, str)             # task_id, detail
+    error = Signal(str, str)                # task_id, error_msg
 
 
 class AsyncTask(QRunnable):
-    """Run any blocking storage, WMI, or Win32 call off the Qt main thread with % + ETA."""
+    """Run any blocking storage, WMI, or Win32 call off the Qt main thread with % + ETA + control."""
 
     def __init__(self, title: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         super().__init__()
@@ -43,10 +47,13 @@ class AsyncTask(QRunnable):
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
+        self.controller = TaskController(self.task_id)
         self.signals = WorkerSignals()
 
     def eta_label(self) -> str:
         """Return realistic remaining time estimate once task progresses past initialization."""
+        if self.controller.is_paused:
+            return "PAUSADO"
         if self.percent <= 5 or self.percent >= 100:
             return ""
         elapsed = time.monotonic() - self.started_monotonic
@@ -70,11 +77,25 @@ class AsyncTask(QRunnable):
             sig = inspect.signature(self.fn)
             if "progress_cb" in sig.parameters and "progress_cb" not in call_kwargs:
                 call_kwargs["progress_cb"] = self._emit_progress
+            if "controller" in sig.parameters and "controller" not in call_kwargs:
+                call_kwargs["controller"] = self.controller
             self._emit_progress(5, "Procesando en segundo plano...")
             result = self.fn(*self.args, **call_kwargs)
             self._emit_progress(100, "Completado")
             try:
                 self.signals.finished.emit(self.task_id, result)
+            except RuntimeError:
+                pass
+        except TaskPausedAndSaved as paused_exc:
+            try:
+                self.signals.paused_saved.emit(
+                    self.task_id, paused_exc.session_id, paused_exc.percent, paused_exc.detail
+                )
+            except RuntimeError:
+                pass
+        except TaskCanceledError as cancel_exc:
+            try:
+                self.signals.canceled.emit(self.task_id, cancel_exc.detail)
             except RuntimeError:
                 pass
         except Exception as exc:  # noqa: BLE001

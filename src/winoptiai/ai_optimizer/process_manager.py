@@ -10,11 +10,12 @@ Provides:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Callable
 import psutil
 
 from ..core.safety_guard import PROTECTED_PROCESS_NAMES
-from ..core.win32_bridge import set_process_ecoqos, trim_process_working_set
+from ..core.win32_bridge import get_foreground_pid, set_process_ecoqos, trim_process_working_set
 
 
 # Active coding & AI agent processes whose foreground responsiveness is preserved
@@ -101,18 +102,28 @@ def get_memory_snapshot() -> dict[str, float]:
     }
 
 
+_PROC_CACHE: dict[int, psutil.Process] = {}
+
+
 def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
-    """Enumerate running processes sorted by Working Set RAM usage."""
+    """Enumerate running processes sorted by Working Set RAM usage with live cached CPU%."""
     entries: list[ProcessEntry] = []
-    for proc in psutil.process_iter(["pid", "name", "memory_info", "cpu_percent"]):
+    seen_pids: set[int] = set()
+    for proc in psutil.process_iter(["pid", "name", "memory_info"]):
         try:
             pid = int(proc.info["pid"])
             name = (proc.info["name"] or "").strip()
             if not name or pid <= 4:
                 continue
+            seen_pids.add(pid)
+            cached = _PROC_CACHE.get(pid)
+            if cached is None:
+                _PROC_CACHE[pid] = proc
+                cpu_pct = round(float(proc.cpu_percent(interval=None) or 0.0), 1)
+            else:
+                cpu_pct = round(float(cached.cpu_percent(interval=None) or 0.0), 1)
             mem = proc.info.get("memory_info")
             ram_mb = round((mem.rss if mem else 0) / (1024 * 1024), 1)
-            cpu_pct = round(float(proc.info.get("cpu_percent") or 0.0), 1)
             lname = name.lower()
 
             if lname in PROTECTED_PROCESS_NAMES:
@@ -142,6 +153,9 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
             continue
 
     entries.sort(key=lambda e: e.ram_mb, reverse=True)
+    for stale_pid in list(_PROC_CACHE.keys()):
+        if stale_pid not in seen_pids:
+            _PROC_CACHE.pop(stale_pid, None)
     return entries[:limit]
 
 
@@ -200,6 +214,8 @@ def run_ai_boost(
     Never kills user apps or touches protected OS/security processes.
     """
     before = get_memory_snapshot()["free_gb"]
+    fg_pid = get_foreground_pid()
+    self_pid = os.getpid()
     ecoqos_count = 0
     trimmed_count = 0
 
@@ -211,7 +227,14 @@ def run_ai_boost(
         try:
             pid = int(proc.info["pid"])
             name = (proc.info["name"] or "").strip().lower()
-            if not name or pid <= 4 or name in PROTECTED_PROCESS_NAMES:
+            if (
+                not name
+                or pid <= 4
+                or pid == self_pid
+                or (fg_pid is not None and pid == fg_pid)
+                or name in PROTECTED_PROCESS_NAMES
+                or name in AI_FOREGROUND_AGENTS
+            ):
                 continue
 
             mem = proc.info.get("memory_info")

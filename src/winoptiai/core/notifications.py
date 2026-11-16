@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 import uuid
 
-from .safety_guard import default_app_data_dir
+from .safety_guard import atomic_write_text, default_app_data_dir
 
 
 @dataclass(slots=True)
@@ -47,12 +47,10 @@ class NotificationCenter:
             return []
 
     def _save(self) -> None:
-        tmp = self.file_path.with_suffix(".tmp")
-        tmp.write_text(
+        atomic_write_text(
+            self.file_path,
             json.dumps([asdict(x) for x in self._items], indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
-        tmp.replace(self.file_path)
 
     def list_items(self) -> list[NotificationItem]:
         return list(self._items)

@@ -18,6 +18,7 @@ from typing import Callable
 from blake3 import blake3
 
 from ..core.safety_guard import QuarantineVault, is_protected_path, is_safe_to_touch_file
+from ..core.task_control import TaskCanceledError, TaskController
 from ..core.win32_bridge import (
     attrs_is_cloud_only,
     attrs_is_reparse_or_system,
@@ -69,6 +70,7 @@ def find_duplicates(
     roots: list[Path],
     min_size_bytes: int = 1024,
     progress_cb: Callable[[int, str], None] | None = None,
+    controller: TaskController | None = None,
 ) -> list[DuplicateGroup]:
     """Scan roots and return groups of true duplicate files (excluding existing hardlinks)."""
     size_buckets: dict[int, list[tuple[Path, int, int]]] = defaultdict(list)
@@ -81,6 +83,8 @@ def find_duplicates(
             continue
         stack: list[Path] = [root]
         while stack:
+            if controller is not None and controller.checkpoint() == "cancel":
+                raise TaskCanceledError("Busqueda de duplicados cancelada por el usuario")
             current = stack.pop()
             if is_protected_path(current):
                 continue
@@ -110,6 +114,8 @@ def find_duplicates(
     partial_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
     total_cand = max(1, len(candidate_sizes))
     for idx, (size, raw_items) in enumerate(candidate_sizes, start=1):
+        if controller is not None and idx % 10 == 0 and controller.checkpoint() == "cancel":
+            raise TaskCanceledError("Busqueda de duplicados cancelada por el usuario")
         # DirEntry.stat() returns st_ino=0 on Windows; fetch true (dev, ino) only for candidate sizes
         items: list[tuple[Path, int, int]] = []
         for fpath, dev, ino in raw_items:
@@ -138,6 +144,8 @@ def find_duplicates(
     full_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
     total_part = max(1, len(partial_cand))
     for idx, ((size, _), items) in enumerate(partial_cand, start=1):
+        if controller is not None and controller.checkpoint() == "cancel":
+            raise TaskCanceledError("Verificacion BLAKE3 cancelada por el usuario")
         for fpath, dev, ino in items:
             fh = _full_blake3(fpath)
             if fh is not None:
