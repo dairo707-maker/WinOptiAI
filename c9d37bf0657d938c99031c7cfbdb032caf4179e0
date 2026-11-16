@@ -1,0 +1,1 @@
+Verificacion v0.3.1: 22/22 pytest PASSED (17.20s). Actualizador desacoplado via ShellExecuteW (apply_update.cmd + taskkill + /SILENT /CURRENTUSER + relanzamiento), barra % streaming y aviso previo de tareas en curso.
