@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import time
 from typing import Callable
 import uuid
 
@@ -200,7 +201,14 @@ class QuarantineVault:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.manifest_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.manifest_path)
+        for attempt in range(5):
+            try:
+                tmp.replace(self.manifest_path)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.06 * (attempt + 1))
 
     def list_items(self) -> list[QuarantineRecord]:
         with self._lock:

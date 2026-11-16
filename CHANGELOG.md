@@ -2,6 +2,16 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.4.0] - 2026-11-16
+
+### Agregado y Corregido
+- **Optimizador Hibrido OneDrive Local + Nube (`onedrive_optimizer.py`, `storage_view.py`, `win32_bridge.py`):**
+  - Nuevo 6to sub-modo **`OneDrive Nube`** dentro de Almacenamiento (ES/EN/PT en `i18n.py`).
+  - **Modo Local (Files On-Demand):** detecta carpetas sincronizadas (`OneDriveCommercial` / `OneDrive`), protege automaticamente repositorios de codigo (`.git` / `.venv` / `node_modules`) y convierte archivos pesados/inactivos en placeholders `"Solo en la nube"` via Win32 `SetFileAttributesW` (`+U -P`) sin borrar nada.
+  - **Modo Nube (Microsoft Graph OAuth 2.0 PKCE + Windows DPAPI):** soporta cuentas Personales (MSA) y Corporativas/Educativas (Entra ID) con Client ID configurable, tokens cifrados en disco con `CryptProtectData` (DPAPI), consulta de cuota `/me/drive`, deteccion de duplicados exactos sin descargas por `quickXorHash`/`sha256Hash`, exclusion de carpetas compartidas de terceros por defecto y envio seguro a la Papelera de OneDrive.
+- **Auto-Actualizador Desacoplado Endurecido (`updater.py`):** reemplazado `timeout /t` (que fallaba silenciosamente sin consola por redireccion de stdin en procesos GUI) por espera real `ping -n` + `bridge.log` con deteccion de codigo de salida.
+- **Guardado Atomico Resiliente (`safety_guard.py`):** reintentos breves ante bloqueos momentaneos de antivirus/indexador al reemplazar `manifest.json`.
+
 ## [0.3.3] - 2026-11-16
 
 ### Corregido y Optimizado

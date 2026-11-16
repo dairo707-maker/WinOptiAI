@@ -212,15 +212,25 @@ def build_detached_update_script(
     install_dir: Path,
     log_path: Path,
 ) -> str:
-    """Build an independent .cmd bridge script that force-closes WinOptiAI, installs, and relaunches."""
+    """Build an independent .cmd bridge script that waits, force-closes, installs, and relaunches."""
     exe_path = install_dir / "WinOptiAI.exe"
+    bridge_log = log_path.with_name("bridge.log")
     return (
         "@echo off\r\n"
-        "timeout /t 2 /nobreak >nul\r\n"
-        "taskkill /F /T /IM WinOptiAI.exe >nul 2>&1\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
+        f'echo [%DATE% %TIME%] Bridge started > "{bridge_log}"\r\n'
+        "ping -n 3 127.0.0.1 >nul\r\n"
+        f'taskkill /F /T /IM WinOptiAI.exe >> "{bridge_log}" 2>&1\r\n'
+        "ping -n 2 127.0.0.1 >nul\r\n"
         f'"{setup_path}" /SP- /SILENT /CURRENTUSER /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS '
         f'/DIR="{install_dir}" /LOG="{log_path}"\r\n'
+        "set RC=%ERRORLEVEL%\r\n"
+        f'echo [%DATE% %TIME%] Setup exit=%RC% >> "{bridge_log}"\r\n'
+        "if NOT %RC%==0 (\r\n"
+        '    powershell -NoProfile -Command "Add-Type -AssemblyName PresentationFramework; '
+        f"[System.Windows.MessageBox]::Show('Error al instalar actualizacion (codigo ' + $env:RC + '). Revise: {bridge_log}', 'WinOptiAI Updater', 'OK', 'Error')\" >nul 2>&1\r\n"
+        "    exit /b %RC%\r\n"
+        ")\r\n"
+        "ping -n 2 127.0.0.1 >nul\r\n"
         f'if exist "{exe_path}" (\r\n'
         f'    start "" "{exe_path}"\r\n'
         ")\r\n"

@@ -6,14 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QAction, QPixmap
+from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
@@ -38,6 +40,19 @@ from ...storage.duplicate_finder import (
     select_duplicates_by_rule,
 )
 from ...storage.junk_scanner import JunkTarget, clean_junk_targets, scan_junk_targets
+from ...storage.onedrive_optimizer import (
+    OneDriveCandidate,
+    OneDriveQuota,
+    OneDriveTokenStore,
+    dehydrate_local_onedrive_files,
+    discover_onedrive_roots,
+    ensure_valid_access_token,
+    fetch_cloud_drive_quota,
+    scan_cloud_onedrive,
+    scan_local_onedrive_candidates,
+    start_oauth_pkce_login,
+    trash_cloud_onedrive_items,
+)
 from ...storage.orphan_hunter import OrphanCandidate, quarantine_orphans, scan_orphan_artifacts
 from ...storage.tree_analyzer import FolderNode, StorageHierarchyReport, analyze_storage_hierarchy
 from ..svg_icons import load_svg_icon
@@ -80,6 +95,9 @@ class StorageView(QWidget):
         self.junk_targets: list[JunkTarget] = []
         self.dup_groups: list[DuplicateGroup] = []
         self.orphans: list[OrphanCandidate] = []
+        self.onedrive_items: list[OneDriveCandidate] = []
+        self.onedrive_quota: OneDriveQuota | None = None
+        self.onedrive_store = OneDriveTokenStore()
         self.tree_report: StorageHierarchyReport | None = None
         self.scan_root: Path = Path.home() / "Downloads"
 
@@ -118,6 +136,7 @@ class StorageView(QWidget):
             ("tree", tr("mode_tree", lang)),
             ("orphans", tr("mode_orphans", lang)),
             ("quarantine", tr("mode_quarantine", lang)),
+            ("onedrive", tr("mode_onedrive", lang)),
         ]
         for key, label in modes:
             btn = QPushButton(label)
@@ -178,6 +197,63 @@ class StorageView(QWidget):
         dal.addStretch()
         self.dup_autoclean_panel.setVisible(False)
         root.addWidget(self.dup_autoclean_panel)
+
+        # Hybrid OneDrive Local + Cloud panel (visible only in onedrive mode)
+        self.onedrive_panel = GlassPanel()
+        odl = QVBoxLayout(self.onedrive_panel)
+        odl.setContentsMargins(12, 8, 12, 8)
+        odl.setSpacing(8)
+
+        od_top = QHBoxLayout()
+        od_top.setSpacing(8)
+        self.od_status_lbl = QLabel("OneDrive local detectado | Nube sin vincular")
+        self.od_status_lbl.setObjectName("MonoValue")
+        od_top.addWidget(self.od_status_lbl, stretch=1)
+
+        self.od_quota_tag = StatusTag("MODO LOCAL LISTO", "neutral")
+        od_top.addWidget(self.od_quota_tag)
+
+        self.od_cfg_btn = QPushButton("Configurar Client ID")
+        self.od_cfg_btn.setObjectName("GhostAction")
+        self.od_cfg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.od_cfg_btn.clicked.connect(self._configure_onedrive_oauth)
+        od_top.addWidget(self.od_cfg_btn)
+
+        self.od_connect_btn = QPushButton("Conectar Cuenta (OAuth)")
+        self.od_connect_btn.setObjectName("GhostAction")
+        self.od_connect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.od_connect_btn.clicked.connect(self._connect_onedrive)
+        od_top.addWidget(self.od_connect_btn)
+
+        self.od_disconnect_btn = QPushButton("Desconectar")
+        self.od_disconnect_btn.setObjectName("GhostAction")
+        self.od_disconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.od_disconnect_btn.clicked.connect(self._disconnect_onedrive)
+        self.od_disconnect_btn.setVisible(False)
+        od_top.addWidget(self.od_disconnect_btn)
+        odl.addLayout(od_top)
+
+        od_opts = QHBoxLayout()
+        od_opts.setSpacing(10)
+        od_opts.addWidget(QLabel("Alcance:"))
+        self.od_scope_combo = QComboBox()
+        self.od_scope_combo.addItem("Local: Archivos en disco (liberar a Solo en la Nube)", "local_hydrated")
+        self.od_scope_combo.addItem("Nube: Duplicados exactos (Microsoft Graph)", "cloud_duplicates")
+        self.od_scope_combo.addItem("Nube: Archivos pesados (Microsoft Graph)", "cloud_heavy")
+        self.od_scope_combo.currentIndexChanged.connect(self._on_onedrive_scope_changed)
+        od_opts.addWidget(self.od_scope_combo, stretch=1)
+
+        od_opts.addWidget(QLabel("Umbral:"))
+        self.od_thresh_combo = QComboBox()
+        self.od_thresh_combo.addItem(">= 25 MB y > 30 dias sin uso", (25.0, 30))
+        self.od_thresh_combo.addItem(">= 10 MB y > 15 dias sin uso", (10.0, 15))
+        self.od_thresh_combo.addItem(">= 100 MB (cualquier fecha)", (100.0, 0))
+        self.od_thresh_combo.addItem(">= 5 MB (todo en disco)", (5.0, 0))
+        od_opts.addWidget(self.od_thresh_combo)
+        odl.addLayout(od_opts)
+
+        self.onedrive_panel.setVisible(False)
+        root.addWidget(self.onedrive_panel)
 
         # Summary strip
         summary = GlassPanel()
@@ -292,6 +368,7 @@ class StorageView(QWidget):
             ("tree", "mode_tree"),
             ("orphans", "mode_orphans"),
             ("quarantine", "mode_quarantine"),
+            ("onedrive", "mode_onedrive"),
         ):
             self.mode_buttons[key].setText(tr(k_tr, lang))
 
@@ -317,6 +394,7 @@ class StorageView(QWidget):
         self.tree_splitter.setVisible(mode == "tree")
         self.preview_panel.setVisible(mode == "duplicates")
         self.dup_autoclean_panel.setVisible(mode == "duplicates")
+        self.onedrive_panel.setVisible(mode == "onedrive")
         self.tertiary_btn.setVisible(mode in ("duplicates", "quarantine"))
         if mode == "quarantine":
             self.tertiary_btn.setText("Depurar / Vaciar Boveda")
@@ -342,6 +420,11 @@ class StorageView(QWidget):
             self.secondary_btn.setText("Enviar a Cuarentena")
             self._configure_columns(["TIPO", "ESTADO", "TAMANO", "RUTA DETECTADA"])
             self._render_orphans()
+        elif mode == "onedrive":
+            self._refresh_onedrive_status()
+            self._on_onedrive_scope_changed()
+            self._configure_columns(["ORIGEN", "MOTIVO", "TAMANO", "RUTA EN ONEDRIVE"])
+            self._render_onedrive()
         else:
             self.primary_btn.setText(" Actualizar Boveda")
             self.secondary_btn.setText("Restaurar Seleccionado")
@@ -404,6 +487,8 @@ class StorageView(QWidget):
                 "Deteccion de huerfanos",
                 progress_ui_cb=self._progress_summary,
             )
+        elif self.mode == "onedrive":
+            self._run_onedrive_scan()
         else:
             self._render_quarantine()
 
@@ -528,6 +613,10 @@ class StorageView(QWidget):
             idxs = self._selected_model_indices()
             if idxs and idxs[0] < len(self.orphans):
                 return self.orphans[idxs[0]].path
+        elif self.mode == "onedrive":
+            idxs = self._selected_model_indices()
+            if idxs and idxs[0] < len(self.onedrive_items):
+                return self.onedrive_items[idxs[0]].local_path
         elif self.mode == "quarantine":
             rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
             if rows:
@@ -552,6 +641,18 @@ class StorageView(QWidget):
         return None
 
     def _reveal_selected_item(self) -> None:
+        if self.mode == "onedrive":
+            idxs = self._selected_model_indices()
+            if idxs and idxs[0] < len(self.onedrive_items):
+                cand = self.onedrive_items[idxs[0]]
+                if cand.local_path and cand.local_path.exists():
+                    reveal_in_explorer(cand.local_path)
+                    self.notify_cb(f"Abriendo en Explorador: {cand.local_path}")
+                    return
+                if cand.web_url:
+                    QDesktopServices.openUrl(QUrl(cand.web_url))
+                    self.notify_cb(f"Abriendo en OneDrive web: {cand.name}")
+                    return
         target = self._get_selected_explorer_path()
         if target is None:
             self.notify_cb("Seleccione un elemento del analisis para abrirlo en el Explorador.")
@@ -878,6 +979,9 @@ class StorageView(QWidget):
                 progress_ui_cb=self._progress_summary,
             )
 
+        elif self.mode == "onedrive":
+            self._optimize_selected_onedrive()
+
         else:
             rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
             if not rows:
@@ -937,3 +1041,326 @@ class StorageView(QWidget):
             )
 
         self.run_async(_link, _done, "Hardlinks NTFS", progress_ui_cb=self._progress_summary)
+
+    # ------------------------------------------------------------------
+    # OneDrive Local (Files On-Demand) + Cloud (Microsoft Graph OAuth)
+    # ------------------------------------------------------------------
+    def _on_onedrive_scope_changed(self) -> None:
+        if self.mode != "onedrive":
+            return
+        scope = str(self.od_scope_combo.currentData() or "local_hydrated")
+        if scope == "local_hydrated":
+            self.primary_btn.setText(" Escanear OneDrive Local")
+            self.secondary_btn.setText("Liberar Disco (Solo en la Nube)")
+        elif scope == "cloud_duplicates":
+            self.primary_btn.setText(" Buscar Duplicados Nube")
+            self.secondary_btn.setText("Enviar a Papelera OneDrive")
+        else:
+            self.primary_btn.setText(" Analizar Pesados Nube")
+            self.secondary_btn.setText("Enviar a Papelera OneDrive")
+
+    def _refresh_onedrive_status(self) -> None:
+        roots = discover_onedrive_roots()
+        local_desc = ", ".join(r.label for r in roots) if roots else "Sin carpeta local"
+        ok, _tok, store_data = ensure_valid_access_token(self.onedrive_store)
+        if ok:
+            email = store_data.get("owner_email") or store_data.get("owner_name") or "Cuenta conectada"
+            self.od_status_lbl.setText(f"Local: {local_desc}  |  Nube: {email}")
+            self.od_connect_btn.setText("Reconectar (OAuth)")
+            self.od_disconnect_btn.setVisible(True)
+            if self.onedrive_quota and self.onedrive_quota.total_bytes > 0:
+                q = self.onedrive_quota
+                self.od_quota_tag.set_tone(
+                    f"NUBE {format_bytes(q.used_bytes)} / {format_bytes(q.total_bytes)}",
+                    "active",
+                )
+            else:
+                self.od_quota_tag.set_tone("NUBE CONECTADA (DPAPI)", "ok")
+        else:
+            has_cid = bool(store_data.get("client_id"))
+            hint = "Client ID configurado" if has_cid else "Falta Client ID para Nube"
+            self.od_status_lbl.setText(f"Local: {local_desc}  |  {hint}")
+            self.od_connect_btn.setText("Conectar Cuenta (OAuth)")
+            self.od_disconnect_btn.setVisible(False)
+            self.od_quota_tag.set_tone("MODO LOCAL LISTO" if roots else "SIN CUENTA", "neutral")
+
+    def _configure_onedrive_oauth(self) -> None:
+        cur = self.onedrive_store.load()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Configurar OAuth OneDrive (Microsoft Graph + DPAPI)")
+        dlg.setFixedSize(540, 320)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(10)
+
+        guide = QLabel(
+            "Para explorar duplicados y cuota directo en Microsoft Graph (sin descargar archivos):\n"
+            "1. En portal.azure.com -> Microsoft Entra ID -> Registros de aplicaciones -> Nuevo registro.\n"
+            "2. Plataforma: Aplicacion movil y de escritorio -> Redirect URI: http://localhost\n"
+            "3. Permisos API (Microsoft Graph Delegado): User.Read y Files.ReadWrite.\n"
+            "Nota: Tus tokens se cifran en disco con Windows DPAPI. El modo Local no requiere Client ID."
+        )
+        guide.setObjectName("PageSubtitle")
+        guide.setWordWrap(True)
+        lay.addWidget(guide)
+
+        lay.addWidget(QLabel("Application (Client) ID:"))
+        cid_edit = QLineEdit(str(cur.get("client_id") or ""))
+        cid_edit.setPlaceholderText("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+        lay.addWidget(cid_edit)
+
+        lay.addWidget(QLabel("Tipo de cuenta / Authority:"))
+        auth_combo = QComboBox()
+        auth_combo.addItem("Cualquiera (Personal MSA + Corporativa / common)", "common")
+        auth_combo.addItem("Solo Empresarial / Fundacion (organizations)", "organizations")
+        auth_combo.addItem("Solo Microsoft Personal (consumers)", "consumers")
+        idx_a = auth_combo.findData(cur.get("authority", "common"))
+        if idx_a >= 0:
+            auth_combo.setCurrentIndex(idx_a)
+        lay.addWidget(auth_combo)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        cancel_b = QPushButton("Cancelar")
+        cancel_b.setObjectName("GhostAction")
+        cancel_b.clicked.connect(dlg.reject)
+        btns.addWidget(cancel_b)
+
+        save_b = QPushButton("Guardar Cifrado (DPAPI)")
+        save_b.setObjectName("PrimaryAction")
+        save_b.clicked.connect(dlg.accept)
+        btns.addWidget(save_b)
+        lay.addLayout(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        cur["client_id"] = cid_edit.text().strip()
+        cur["authority"] = str(auth_combo.currentData() or "common")
+        self.onedrive_store.save(cur)
+        self._refresh_onedrive_status()
+        self.notify_cb("Configuracion OAuth de OneDrive guardada de forma cifrada (DPAPI).")
+
+    def _connect_onedrive(self) -> None:
+        cur = self.onedrive_store.load()
+        cid = str(cur.get("client_id") or "").strip()
+        if not cid:
+            self._configure_onedrive_oauth()
+            cur = self.onedrive_store.load()
+            cid = str(cur.get("client_id") or "").strip()
+            if not cid:
+                return
+        authority = str(cur.get("authority") or "common")
+        self.od_connect_btn.setEnabled(False)
+        self.summary_lbl.setText("Abriendo navegador para autorizar OneDrive...")
+
+        def _login(progress_cb=None) -> tuple[bool, str, OneDriveQuota | None]:
+            ok, msg = start_oauth_pkce_login(
+                cid,
+                authority=authority,
+                store=self.onedrive_store,
+                progress_cb=progress_cb,
+            )
+            quota = None
+            if ok:
+                tok_ok, token, sdata = ensure_valid_access_token(self.onedrive_store)
+                if tok_ok:
+                    try:
+                        quota = fetch_cloud_drive_quota(
+                            token,
+                            owner_hint=(sdata.get("owner_name", ""), sdata.get("owner_email", "")),
+                        )
+                    except OSError:
+                        quota = None
+            return ok, msg, quota
+
+        def _done(res: tuple[bool, str, OneDriveQuota | None]) -> None:
+            self.od_connect_btn.setEnabled(True)
+            ok, msg, quota = res
+            if quota is not None:
+                self.onedrive_quota = quota
+            self._refresh_onedrive_status()
+            self.notify_cb(msg)
+            self.summary_lbl.setText(msg)
+
+        self.run_async(
+            _login,
+            _done,
+            "Autenticacion OneDrive",
+            progress_ui_cb=self._progress_summary,
+            on_error=lambda _e: self.od_connect_btn.setEnabled(True),
+        )
+
+    def _disconnect_onedrive(self) -> None:
+        self.onedrive_store.clear_tokens()
+        self.onedrive_quota = None
+        self._refresh_onedrive_status()
+        self.notify_cb("Sesion de OneDrive Nube desconectada de este equipo.")
+
+    def _run_onedrive_scan(self) -> None:
+        scope = str(self.od_scope_combo.currentData() or "local_hydrated")
+        thresh = self.od_thresh_combo.currentData()
+        min_mb, min_days = thresh if isinstance(thresh, tuple) else (25.0, 30)
+
+        if scope == "local_hydrated":
+            self.summary_lbl.setText("Escaneando OneDrive local (Files On-Demand)...")
+            self.run_async(
+                lambda progress_cb=None: (
+                    scan_local_onedrive_candidates(
+                        min_size_mb=float(min_mb),
+                        min_inactive_days=int(min_days),
+                        progress_cb=progress_cb,
+                    ),
+                    None,
+                ),
+                self._on_onedrive_scanned,
+                "Escaneo OneDrive Local",
+                progress_ui_cb=self._progress_summary,
+            )
+            return
+
+        ok, token, sdata = ensure_valid_access_token(self.onedrive_store)
+        if not ok:
+            self.summary_lbl.setText("Conecta tu cuenta OneDrive (OAuth) primero para escanear directo en la nube.")
+            self._connect_onedrive()
+            return
+
+        kind = "duplicates" if scope == "cloud_duplicates" else "heavy"
+        self.summary_lbl.setText("Consultando indice de archivos en Microsoft Graph...")
+
+        def _cloud_job(progress_cb=None) -> tuple[list[OneDriveCandidate], OneDriveQuota | None]:
+            quota = None
+            try:
+                quota = fetch_cloud_drive_quota(
+                    token,
+                    owner_hint=(sdata.get("owner_name", ""), sdata.get("owner_email", "")),
+                )
+            except OSError:
+                pass
+            items = scan_cloud_onedrive(
+                token,
+                scan_kind=kind,
+                min_heavy_mb=float(min_mb),
+                progress_cb=progress_cb,
+            )
+            return items, quota
+
+        self.run_async(
+            _cloud_job,
+            self._on_onedrive_scanned,
+            "Escaneo OneDrive Nube",
+            progress_ui_cb=self._progress_summary,
+        )
+
+    def _on_onedrive_scanned(self, payload: tuple[list[OneDriveCandidate], OneDriveQuota | None]) -> None:
+        items, quota = payload
+        self.onedrive_items = items
+        if quota is not None:
+            self.onedrive_quota = quota
+        self._refresh_onedrive_status()
+        self._render_onedrive()
+
+    def _render_onedrive(self) -> None:
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(self.onedrive_items))
+        total = 0
+        for row, item in enumerate(self.onedrive_items):
+            total += item.size_bytes
+            origin_txt = "LOCAL SSD" if item.scope == "LOCAL_HYDRATED" else (
+                "NUBE DUP" if item.scope == "CLOUD_DUPLICATE" else "NUBE PESADO"
+            )
+            c0 = QTableWidgetItem(origin_txt)
+            c0.setData(Qt.ItemDataRole.UserRole + 1, row)
+            self.table.setItem(row, 0, c0)
+            self.table.setItem(row, 1, QTableWidgetItem(f"{item.reason} ({item.last_modified})"))
+            self.table.setItem(row, 2, NumericTableItem(format_bytes(item.size_bytes), item.size_bytes))
+            self.table.setItem(row, 3, QTableWidgetItem(item.location))
+        self.table.setSortingEnabled(True)
+        self.summary_lbl.setText(
+            f"OneDrive: {len(self.onedrive_items)} candidatos | Espacio recuperable: {format_bytes(total)}"
+        )
+
+    def _optimize_selected_onedrive(self) -> None:
+        idxs = self._selected_model_indices()
+        if not idxs:
+            self.summary_lbl.setText("Seleccione uno o mas archivos de OneDrive en la tabla.")
+            return
+        selected = [self.onedrive_items[i] for i in idxs if i < len(self.onedrive_items)]
+        if not selected:
+            return
+
+        local_items = [c for c in selected if c.scope == "LOCAL_HYDRATED"]
+        cloud_items = [c for c in selected if c.scope in ("CLOUD_DUPLICATE", "CLOUD_HEAVY")]
+
+        if cloud_items:
+            total_b = sum(c.size_bytes for c in cloud_items)
+            reply = QMessageBox.question(
+                self,
+                "Mover archivos en la nube a Papelera de OneDrive",
+                f"Se enviaran {len(cloud_items)} archivo(s) ({format_bytes(total_b)}) a la Papelera de OneDrive "
+                "(recuperable en la web durante 30-93 dias, sin borrado permanente).\n\nDeseas continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self.secondary_btn.setEnabled(False)
+
+        if local_items and not cloud_items:
+            def _dehydrate(progress_cb=None) -> dict[str, int]:
+                return dehydrate_local_onedrive_files(
+                    local_items,
+                    backup_mgr=self.backup_mgr,
+                    progress_cb=progress_cb,
+                )
+
+            def _done_local(res: dict[str, int]) -> None:
+                self.secondary_btn.setEnabled(True)
+                msg = (
+                    f"OneDrive Local liberado: {res['dehydrated']} archivos pasados a 'Solo en la nube' "
+                    f"({format_bytes(res['freed_bytes'])} en SSD, {res['skipped']} omitidos)."
+                )
+                self.policy.record_audit_event("usuario", "OneDrive Solo Nube", msg, res["freed_bytes"] / (1024 * 1024))
+                self.notify_cb(msg)
+                self._run_onedrive_scan()
+
+            self.run_async(
+                _dehydrate,
+                _done_local,
+                "Deshidratar OneDrive Local",
+                progress_ui_cb=self._progress_summary,
+                on_error=lambda _e: self.secondary_btn.setEnabled(True),
+            )
+            return
+
+        ok, token, _ = ensure_valid_access_token(self.onedrive_store)
+        if not ok:
+            self.secondary_btn.setEnabled(True)
+            self.notify_cb("Sesion OAuth expirada; vuelve a conectar OneDrive.")
+            return
+
+        def _trash_cloud(progress_cb=None) -> dict[str, int]:
+            return trash_cloud_onedrive_items(
+                token,
+                cloud_items,
+                backup_mgr=self.backup_mgr,
+                progress_cb=progress_cb,
+            )
+
+        def _done_cloud(res: dict[str, int]) -> None:
+            self.secondary_btn.setEnabled(True)
+            msg = (
+                f"OneDrive Nube: {res['trashed']} archivos movidos a Papelera "
+                f"({format_bytes(res['freed_bytes'])}, {res['skipped']} omitidos)."
+            )
+            self.policy.record_audit_event("usuario", "OneDrive Nube Papelera", msg, res["freed_bytes"] / (1024 * 1024))
+            self.notify_cb(msg)
+            self._run_onedrive_scan()
+
+        self.run_async(
+            _trash_cloud,
+            _done_cloud,
+            "Papelera OneDrive Nube",
+            progress_ui_cb=self._progress_summary,
+            on_error=lambda _e: self.secondary_btn.setEnabled(True),
+        )

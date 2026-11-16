@@ -411,3 +411,77 @@ def reveal_in_explorer(path: str | Path) -> bool:
     else:
         subprocess.Popen(["explorer.exe", f"/select,{target}"])
     return True
+
+
+class _DATA_BLOB(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+
+def dpapi_protect(plaintext: bytes) -> bytes:
+    """Encrypt secrets bound to the current Windows user profile via DPAPI (crypt32.dll)."""
+    if not IS_WINDOWS:
+        return plaintext
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    buf = ctypes.create_string_buffer(plaintext, len(plaintext))
+    in_blob = _DATA_BLOB(len(plaintext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _DATA_BLOB()
+    ok = crypt32.CryptProtectData(
+        ctypes.byref(in_blob),
+        "WinOptiAI-OneDrive",
+        None,
+        None,
+        None,
+        0x01,  # CRYPTPROTECT_UI_FORBIDDEN
+        ctypes.byref(out_blob),
+    )
+    if not ok:
+        raise OSError("DPAPI CryptProtectData failed")
+    try:
+        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    finally:
+        kernel32.LocalFree(out_blob.pbData)
+
+
+def dpapi_unprotect(ciphertext: bytes) -> bytes:
+    """Decrypt DPAPI-protected payload for the active Windows user profile."""
+    if not IS_WINDOWS:
+        return ciphertext
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    buf = ctypes.create_string_buffer(ciphertext, len(ciphertext))
+    in_blob = _DATA_BLOB(len(ciphertext), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte)))
+    out_blob = _DATA_BLOB()
+    ok = crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        None,
+        None,
+        None,
+        None,
+        0x01,
+        ctypes.byref(out_blob),
+    )
+    if not ok:
+        raise OSError("DPAPI CryptUnprotectData failed")
+    try:
+        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
+    finally:
+        kernel32.LocalFree(out_blob.pbData)
+
+
+def dehydrate_onedrive_file(path: str | Path) -> tuple[bool, str]:
+    """Mark a synced OneDrive file as 'Online-only' (+U -P) via SetFileAttributesW without deleting it."""
+    if not IS_WINDOWS:
+        return False, "Solo disponible en Windows"
+    target = str(Path(path))
+    attrs = get_file_attributes(target)
+    if attrs is None:
+        return False, "Archivo no accesible"
+    if attrs & CLOUD_ONLY_MASK and not (attrs & FILE_ATTRIBUTE_PINNED):
+        return True, "Ya se encuentra solo en la nube"
+
+    new_attrs = (attrs & ~FILE_ATTRIBUTE_PINNED) | FILE_ATTRIBUTE_UNPINNED
+    ok = bool(ctypes.windll.kernel32.SetFileAttributesW(target, wintypes.DWORD(new_attrs)))
+    if not ok:
+        return False, "No se pudo cambiar atributo Files On-Demand"
+    return True, "Marcado como Solo en la nube"
