@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "winoptiai"
+version = "0.1.0"
+description = "Gestor nativo de almacenamiento, optimizacion de procesos para IA agentica, control termico y auditoria UEFI/BIOS para Windows 11."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [
+  { name = "Dairo" }
+]
+keywords = ["windows-11", "storage-optimizer", "ecoqos", "blake3", "restart-manager", "agentic-ai", "thermal-management"]
+dependencies = [
+  "PySide6>=6.7.0",
+  "psutil>=6.0.0",
+  "blake3>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "pyinstaller>=6.10.0",
+  "pillow>=10.4.0",
+]
+
+[project.gui-scripts]
+winoptiai = "winoptiai.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/winoptiai"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
