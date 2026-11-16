@@ -2,6 +2,11 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.4.1] - 2026-11-16
+
+### Corregido
+- **Relanzamiento Limpio PyInstaller en Auto-Actualizador y UAC (`updater.py`, `win32_bridge.py`):** al actualizar o elevar desde `--onefile`, el subproceso heredaba `_MEIPASS2` y `_PYI_APPLICATION_HOME_DIR` del proceso saliente ya borrado, provocando `Failed to load Python DLL ...\_MEI...\python311.dll` al reabrir. Ahora el script puente y `ShellExecuteW` limpian explícitamente todas las variables `_MEIPASS*` / `_PYI_*` para garantizar un arranque limpio en nueva carpeta temporal.
+
 ## [0.4.0] - 2026-11-16
 
 ### Agregado y Corregido

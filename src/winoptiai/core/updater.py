@@ -212,11 +212,18 @@ def build_detached_update_script(
     install_dir: Path,
     log_path: Path,
 ) -> str:
-    """Build an independent .cmd bridge script that waits, force-closes, installs, and relaunches."""
+    """Build an independent .cmd bridge script that clears PyInstaller _MEI env vars, installs, and relaunches."""
     exe_path = install_dir / "WinOptiAI.exe"
     bridge_log = log_path.with_name("bridge.log")
     return (
         "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        'set "_MEIPASS="\r\n'
+        'set "_MEIPASS2="\r\n'
+        'set "_PYI_ARCHIVE_FILE="\r\n'
+        'set "_PYI_APPLICATION_HOME_DIR="\r\n'
+        'set "_PYI_PARENT_PROCESS_LEVEL="\r\n'
+        'set "_PYI_SPLASH_IPC="\r\n'
         f'echo [%DATE% %TIME%] Bridge started > "{bridge_log}"\r\n'
         "ping -n 3 127.0.0.1 >nul\r\n"
         f'taskkill /F /T /IM WinOptiAI.exe >> "{bridge_log}" 2>&1\r\n'
@@ -232,7 +239,7 @@ def build_detached_update_script(
         ")\r\n"
         "ping -n 2 127.0.0.1 >nul\r\n"
         f'if exist "{exe_path}" (\r\n'
-        f'    start "" "{exe_path}"\r\n'
+        f'    start "" /D "{install_dir}" "{exe_path}"\r\n'
         ")\r\n"
     )
 
@@ -241,15 +248,27 @@ def _launch_detached_cmd(cmd_script: Path, work_dir: Path) -> bool:
     """Launch bridge script completely detached from parent PyInstaller Job Object via ShellExecuteW."""
     if os.name != "nt":
         return False
-    rc = ctypes.windll.shell32.ShellExecuteW(
-        None,
-        "open",
-        "cmd.exe",
-        f'/c "{cmd_script}"',
-        str(work_dir),
-        0,
+    pyi_keys = (
+        "_MEIPASS",
+        "_MEIPASS2",
+        "_PYI_ARCHIVE_FILE",
+        "_PYI_APPLICATION_HOME_DIR",
+        "_PYI_PARENT_PROCESS_LEVEL",
+        "_PYI_SPLASH_IPC",
     )
-    return int(rc) > 32
+    saved = {k: os.environ.pop(k) for k in pyi_keys if k in os.environ}
+    try:
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "open",
+            "cmd.exe",
+            f'/c "{cmd_script}"',
+            str(work_dir),
+            0,
+        )
+        return int(rc) > 32
+    finally:
+        os.environ.update(saved)
 
 
 def download_and_launch_update(

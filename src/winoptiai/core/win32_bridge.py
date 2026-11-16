@@ -379,18 +379,30 @@ def is_user_admin() -> bool:
 
 
 def run_elevated_command(executable: str, arguments: str) -> bool:
-    """Trigger native Windows UAC prompt for a specific administrative command."""
+    """Trigger native Windows UAC prompt cleanly without inheriting PyInstaller _MEI vars."""
     if not IS_WINDOWS:
         return False
-    rc = ctypes.windll.shell32.ShellExecuteW(
-        None,
-        "runas",
-        executable,
-        arguments,
-        None,
-        1,
+    pyi_keys = (
+        "_MEIPASS",
+        "_MEIPASS2",
+        "_PYI_ARCHIVE_FILE",
+        "_PYI_APPLICATION_HOME_DIR",
+        "_PYI_PARENT_PROCESS_LEVEL",
+        "_PYI_SPLASH_IPC",
     )
-    return int(rc) > 32
+    saved = {k: os.environ.pop(k) for k in pyi_keys if k in os.environ}
+    try:
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            executable,
+            arguments,
+            None,
+            1,
+        )
+        return int(rc) > 32
+    finally:
+        os.environ.update(saved)
 
 
 def reveal_in_explorer(path: str | Path) -> bool:

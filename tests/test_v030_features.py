@@ -94,6 +94,9 @@ def test_detached_updater_script_generation(tmp_path: Path) -> None:
     inst = Path(r"D:\Custom\WinOptiAI")
     log = tmp_path / "install.log"
     script = build_detached_update_script(setup, inst, log)
+    assert "chcp 65001 >nul" in script
+    assert 'set "_MEIPASS2="' in script
+    assert 'set "_PYI_APPLICATION_HOME_DIR="' in script
     assert "ping -n 3 127.0.0.1" in script
     assert "taskkill /F /T /IM WinOptiAI.exe" in script
     assert "/SILENT /CURRENTUSER /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS" in script
