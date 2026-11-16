@@ -1,0 +1,1 @@
+Verificacion final: uv run pytest -v -> 12/12 PASSED (0 errores). Compilado dist/WinOptiAI-Portable.exe (54.02 MB, arranque verificado) y dist/WinOptiAI-Setup.exe (97.45 MB).
