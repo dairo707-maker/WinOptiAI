@@ -1,0 +1,3 @@
+WinOptiAI v0.4.1 verified: 27/27 pytest passed (15.38s); PortableV041Alive=True; chcp 65001 + _MEIPASS2/_PYI cleanup in ShellExecuteW and bridge cmd.
+801fe3e399f8f052028c00dd94176364503690579b21d4187b1f6864a1e127cf  WinOptiAI-Portable.exe
+4f1031e115703269c9e6aeb7606f82f1ea80d2109bef8b4549c1ba455d09b115  WinOptiAI-Setup.exe
