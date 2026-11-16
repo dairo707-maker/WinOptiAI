@@ -25,7 +25,7 @@ jobs:
         run: uv run pytest -v
 
       - name: Verify Inno Setup 6 availability
-        run: iscc /?
+        run: Get-Command iscc | Select-Object -ExpandProperty Source
 
       - name: Build Portable & Setup executables
         run: uv run python scripts/build_exe.py
