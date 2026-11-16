@@ -2,6 +2,12 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.2.1] - 2026-11-16
+
+### Corregido
+- **Conectividad HTTPS del Auto-Actualizador en binario compilado (`build_exe.py`, `updater.py`):** se priorizan las DLLs `libssl-3-x64.dll` y `libcrypto-3-x64.dll` propias de Python en PyInstaller (evitando colisiones con otras instalaciones en `PATH`) y se agrega respaldo nativo con `curl.exe` SChannel de Windows 11, ademas del mensaje claro *"No hay actualizacion disponible: ya tienes la version mas reciente"*.
+- **Cierre limpio en actualizaciones (`installer.iss`, `about_updater_dialog.py`):** `PrepareToInstall` termina `WinOptiAI.exe` antes de sobrescribir archivos y el dialogo invoca `_quit_app()` al relanzar el instalador.
+
 ## [0.2.0] - 2026-11-16
 
 ### Agregado

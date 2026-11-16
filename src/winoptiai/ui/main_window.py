@@ -274,11 +274,14 @@ class MainWindow(QMainWindow):
 
     def _open_about_dialog(self) -> None:
         rep = self.thermal_view.last_report
-        hw_summary = (
-            f"{rep.manufacturer} {rep.model} | {rep.cpu_name} | {rep.gpu_name} | {rep.total_ram_gb:.1f} GB RAM"
-            if rep
-            else "Escaneo en curso..."
-        )
+        if rep:
+            hw_summary = (
+                f"{rep.manufacturer} {rep.model} | {rep.cpu_name} | "
+                f"{rep.gpu_name} | {rep.total_ram_gb:.1f} GB RAM"
+            )
+        else:
+            ram_gb = psutil.virtual_memory().total / (1024**3)
+            hw_summary = f"Windows x64 | {psutil.cpu_count(logical=True)} hilos | {ram_gb:.1f} GB RAM"
         dlg = AboutUpdaterDialog(
             lang=self.policy.config.language,
             theme_mode=self.policy.config.theme_mode,

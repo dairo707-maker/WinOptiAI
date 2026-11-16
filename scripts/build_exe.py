@@ -78,8 +78,20 @@ def generate_app_icon() -> Path:
 
 
 def run_pyinstaller(args: list[str]) -> None:
-    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", *args]
-    res = subprocess.run(cmd, cwd=str(ROOT))
+    # Ensure Python's own DLLs (libssl-3-x64.dll, libcrypto-3-x64.dll) precede external PATH tools like PHP
+    env = os.environ.copy()
+    py_dlls = str(Path(sys.base_prefix) / "DLLs")
+    py_base = str(Path(sys.base_prefix))
+    env["PATH"] = f"{py_dlls};{py_base};{env.get('PATH', '')}"
+
+    extra_ssl: list[str] = []
+    for dll_name in ("libssl-3-x64.dll", "libcrypto-3-x64.dll"):
+        dll_path = Path(py_dlls) / dll_name
+        if dll_path.exists():
+            extra_ssl.extend(["--add-binary", f"{dll_path};."])
+
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", *extra_ssl, *args]
+    res = subprocess.run(cmd, cwd=str(ROOT), env=env)
     if res.returncode != 0:
         raise RuntimeError(f"PyInstaller failed with exit code {res.returncode}")
 
