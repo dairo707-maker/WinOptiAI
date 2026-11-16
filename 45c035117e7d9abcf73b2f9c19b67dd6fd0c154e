@@ -1,0 +1,1 @@
+Fix real-world: PrepareToInstall en Inno Setup 6 cierra WinOptiAI.exe limpiamente y AboutUpdaterDialog invoca _quit_app() para liberar el tray antes de relanzar Setup.
