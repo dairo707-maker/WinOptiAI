@@ -150,21 +150,30 @@ class NumericTableItem(QTableWidgetItem):
     def __lt__(self, other: QTableWidgetItem) -> bool:
         a = self.data(Qt.ItemDataRole.UserRole)
         b = other.data(Qt.ItemDataRole.UserRole)
-        if a is not None and b is not None:
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return float(a) < float(b)
-        return super().__lt__(other)
+        # v0.5.2: NUNCA llamar super().__lt__(): en PySide6 vuelve a despachar al override de
+        # Python y entra en recursion infinita -> desbordamiento de pila 0xc0000005 en shiboken6.
+        return _text_key(self.text()) < _text_key(other.text())
+
+
+def _text_key(text: str) -> str:
+    return (text or "").casefold()
 
 
 class NumericTreeItem(QTreeWidgetItem):
     """Tree item sorting numerically on columns that store UserRole byte/count values."""
 
     def __lt__(self, other: QTreeWidgetItem) -> bool:
-        col = self.treeWidget().sortColumn() if self.treeWidget() else 0
+        tree = self.treeWidget()
+        col = tree.sortColumn() if tree is not None else 0
         a = self.data(col, Qt.ItemDataRole.UserRole)
         b = other.data(col, Qt.ItemDataRole.UserRole)
-        if a is not None and b is not None:
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return float(a) < float(b)
-        return super().__lt__(other)
+        # v0.5.2: comparacion textual propia (ver NumericTableItem); super().__lt__ recursaba
+        # al ordenar por la columna CARPETA (sin UserRole) y cerraba la app (crash 17:37).
+        return _text_key(self.text(col)) < _text_key(other.text(col))
 
 
 def configure_sortable_table(table: QTableWidget) -> None:

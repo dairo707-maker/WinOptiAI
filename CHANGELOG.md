@@ -2,6 +2,22 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.2] - 2026-11-16
+
+### Corregido (P0 - causa raiz real del cierre `0xc0000005`)
+- **Recursion infinita al ordenar tablas/arbol (`ui/widgets.py`):** `NumericTreeItem.__lt__` y `NumericTableItem.__lt__` llamaban a `super().__lt__()` cuando la columna no tenia valor numerico; en PySide6 eso vuelve a despachar al override de Python hasta desbordar la pila (`access violation` en `shiboken6.abi3.dll`, offset `0x2fa09`). Ocurria cada vez que terminaba un analisis de **Arbol y Formatos** (orden por la columna CARPETA) o al ordenar columnas mixtas. Capturado por `crash.log` (v0.5.1) el 16/11 a las 17:37 y reproducido de forma aislada. Ahora la comparacion de texto es propia y nunca invoca a Qt.
+
+### Corregido (auditoria de codigo)
+- **Seguridad de datos en Almacenamiento (`storage_view.py`):** un escaneo que terminaba mientras el usuario estaba en otro sub-modo dibujaba sus filas en la tabla compartida con indices de otra lista; una accion posterior (p. ej. "Enviar a Cuarentena" en Huerfanos) podia actuar sobre archivos equivocados. Cada `_render_*` solo dibuja si coincide el modo activo; los datos se conservan para cuando el usuario vuelva.
+- Tras limpiar temporales o huerfanos ya no se relanza el analisis del modo *actual* (abria un selector de carpeta inesperado en Duplicados/Arbol); solo se reescanea el modo de origen.
+- La carpeta de Duplicados y la de Arbol se fijan al lanzar cada analisis (`dup_root` / `tree_root`); antes un segundo analisis podia cambiar la carpeta del primero.
+- **Hardlink NTFS (`duplicate_finder.py`):** re-verificacion de tamano + BLAKE3 de cada copia justo antes de enlazar (evita perder datos de un archivo editado despues del escaneo) y confirmacion explicita Si/No con advertencia en la interfaz.
+- **Vista previa de duplicados:** lee solo los primeros 3500 bytes (antes cargaba el archivo completo en memoria en el hilo GUI), limita imagenes a 25 MB y nunca previsualiza archivos OneDrive solo-en-la-nube.
+- **Rendimiento con muchos archivos (`workers.py`):** maximo ~10 senales de progreso por segundo por tarea (antes una por archivo, saturando el event loop).
+
+### Cambiado
+- Maximo **2 procesos de almacenamiento simultaneos** (escaneos/limpiezas); el tercero se rechaza con aviso claro.
+
 ## [0.5.1] - 2026-11-16
 
 ### Corregido (P0)

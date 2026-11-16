@@ -223,6 +223,12 @@ def deduplicate_group_via_hardlink(
     keep_resolved = keep_path.resolve()
     keep_dev = keep_resolved.stat().st_dev
 
+    # v0.5.2: re-verificar contenido justo antes de sustituir. El hardlink borra de forma
+    # definitiva la copia (no pasa por Cuarentena); si el archivo cambio desde el escaneo
+    # se perderian datos unicos.
+    if keep_resolved.stat().st_size != group.size_bytes or _full_blake3(keep_resolved) != group.digest:
+        return {"linked": 0, "skipped": len(group.paths) - 1, "freed_bytes": 0}
+
     for p in group.paths:
         if p.resolve() == keep_resolved:
             continue
@@ -232,6 +238,9 @@ def deduplicate_group_via_hardlink(
             continue
         try:
             if p.stat().st_dev != keep_dev:
+                skipped += 1
+                continue
+            if p.stat().st_size != group.size_bytes or _full_blake3(p) != group.digest:
                 skipped += 1
                 continue
             backup = p.with_name(f".{p.name}.winoptiai_hlbak")

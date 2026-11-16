@@ -44,6 +44,8 @@ class AsyncTask(QRunnable):
         self.started_monotonic = time.monotonic()
         self.percent = 0
         self.stage = "Iniciando..."
+        self._last_emit_pct = -1
+        self._last_emit_ts = 0.0
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
@@ -66,6 +68,16 @@ class AsyncTask(QRunnable):
         clamped = max(0, min(100, int(pct)))
         self.percent = clamped
         self.stage = stage
+        # v0.5.2: limitar senales cruzadas de hilo. Procesos con cientos de miles de archivos
+        # informaban por archivo y encolaban miles de eventos en el hilo GUI (cada uno
+        # redibuja indicadores y el panel de tareas). Maximo ~10 senales/s por tarea; el % real
+        # sigue disponible en self.percent para el temporizador de ETA de 1 s.
+        now = time.monotonic()
+        if self._last_emit_pct < 0 or clamped >= 100 or (now - self._last_emit_ts) >= 0.10:
+            self._last_emit_pct = clamped
+            self._last_emit_ts = now
+        else:
+            return
         try:
             self.signals.progress.emit(self.task_id, clamped, stage)
         except RuntimeError:

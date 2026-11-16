@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 from ...core.i18n import tr
 from ...core.safety_guard import PreOpBackupManager, QuarantineVault
 from ...core.sre_policy import SREPolicyEngine
-from ...core.win32_bridge import is_user_admin, reveal_in_explorer, run_elevated_command
+from ...core.win32_bridge import is_cloud_only_file, is_user_admin, reveal_in_explorer, run_elevated_command
 from ...storage.duplicate_finder import (
     DuplicateGroup,
     deduplicate_group_via_hardlink,
@@ -72,6 +72,10 @@ from ..widgets import (
 # v0.5.1: sub-modos cuya tabla principal admite seleccion multiple con "Seleccionar todo"
 SELECTABLE_TABLE_MODES: frozenset[str] = frozenset({"junk", "duplicates", "orphans", "quarantine", "onedrive"})
 
+MAX_STORAGE_TASKS = 2  # v0.5.2: escaneos/limpiezas de almacenamiento simultaneos
+PREVIEW_TEXT_MAX_BYTES = 3500
+PREVIEW_IMAGE_MAX_BYTES = 25 * 1024 * 1024
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".ico"}
 TEXT_EXTS = {".txt", ".md", ".py", ".json", ".csv", ".log", ".yaml", ".yml", ".xml", ".ini", ".iss"}
 
@@ -93,7 +97,10 @@ class StorageView(QWidget):
         self.vault = vault
         self.backup_mgr = backup_mgr
         self.policy = policy
-        self.run_async = run_async
+        # v0.5.2: todas las tareas de esta vista pasan por un limitador (max. 2 simultaneas)
+        self._run_async_raw = run_async
+        self.run_async = self._run_storage_task
+        self._active_storage_tasks = 0
         self.notify_cb = notify_cb
         self.lang = lang
 
@@ -105,7 +112,10 @@ class StorageView(QWidget):
         self.onedrive_quota: OneDriveQuota | None = None
         self.onedrive_store = OneDriveTokenStore()
         self.tree_report: StorageHierarchyReport | None = None
-        self.scan_root: Path = Path.home() / "Downloads"
+        self.scan_root: Path = Path.home() / "Downloads"  # carpeta sugerida en los dialogos
+        # v0.5.2: carpeta de cada analisis fijada al lanzarlo (no compartida entre modos)
+        self.dup_root: Path = self.scan_root
+        self.tree_root: Path = self.scan_root
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
@@ -556,13 +566,15 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {self.scan_root} (en segundo plano)...")
+            root = self.scan_root
+            self.dup_root = root
+            self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {root} (en segundo plano)...")
             self.run_async(
-                lambda progress_cb=None, controller=None: find_duplicates(
-                    [self.scan_root], progress_cb=progress_cb, controller=controller
+                lambda progress_cb=None, controller=None, root=root: find_duplicates(
+                    [root], progress_cb=progress_cb, controller=controller
                 ),
                 self._on_dups_scanned,
-                f"Duplicados BLAKE3 ({self.scan_root.name})",
+                f"Duplicados BLAKE3 ({root.name})",
                 progress_ui_cb=self._progress_summary,
             )
         elif self.mode == "tree":
@@ -572,13 +584,15 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            self.summary_lbl.setText(f"Analizando arbol y formatos en {self.scan_root} (en segundo plano)...")
+            root = self.scan_root
+            self.tree_root = root
+            self.summary_lbl.setText(f"Analizando arbol y formatos en {root} (en segundo plano)...")
             self.run_async(
-                lambda progress_cb=None, controller=None: analyze_storage_hierarchy(
-                    self.scan_root, progress_cb=progress_cb, controller=controller
+                lambda progress_cb=None, controller=None, root=root: analyze_storage_hierarchy(
+                    root, progress_cb=progress_cb, controller=controller
                 ),
                 self._on_tree_scanned,
-                f"Arbol almacenamiento ({self.scan_root.name})",
+                f"Arbol almacenamiento ({root.name})",
                 progress_ui_cb=self._progress_summary,
             )
         elif self.mode == "orphans":
@@ -594,12 +608,65 @@ class StorageView(QWidget):
         else:
             self._render_quarantine()
 
+    def _run_storage_task(self, fn, callback, task_label: str = "Almacenamiento", *args, **kwargs) -> None:
+        """Launch a storage task only if fewer than MAX_STORAGE_TASKS are running (v0.5.2)."""
+        user_on_error = kwargs.pop("on_error", None)
+        if self._active_storage_tasks >= MAX_STORAGE_TASKS:
+            msg = (
+                f"Ya hay {MAX_STORAGE_TASKS} procesos de almacenamiento en curso. "
+                f"Espere a que termine uno antes de iniciar '{task_label}'."
+            )
+            self.summary_lbl.setText(msg)
+            self.notify_cb(msg)
+            self.primary_btn.setEnabled(True)
+            if user_on_error is not None:
+                user_on_error(msg)
+            return
+
+        self._active_storage_tasks += 1
+        released = {"done": False}
+
+        def _release() -> None:
+            if not released["done"]:
+                released["done"] = True
+                self._active_storage_tasks = max(0, self._active_storage_tasks - 1)
+
+        def _wrapped_cb(result) -> None:
+            _release()
+            callback(result)
+
+        def _wrapped_err(err: str) -> None:
+            _release()
+            if user_on_error is not None:
+                user_on_error(err)
+
+        self._run_async_raw(fn, _wrapped_cb, task_label, *args, on_error=_wrapped_err, **kwargs)
+
+    def _rescan_after_action(self, mode: str) -> None:
+        """Re-scan only the sub-mode that produced the action (v0.5.2).
+
+        Antes se llamaba ``_on_primary_action()``, que actua sobre el modo *actual*: si el
+        usuario ya estaba en Duplicados o Arbol al terminar la limpieza, se abria un
+        selector de carpeta inesperado. Si el modo cambio, se descartan los datos ya
+        procesados para no mostrar filas obsoletas.
+        """
+        if self.mode == mode:
+            self._on_primary_action()
+        elif mode == "junk":
+            self.junk_targets = []
+        elif mode == "orphans":
+            self.orphans = []
+
     def _on_junk_scanned(self, targets: list[JunkTarget]) -> None:
         self.primary_btn.setEnabled(True)
         self.junk_targets = targets
         self._render_junk()
 
     def _render_junk(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "junk":
+            return
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.junk_targets))
         total = 0
@@ -622,6 +689,10 @@ class StorageView(QWidget):
         self._render_duplicates()
 
     def _render_duplicates(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "duplicates":
+            return
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.dup_groups))
         wasted = 0
@@ -638,7 +709,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(joined))
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
-            f"Grupos duplicados BLAKE3 en {self.scan_root.name}: {len(self.dup_groups)} | "
+            f"Grupos duplicados BLAKE3 en {self.dup_root.name}: {len(self.dup_groups)} | "
             f"Espacio recuperable: {format_bytes(wasted)}"
         )
 
@@ -671,7 +742,20 @@ class StorageView(QWidget):
         self.preview_meta.setText("\n".join(lines))
 
         ext = keep_path.suffix.lower()
-        if ext in IMAGE_EXTS and keep_path.exists():
+        # v0.5.2: nunca hidratar archivos OneDrive Cloud-Only ni cargar archivos enormes en el hilo GUI
+        try:
+            cloud_only = is_cloud_only_file(keep_path)
+        except OSError:
+            cloud_only = True
+        if cloud_only or not keep_path.exists():
+            self.preview_image.setVisible(False)
+            self.preview_text.setVisible(True)
+            self.preview_text.setPlainText(
+                "Vista previa no disponible: el archivo esta solo en la nube (OneDrive) o ya no existe.\n"
+                "WinOptiAI no descarga archivos para previsualizarlos."
+            )
+            return
+        if ext in IMAGE_EXTS and grp.size_bytes <= PREVIEW_IMAGE_MAX_BYTES:
             pix = QPixmap(str(keep_path))
             if not pix.isNull():
                 self.preview_image.setPixmap(
@@ -683,9 +767,10 @@ class StorageView(QWidget):
 
         self.preview_image.setVisible(False)
         self.preview_text.setVisible(True)
-        if ext in TEXT_EXTS and keep_path.exists():
+        if ext in TEXT_EXTS:
             try:
-                snippet = keep_path.read_text(encoding="utf-8", errors="replace")[:3500]
+                with keep_path.open("rb") as fh:
+                    snippet = fh.read(PREVIEW_TEXT_MAX_BYTES).decode("utf-8", errors="replace")
                 self.preview_text.setPlainText(snippet)
             except OSError:
                 self.preview_text.setPlainText("No se pudo leer vista previa de texto.")
@@ -777,6 +862,10 @@ class StorageView(QWidget):
         self._render_tree()
 
     def _render_tree(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "tree":
+            return
         self.folder_tree.clear()
         self.format_table.setRowCount(0)
         if not self.tree_report:
@@ -832,6 +921,10 @@ class StorageView(QWidget):
         self._render_orphans()
 
     def _render_orphans(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "orphans":
+            return
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.orphans))
         total = 0
@@ -850,6 +943,10 @@ class StorageView(QWidget):
         )
 
     def _render_quarantine(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "quarantine":
+            return
         items = self.vault.list_items()
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(items))
@@ -954,7 +1051,7 @@ class StorageView(QWidget):
             self.policy.record_audit_event("usuario", "Autolimpieza duplicados", msg, res["freed"] / (1024 * 1024))
             self.notify_cb(msg)
             self.run_async(
-                lambda progress_cb=None: find_duplicates([self.scan_root], progress_cb=progress_cb),
+                lambda progress_cb=None, root=self.dup_root: find_duplicates([root], progress_cb=progress_cb),
                 self._on_dups_scanned,
                 "Reescaneo BLAKE3",
                 progress_ui_cb=self._progress_summary,
@@ -1016,7 +1113,7 @@ class StorageView(QWidget):
                 )
                 self.policy.record_audit_event("usuario", "Limpieza temporales", msg, res["freed"] / (1024 * 1024))
                 self.notify_cb(msg)
-                self._on_primary_action()
+                self._rescan_after_action("junk")
 
             self.run_async(
                 _clean,
@@ -1043,8 +1140,8 @@ class StorageView(QWidget):
                 self.policy.record_audit_event("usuario", "Duplicados BLAKE3", msg, freed / (1024 * 1024))
                 self.notify_cb(msg)
                 self.run_async(
-                    lambda progress_cb=None, controller=None: find_duplicates(
-                        [self.scan_root], progress_cb=progress_cb, controller=controller
+                    lambda progress_cb=None, controller=None, root=self.dup_root: find_duplicates(
+                        [root], progress_cb=progress_cb, controller=controller
                     ),
                     self._on_dups_scanned,
                     "Reescaneo BLAKE3",
@@ -1079,8 +1176,8 @@ class StorageView(QWidget):
                     self.policy.record_audit_event("usuario", "Cuarentena por formato", f"{heavy.name}: {msg}", rec.size_bytes / (1024 * 1024))
                     self.notify_cb(f"Movido a Cuarentena: {heavy.name}")
                     self.run_async(
-                        lambda progress_cb=None, controller=None: analyze_storage_hierarchy(
-                            self.scan_root, progress_cb=progress_cb, controller=controller
+                        lambda progress_cb=None, controller=None, root=self.tree_root: analyze_storage_hierarchy(
+                            root, progress_cb=progress_cb, controller=controller
                         ),
                         self._on_tree_scanned,
                         "Actualizar arbol",
@@ -1102,7 +1199,7 @@ class StorageView(QWidget):
                 msg = f"Huerfanos a Cuarentena: {res['moved']} movidos ({format_bytes(res['freed_bytes'])})."
                 self.policy.record_audit_event("usuario", "Cuarentena huerfanos", msg, res["freed_bytes"] / (1024 * 1024))
                 self.notify_cb(msg)
-                self._on_primary_action()
+                self._rescan_after_action("orphans")
 
             self.run_async(
                 lambda progress_cb=None: quarantine_orphans(items, self.vault, progress_cb=progress_cb),
@@ -1152,6 +1249,24 @@ class StorageView(QWidget):
             self.summary_lbl.setText("Seleccione grupos duplicados para enlazar via Hardlink NTFS.")
             return
 
+        copies = sum(max(0, len(g.paths) - 1) for g in groups)
+        reply = QMessageBox.warning(
+            self,
+            "Confirmar Hardlink NTFS",
+            f"Se sustituiran {copies} copias de {len(groups)} grupos por enlaces NTFS al archivo conservado.\n\n"
+            "Importante:\n"
+            "- Todas las rutas seguiran existiendo, pero compartiran el mismo contenido: "
+            "si editas una copia, cambian todas.\n"
+            "- Esta accion NO pasa por la Cuarentena y no se puede deshacer desde WinOptiAI.\n"
+            "- Cada copia se vuelve a verificar con BLAKE3 justo antes de enlazarla.\n\n"
+            "Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.summary_lbl.setText("Hardlink NTFS cancelado por el usuario.")
+            return
+
         def _link(progress_cb=None) -> int:
             freed = 0
             total = max(1, len(groups))
@@ -1166,7 +1281,7 @@ class StorageView(QWidget):
             self.policy.record_audit_event("usuario", "Hardlink NTFS", msg, freed / (1024 * 1024))
             self.notify_cb(msg)
             self.run_async(
-                lambda progress_cb=None: find_duplicates([self.scan_root], progress_cb=progress_cb),
+                lambda progress_cb=None, root=self.dup_root: find_duplicates([root], progress_cb=progress_cb),
                 self._on_dups_scanned,
                 "Reescaneo BLAKE3",
                 progress_ui_cb=self._progress_summary,
@@ -1393,6 +1508,10 @@ class StorageView(QWidget):
         self._render_onedrive()
 
     def _render_onedrive(self) -> None:
+        # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
+        # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
+        if self.mode != "onedrive":
+            return
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.onedrive_items))
         total = 0
