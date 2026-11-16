@@ -17,9 +17,15 @@ Gestor nativo de almacenamiento, optimizacion de procesos para IA agentica, cont
   - Perfiles termicos oficiales mediante `powercfg` (`PERFBOOSTMODE` y `EPP`) para evitar recalentamiento en laptops Intel Core / Iris Xe.
   - Auditoria de firmware SMBIOS/WMI, salud SMART/TRIM NVMe, controlador grafico Intel Iris Xe y reinicio asistido a UEFI (`shutdown /r /fw`).
 
-## Instalacion y Compilacion desde Codigo Fuente
+## Instalacion (Paso a Paso) y Compilacion
 
-Requiere Python 3.11+ y [uv](https://docs.astral.sh/uv/):
+### Opcion A — Instalador de Windows (Recomendado)
+1. Ubica el instalador generado en [`dist/WinOptiAI-Setup.exe`](dist/WinOptiAI-Setup.exe) (o descargalo desde GitHub Releases).
+2. Ejecuta `WinOptiAI-Setup.exe`: podras elegir el modo (**Solo para mi** o **Todos los usuarios**), **seleccionar el directorio de instalacion** con `Examinar...`, elegir accesos directos y habilitar el arranque minimizado opcional.
+3. Consulta la guia detallada paso a paso (incluyendo verificacion SHA-256 y SmartScreen) en [Guia de Instalacion](docs/INSTALL_GUIDE.md).
+
+### Opcion B — Compilacion desde Codigo Fuente
+Requiere Python 3.11+, [uv](https://docs.astral.sh/uv/) e Inno Setup 6 (`winget install JRSoftware.InnoSetup`):
 
 ```powershell
 uv sync --extra dev
@@ -35,6 +41,7 @@ uv run python scripts/build_exe.py
 
 ## Documentacion
 
+- [Guia de Instalacion Paso a Paso](docs/INSTALL_GUIDE.md)
 - [Arquitectura Tecnica](docs/ARCHITECTURE.md)
 - [Protocolos de Seguridad y Sistema Operativo](docs/SECURITY_AND_OS_PROTOCOLS.md)
 - [Guia Termica y BIOS Lenovo 82FE](docs/BIOS_AND_THERMAL_GUIDE_LENOVO_82FE.md)

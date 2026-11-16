@@ -1,8 +1,9 @@
-"""Build script for WinOptiAI-Portable.exe, WinOptiAI-Setup.exe, and SHA256SUMS.txt."""
+"""Build script for WinOptiAI-Portable.exe, WinOptiAI-Setup.exe (Inno Setup 6), and SHA256SUMS.txt."""
 
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +18,28 @@ DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 
 
+def read_version() -> str:
+    vf = ROOT / "VERSION"
+    return vf.read_text(encoding="utf-8").strip() if vf.exists() else "0.1.0"
+
+
+def find_iscc() -> Path | None:
+    """Locate Inno Setup 6 compiler (ISCC.exe) across standard Windows install paths."""
+    in_path = shutil.which("iscc") or shutil.which("ISCC.exe")
+    if in_path:
+        return Path(in_path)
+
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+    ]
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return None
+
+
 def generate_app_icon() -> Path:
     """Generate multi-resolution geometric 0px Windows .ico matching brand.svg."""
     ico_path = ASSETS / "icons" / "winoptiai.ico"
@@ -28,14 +51,11 @@ def generate_app_icon() -> Path:
         draw = ImageDraw.Draw(img)
         pad = max(2, sz // 8)
         stroke = max(1, sz // 16)
-        # Outer sharp frame
         draw.rectangle([pad, pad, sz - pad - 1, sz - pad - 1], outline=(226, 231, 237, 255), width=stroke)
-        # Architectural grid lines matching brand.svg
         split_y = int(sz * 0.42)
         split_x = int(sz * 0.42)
         draw.line([(pad, split_y), (sz - pad - 1, split_y)], fill=(226, 231, 237, 255), width=stroke)
         draw.line([(split_x, split_y), (split_x, sz - pad - 1)], fill=(226, 231, 237, 255), width=stroke)
-        # Inner module block
         inner_pad = max(1, sz // 10)
         draw.rectangle(
             [
@@ -76,6 +96,7 @@ def write_sha256_manifest(files: list[Path]) -> None:
 def main() -> int:
     DIST.mkdir(parents=True, exist_ok=True)
     BUILD.mkdir(parents=True, exist_ok=True)
+    version = read_version()
     ico_path = generate_app_icon()
 
     qt_excludes = [
@@ -98,12 +119,16 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    work_dir = Path(os.environ.get("TEMP", str(BUILD))) / "winoptiai_pyi_build"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
     run_pyinstaller(
         [
             "--onefile",
             "--windowed",
             "--name", "WinOptiAI-Portable",
             "--icon", str(ico_path),
+            "--workpath", str(work_dir),
             "--paths", str(ROOT / "src"),
             "--add-data", f"{ROOT / 'VERSION'};.",
             "--add-data", f"{ASSETS / 'fonts'};assets/fonts",
@@ -114,28 +139,38 @@ def main() -> int:
     )
 
     portable_exe = DIST / "WinOptiAI-Portable.exe"
-    payload_dir = BUILD / "setup_payload"
-    payload_dir.mkdir(parents=True, exist_ok=True)
-    payload_exe = payload_dir / "WinOptiAI.exe"
-    shutil.copy2(portable_exe, payload_exe)
-
-    # 2. Build WinOptiAI-Setup.exe (self-contained graphical Windows installer)
-    run_pyinstaller(
-        [
-            "--onefile",
-            "--windowed",
-            "--name", "WinOptiAI-Setup",
-            "--icon", str(ico_path),
-            "--add-data", f"{ROOT / 'VERSION'};.",
-            "--add-data", f"{payload_exe};payload",
-            *qt_excludes,
-            str(ROOT / "packaging" / "installer_gui.py"),
-        ]
-    )
-
     setup_exe = DIST / "WinOptiAI-Setup.exe"
+
+    # 2. Build WinOptiAI-Setup.exe (prefer native Inno Setup 6 wizard)
+    iscc = find_iscc()
+    if iscc is not None:
+        iss_file = ROOT / "packaging" / "installer.iss"
+        res = subprocess.run(
+            [str(iscc), f"/DMyAppVersion={version}", str(iss_file)],
+            cwd=str(ROOT),
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"ISCC failed with exit code {res.returncode}")
+    else:
+        payload_dir = BUILD / "setup_payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        payload_exe = payload_dir / "WinOptiAI.exe"
+        shutil.copy2(portable_exe, payload_exe)
+        run_pyinstaller(
+            [
+                "--onefile",
+                "--windowed",
+                "--name", "WinOptiAI-Setup",
+                "--icon", str(ico_path),
+                "--add-data", f"{ROOT / 'VERSION'};.",
+                "--add-data", f"{payload_exe};payload",
+                *qt_excludes,
+                str(ROOT / "packaging" / "installer_gui.py"),
+            ]
+        )
+
     write_sha256_manifest([portable_exe, setup_exe])
-    print(f"Build complete:\n  {portable_exe}\n  {setup_exe}")
+    print(f"Build complete (v{version}):\n  {portable_exe}\n  {setup_exe}")
     return 0
 
 

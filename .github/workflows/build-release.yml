@@ -24,6 +24,9 @@ jobs:
       - name: Run automated test suite
         run: uv run pytest -v
 
+      - name: Verify Inno Setup 6 availability
+        run: iscc /?
+
       - name: Build Portable & Setup executables
         run: uv run python scripts/build_exe.py
 
