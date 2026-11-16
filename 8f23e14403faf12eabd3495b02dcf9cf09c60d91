@@ -1,0 +1,1 @@
+Seguridad verificada: GetFileAttributesW protege OneDrive Cloud-Only; Rstrtmgr.dll bloquea archivos en uso; QuarantineVault usa SHA-256 con rollback; EcoQoS y EmptyWorkingSet con PROCESS_SET_QUOTA; powercfg oficial sin escribir NVRAM.
