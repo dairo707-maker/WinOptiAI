@@ -2,6 +2,13 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.2.2] - 2026-11-16
+
+### Agregado y Corregido
+- **Copias de seguridad previas automaticas (`PreOpBackupManager`):** antes de cada optimizacion termica/energia, AI Boost o limpieza de almacenamiento, WinOptiAI guarda un respaldo `.pow` del plan de energia activo o instantanea `snapshot.json` en `%LOCALAPPDATA%\WinOptiAI\Backups` y registra el respaldo en el historial.
+- **Indicador explicito de reinicio y retiro de pendientes en Auditoria (`bios_auditor.py`, `thermal_bios_view.py`):** columna `REINICIO` en cada recomendacion (*NO (inmediato)* vs *SI (reinicia a UEFI / tras driver)*), confirmacion explicita antes de reiniciar a UEFI, eliminacion automatica de la lista de pendientes al ejecutarse y registro inmediato en el historial de operaciones.
+- **Hora local sincronizada con Windows (`sre_policy.py`, `safety_guard.py`, `overview_view.py`):** todas las marcas de tiempo en registros, cuarentena, copias de seguridad e historial usan la hora local exacta del sistema.
+
 ## [0.2.1] - 2026-11-16
 
 ### Corregido

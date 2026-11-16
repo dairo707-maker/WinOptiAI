@@ -220,7 +220,7 @@ class QuarantineVault:
             category=category,
             size_bytes=int(size_bytes),
             sha256=sha256,
-            quarantined_at=datetime.now(timezone.utc).isoformat(),
+            quarantined_at=datetime.now().astimezone().isoformat(),
             is_dir=is_dir,
         )
         records = self._load_manifest()
@@ -271,3 +271,98 @@ class QuarantineVault:
         updated = [r for r in records if r["item_id"] != item_id]
         self._save_manifest(updated)
         return True, "Elemento depurado de la boveda"
+
+
+class PreOpBackupManager:
+    """Creates automatic pre-operation snapshots & power-scheme backups before changes."""
+
+    def __init__(self, root_dir: Path | None = None) -> None:
+        self.backups_dir = (root_dir or default_app_data_dir()) / "Backups"
+        self.backups_dir.mkdir(parents=True, exist_ok=True)
+
+    def _stamp_dir(self, operation: str) -> Path:
+        stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+        safe_op = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in operation)
+        target = self.backups_dir / f"{stamp}_{safe_op}"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def backup_power_scheme(self, label: str = "power_change") -> Path | None:
+        """Export active Windows power plan (.pow) before applying thermal/power tweaks."""
+        import subprocess
+        from .win32_bridge import IS_WINDOWS
+
+        bdir = self._stamp_dir(label)
+        meta = {"created_at": datetime.now().astimezone().isoformat(), "operation": label}
+        (bdir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        if not IS_WINDOWS:
+            return bdir
+
+        pow_file = bdir / "active_scheme_backup.pow"
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            res = subprocess.run(
+                ["powercfg", "/getactivescheme"],
+                capture_output=True,
+                text=True,
+                encoding="oem",
+                errors="replace",
+                timeout=6,
+                creationflags=flags,
+            )
+            guid = "SCHEME_CURRENT"
+            if res.returncode == 0 and ":" in res.stdout:
+                parts = res.stdout.split(":", 1)[1].strip().split()
+                if parts:
+                    guid = parts[0]
+            subprocess.run(
+                ["powercfg", "/export", str(pow_file), guid],
+                capture_output=True,
+                timeout=8,
+                creationflags=flags,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return bdir
+
+    def create_operation_snapshot(self, operation: str, items: list[dict]) -> Path:
+        """Persist a JSON rollback/audit manifest of affected targets prior to execution."""
+        bdir = self._stamp_dir(operation)
+        payload = {
+            "created_at": datetime.now().astimezone().isoformat(),
+            "operation": operation,
+            "item_count": len(items),
+            "items": items[:500],
+        }
+        (bdir / "snapshot.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return bdir
+
+    def restore_latest_power_backup(self) -> tuple[bool, str]:
+        """Import and activate the most recent exported .pow power scheme backup."""
+        import subprocess
+        from .win32_bridge import IS_WINDOWS
+
+        if not IS_WINDOWS:
+            return False, "Solo disponible en Windows"
+        pow_files = sorted(self.backups_dir.glob("*/*.pow"), reverse=True)
+        if not pow_files:
+            return False, "No hay copias previas de plan de energia (.pow)."
+
+        latest = pow_files[0]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        res = subprocess.run(
+            ["powercfg", "/import", str(latest)],
+            capture_output=True,
+            text=True,
+            encoding="oem",
+            errors="replace",
+            timeout=8,
+            creationflags=flags,
+        )
+        if res.returncode == 0:
+            return True, f"Plan de energia restaurado desde respaldo: {latest.parent.name}"
+        return False, f"No se pudo importar respaldo .pow: {res.stderr.strip()}"

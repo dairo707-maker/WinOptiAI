@@ -9,7 +9,7 @@ Implements best-practice systems engineering rules:
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -44,6 +44,7 @@ class SREPolicyConfig:
     active_thermal_profile: str = "balanced"
     theme_mode: str = "dark"       # "dark" | "light"
     language: str = "es"           # "es" | "en" | "pt"
+    completed_audit_actions: list[str] = field(default_factory=list)
 
 
 class SREPolicyEngine:
@@ -122,9 +123,9 @@ class SREPolicyEngine:
         detail: str,
         freed_mb: float = 0.0,
     ) -> None:
-        """Append an immutable audit record to audit.jsonl."""
+        """Append an immutable audit record to audit.jsonl using local system time."""
         entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now().astimezone().isoformat(),
             "actor": actor,
             "action": action,
             "detail": detail,
@@ -132,6 +133,15 @@ class SREPolicyEngine:
         }
         with self.audit_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def mark_audit_completed(self, action_id: str) -> None:
+        if action_id and action_id not in self.config.completed_audit_actions:
+            self.config.completed_audit_actions.append(action_id)
+            self.save_config()
+
+    def reset_completed_audits(self) -> None:
+        self.config.completed_audit_actions.clear()
+        self.save_config()
 
     def read_recent_audit(self, limit: int = 25) -> list[dict]:
         if not self.audit_path.exists():

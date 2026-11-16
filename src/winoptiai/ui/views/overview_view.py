@@ -184,10 +184,16 @@ class OverviewView(QWidget):
         )
 
     def set_audit_rows(self, rows: list[dict]) -> None:
+        from datetime import datetime
+
         self.audit_table.setSortingEnabled(False)
         self.audit_table.setRowCount(len(rows))
         for r, item in enumerate(rows):
-            ts = str(item.get("timestamp", ""))[11:19]
+            raw_ts = str(item.get("timestamp", ""))
+            try:
+                ts = datetime.fromisoformat(raw_ts).astimezone().strftime("%H:%M:%S")
+            except ValueError:
+                ts = raw_ts[11:19]
             self.audit_table.setItem(r, 0, NumericTableItem(ts, r))
             self.audit_table.setItem(r, 1, QTableWidgetItem(str(item.get("actor", "")).upper()))
             self.audit_table.setItem(r, 2, QTableWidgetItem(str(item.get("action", ""))))

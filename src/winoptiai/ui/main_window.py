@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..ai_optimizer.process_manager import get_memory_snapshot, run_ai_boost
 from ..core.i18n import tr
-from ..core.safety_guard import QuarantineVault
+from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
 from ..core.telemetry import PdhTelemetryReader
 from ..core.win32_bridge import apply_window_theme
@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         self._active_workers: list[AsyncTask] = []
         self._active_task_names: list[str] = []
         self.vault = QuarantineVault()
+        self.backup_mgr = PreOpBackupManager()
         self.policy = SREPolicyEngine()
         self.telemetry_reader = PdhTelemetryReader()
         self._disk_free_gb = 0.0
@@ -156,7 +157,7 @@ class MainWindow(QMainWindow):
         self.overview_view = OverviewView(lang=lang)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
         self.storage_view = StorageView(
-            self.vault, self.policy, self._run_async, self._set_status, lang=lang
+            self.vault, self.backup_mgr, self.policy, self._run_async, self._set_status, lang=lang
         )
         self.processes_view = ProcessesView(
             self.policy,
@@ -167,10 +168,14 @@ class MainWindow(QMainWindow):
         )
         self.thermal_view = ThermalBiosView(
             self.policy,
+            self.backup_mgr,
             self._run_async,
             self._set_status,
             self._on_elevated_temps,
             lang=lang,
+        )
+        self.thermal_view.audit_log_updated.connect(
+            lambda: self.overview_view.set_audit_rows(self.policy.read_recent_audit())
         )
 
         self.stack.addWidget(self.overview_view)
@@ -366,6 +371,8 @@ class MainWindow(QMainWindow):
         self._set_status("Optimizando Working Set y EcoQoS...")
 
         def _work() -> dict[str, float | int]:
+            snap = get_memory_snapshot()
+            self.backup_mgr.create_operation_snapshot("ai_boost", [snap])
             return run_ai_boost(
                 trim_heavy_apps=True,
                 apply_ecoqos=self.policy.config.auto_ecoqos_background_browsers,

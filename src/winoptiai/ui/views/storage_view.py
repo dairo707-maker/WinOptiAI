@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.i18n import tr
-from ...core.safety_guard import QuarantineVault
+from ...core.safety_guard import PreOpBackupManager, QuarantineVault
 from ...core.sre_policy import SREPolicyEngine
 from ...core.win32_bridge import reveal_in_explorer
 from ...storage.duplicate_finder import (
@@ -60,6 +60,7 @@ class StorageView(QWidget):
     def __init__(
         self,
         vault: QuarantineVault,
+        backup_mgr: PreOpBackupManager,
         policy: SREPolicyEngine,
         run_async: Callable,
         notify_cb: Callable[[str], None],
@@ -68,6 +69,7 @@ class StorageView(QWidget):
     ) -> None:
         super().__init__(parent)
         self.vault = vault
+        self.backup_mgr = backup_mgr
         self.policy = policy
         self.run_async = run_async
         self.notify_cb = notify_cb
@@ -639,6 +641,11 @@ class StorageView(QWidget):
         plan = select_duplicates_by_rule(self.dup_groups, rule=rule)
 
         def _run() -> dict[str, int]:
+            snapshot_items = [
+                {"keep": str(keep), "remove": [str(rp) for rp in rem], "size_bytes": grp.size_bytes}
+                for grp, keep, rem in plan
+            ]
+            self.backup_mgr.create_operation_snapshot("autolimpieza_duplicados", snapshot_items)
             freed = 0
             moved = 0
             for grp, keep, _ in plan:
@@ -664,9 +671,13 @@ class StorageView(QWidget):
             self.secondary_btn.setEnabled(False)
 
             def _clean() -> dict[str, int]:
+                self.backup_mgr.create_operation_snapshot(
+                    "limpieza_temporales",
+                    [{"path": str(t.path), "files": t.file_count, "bytes": t.reclaimable_bytes} for t in targets],
+                )
                 freed = removed = skipped = 0
                 for t in targets:
-                    res = clean_junk_target(t, self.vault, use_quarantine=False)
+                    res = clean_junk_target(t, self.vault, use_quarantine=True)
                     freed += res["freed_bytes"]
                     removed += res["removed"]
                     skipped += res["skipped_locked"]

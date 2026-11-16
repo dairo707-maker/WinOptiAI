@@ -7,6 +7,8 @@ from pathlib import Path
 import time
 
 from winoptiai.core.i18n import SUPPORTED_LANGS, tr
+from winoptiai.core.safety_guard import PreOpBackupManager
+from winoptiai.core.sre_policy import SREPolicyEngine
 from winoptiai.core.telemetry import PdhTelemetryReader
 from winoptiai.core.updater import parse_semver
 from winoptiai.storage.duplicate_finder import DuplicateGroup, select_duplicates_by_rule
@@ -80,4 +82,18 @@ def test_universal_hardware_profiler_and_semver() -> None:
     assert rep.cpu_vendor in {"Intel", "AMD", "ARM64", "Generico"}
     assert rep.gpu_vendor in {"Intel", "NVIDIA", "AMD", "Generico"}
     assert rep.recommended_ram_threshold_gb >= 1.2
-    assert all("action_id" in r and "action_label" in r for r in rep.recommendations)
+    assert all("action_id" in r and "action_label" in r and "reinicio" in r for r in rep.recommendations)
+
+
+def test_preop_backups_and_completed_audits(tmp_path: Path) -> None:
+    mgr = PreOpBackupManager(root_dir=tmp_path)
+    snap_dir = mgr.create_operation_snapshot("test_op", [{"file": "demo.tmp", "size": 123}])
+    assert (snap_dir / "snapshot.json").exists()
+    pdir = mgr.backup_power_scheme("test_power")
+    assert pdir is not None and (pdir / "active_scheme_backup.pow").exists()
+
+    eng = SREPolicyEngine(app_dir=tmp_path)
+    eng.mark_audit_completed("apply_cool_profile")
+    assert "apply_cool_profile" in eng.config.completed_audit_actions
+    eng.reset_completed_audits()
+    assert eng.config.completed_audit_actions == []

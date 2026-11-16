@@ -1,14 +1,15 @@
-"""Thermal control, real-time CPU/Temp monitor, and actionable Universal Hardware Audit view."""
+"""Thermal control, real-time CPU/Temp monitor, pre-op backups, and actionable Hardware Audit."""
 
 from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -17,8 +18,10 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.i18n import tr
+from ...core.safety_guard import PreOpBackupManager
 from ...core.sre_policy import SREPolicyEngine
 from ...core.telemetry import LiveSystemTelemetry, probe_elevated_temperatures
+from ...core.win32_bridge import reveal_in_explorer
 from ...thermal_bios.bios_auditor import (
     HardwareAuditReport,
     execute_audit_action,
@@ -34,11 +37,14 @@ from ..widgets import GlassPanel, StatusTag, configure_sortable_table
 
 
 class ThermalBiosView(QWidget):
-    """Real-time CPU/Thermal telemetry + universal hardware audit with 1-click remediations."""
+    """Real-time CPU/Thermal telemetry + universal hardware audit with backups and reboot flags."""
+
+    audit_log_updated = Signal()
 
     def __init__(
         self,
         policy: SREPolicyEngine,
+        backup_mgr: PreOpBackupManager,
         run_async: Callable,
         notify_cb: Callable[[str], None],
         on_elevated_temps: Callable[[float | None, float | None], None],
@@ -47,6 +53,7 @@ class ThermalBiosView(QWidget):
     ) -> None:
         super().__init__(parent)
         self.policy = policy
+        self.backup_mgr = backup_mgr
         self.run_async = run_async
         self.notify_cb = notify_cb
         self.on_elevated_temps = on_elevated_temps
@@ -99,7 +106,7 @@ class ThermalBiosView(QWidget):
         rt_layout.addWidget(self.uac_temp_btn)
         root.addWidget(rt_panel)
 
-        # Thermal Profiles Strip
+        # Thermal Profiles Strip (all 3 apply immediately without reboot)
         profiles_row = QHBoxLayout()
         profiles_row.setSpacing(10)
         for key, prof in THERMAL_PROFILES.items():
@@ -113,7 +120,7 @@ class ThermalBiosView(QWidget):
             name_lbl.setStyleSheet("font-size: 13px; font-weight: 600;")
             top.addWidget(name_lbl)
             top.addStretch()
-            top.addWidget(StatusTag(f"EPP {prof.epp_ac}%", "neutral"))
+            top.addWidget(StatusTag(f"EPP {prof.epp_ac}% | SIN REINICIO", "neutral"))
             cl.addLayout(top)
 
             desc = QLabel(prof.subtitle)
@@ -130,36 +137,49 @@ class ThermalBiosView(QWidget):
             profiles_row.addWidget(card)
         root.addLayout(profiles_row)
 
-        # Hardware inventory summary + power restore
+        # Hardware inventory summary + backup/restore/pending controls
         hw_panel = GlassPanel()
         hw_layout = QHBoxLayout(hw_panel)
         hw_layout.setContentsMargins(14, 10, 14, 10)
-        hw_layout.setSpacing(12)
+        hw_layout.setSpacing(8)
 
         self.hw_lbl = QLabel("Escaneando perfil completo de hardware...")
         self.hw_lbl.setObjectName("MonoValue")
         self.hw_lbl.setWordWrap(True)
         hw_layout.addWidget(self.hw_lbl, stretch=1)
 
-        self.reset_pwr_btn = QPushButton("Restaurar Energia Fabrica")
+        self.backups_btn = QPushButton("Copias Seguridad")
+        self.backups_btn.setObjectName("GhostAction")
+        self.backups_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.backups_btn.clicked.connect(lambda: reveal_in_explorer(self.backup_mgr.backups_dir))
+        hw_layout.addWidget(self.backups_btn)
+
+        self.reset_pending_btn = QPushButton("Restablecer Pendientes")
+        self.reset_pending_btn.setObjectName("GhostAction")
+        self.reset_pending_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_pending_btn.clicked.connect(self._on_reset_pending)
+        hw_layout.addWidget(self.reset_pending_btn)
+
+        self.reset_pwr_btn = QPushButton("Restaurar Respaldo Energia")
         self.reset_pwr_btn.setObjectName("GhostAction")
         self.reset_pwr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pwr_btn.clicked.connect(self._on_restore_power)
         hw_layout.addWidget(self.reset_pwr_btn)
         root.addWidget(hw_panel)
 
-        # Sortable Audit Recommendations Table WITH automated 1-click "ACCION" column
-        self.rec_table = QTableWidget(0, 4)
+        # Sortable Audit Recommendations Table with REBOOT indicator & auto-removal on execution
+        self.rec_table = QTableWidget(0, 5)
         self.rec_table.setHorizontalHeaderLabels(
-            ["SUBSISTEMA", "ESTADO", "DIAGNOSTICO Y RECOMENDACION", "ACCION AUTOMATICA"]
+            ["SUBSISTEMA", "ESTADO", "REINICIO", "DIAGNOSTICO Y RECOMENDACION", "ACCION AUTOMATICA"]
         )
         configure_sortable_table(self.rec_table)
         self.rec_table.setWordWrap(True)
         hdr = self.rec_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self.rec_table, stretch=1)
 
         self._highlight_profile_button(self.policy.config.active_thermal_profile)
@@ -205,40 +225,86 @@ class ThermalBiosView(QWidget):
             btn.style().polish(btn)
 
     def _select_profile(self, key: str) -> None:
+        bdir = self.backup_mgr.backup_power_scheme(f"perfil_{key}")
+        self.policy.record_audit_event("backup", "Respaldo energia", f"Copia previa en {bdir.name if bdir else 'local'}")
         ok, msg = apply_thermal_profile(key)
         if ok:
             self.policy.config.active_thermal_profile = key
             self.policy.save_config()
             self._highlight_profile_button(key)
-            self.policy.record_audit_event("usuario", "Perfil termico", msg)
-        self.notify_cb(msg)
+            self.policy.record_audit_event("usuario", "Perfil termico (Sin reinicio)", msg)
+        self.audit_log_updated.emit()
+        self.notify_cb(f"{msg} (Aplicado en caliente sin reiniciar)")
 
     def _on_restore_power(self) -> None:
-        ok, msg = restore_default_power_scheme()
+        ok, msg = self.backup_mgr.restore_latest_power_backup()
+        if not ok:
+            ok, msg = restore_default_power_scheme()
         if ok:
             self.policy.config.active_thermal_profile = "balanced"
             self.policy.save_config()
             self._highlight_profile_button("balanced")
-            self.policy.record_audit_event("usuario", "Energia fabrica", msg)
+            self.policy.record_audit_event("usuario", "Restauracion energia", msg)
+            self.audit_log_updated.emit()
         self.notify_cb(msg)
+
+    def _on_reset_pending(self) -> None:
+        self.policy.reset_completed_audits()
+        if self.last_report:
+            self._render_recommendations(self.last_report)
+        self.notify_cb("Pendientes de auditoria restablecidos.")
 
     def refresh_audit(self) -> None:
         self.audit_btn.setEnabled(False)
         self.run_async(run_hardware_bios_audit, self._on_audit_ready, "Auditoria universal hardware")
 
-    def _run_recommendation(self, action_id: str, area: str) -> None:
+    def _run_recommendation(self, item: dict[str, str]) -> None:
+        action_id = item.get("action_id", "")
+        area = item.get("area", "Auditoria")
+        reinicio = item.get("reinicio", "NO")
+
+        if action_id == "open_uefi_bios":
+            reply = QMessageBox.question(
+                self,
+                "Confirmar Reinicio a UEFI BIOS",
+                "Esta accion reiniciara el equipo en 10 segundos para ingresar al menu UEFI BIOS.\n"
+                "Desea continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.notify_cb("Reinicio a UEFI cancelado por el usuario.")
+                return
+
+        # Mandatory pre-operation backup before applying system changes
+        bdir = self.backup_mgr.backup_power_scheme(f"audit_{action_id}")
+        self.policy.record_audit_event(
+            "backup",
+            f"Respaldo previo ({area})",
+            f"Copia de seguridad guardada en {bdir.name if bdir else 'Backups'}",
+        )
+
         ok, msg = execute_audit_action(action_id)
         if ok:
             if action_id == "apply_cool_profile":
                 self.policy.config.active_thermal_profile = "cool"
-                self.policy.save_config()
                 self._highlight_profile_button("cool")
             elif action_id == "apply_balanced_profile":
                 self.policy.config.active_thermal_profile = "balanced"
-                self.policy.save_config()
                 self._highlight_profile_button("balanced")
-            self.policy.record_audit_event("auditoria", f"Accion {area}", msg)
-        self.notify_cb(msg)
+
+            # Remove completed recommendation from pending list & log in operations history
+            self.policy.mark_audit_completed(action_id)
+            self.policy.record_audit_event(
+                "auditoria",
+                f"{area} [Reinicio: {reinicio}]",
+                msg,
+            )
+            self.audit_log_updated.emit()
+            if self.last_report:
+                self._render_recommendations(self.last_report)
+
+        self.notify_cb(f"{msg} | Reinicio: {reinicio}")
 
     def _on_audit_ready(self, report: HardwareAuditReport) -> None:
         self.audit_btn.setEnabled(True)
@@ -249,20 +315,25 @@ class ThermalBiosView(QWidget):
             f"CPU: {report.cpu_name} ({report.cpu_cores})  |  RAM: {report.total_ram_gb:.1f} GB (Umbral SRE: {report.recommended_ram_threshold_gb:.1f} GB)\n"
             f"GPU: {report.gpu_name} ({report.gpu_driver})  |  DISCO: {report.nvme_model} [{report.media_type} - {report.nvme_health}]"
         )
+        self._render_recommendations(report)
+
+    def _render_recommendations(self, report: HardwareAuditReport) -> None:
+        completed = set(self.policy.config.completed_audit_actions)
+        pending = [r for r in report.recommendations if r.get("action_id", "") not in completed]
 
         self.rec_table.setSortingEnabled(False)
-        self.rec_table.setRowCount(len(report.recommendations))
-        for r, item in enumerate(report.recommendations):
+        self.rec_table.setRowCount(len(pending))
+        for r, item in enumerate(pending):
             self.rec_table.setItem(r, 0, QTableWidgetItem(item["area"]))
             self.rec_table.setItem(r, 1, QTableWidgetItem(item["estado"]))
-            self.rec_table.setItem(r, 2, QTableWidgetItem(item["detalle"]))
+            self.rec_table.setItem(r, 2, QTableWidgetItem(item.get("reinicio", "NO (inmediato)")))
+            self.rec_table.setItem(r, 3, QTableWidgetItem(item["detalle"]))
 
-            action_id = item.get("action_id", "")
             action_label = item.get("action_label", "Ejecutar")
             btn = QPushButton(action_label)
             btn.setObjectName("GhostAction")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _=False, aid=action_id, ar=item["area"]: self._run_recommendation(aid, ar))
-            self.rec_table.setCellWidget(r, 3, btn)
+            btn.clicked.connect(lambda _=False, rec=dict(item): self._run_recommendation(rec))
+            self.rec_table.setCellWidget(r, 4, btn)
         self.rec_table.setSortingEnabled(True)
         self.rec_table.resizeRowsToContents()

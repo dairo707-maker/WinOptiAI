@@ -178,6 +178,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "GPU / IA Local (Intel)",
                 "estado": "ACTUALIZAR",
+                "reinicio": "SI (tras driver)",
                 "detalle": (
                     f"Driver {gpu_name} ({gpu_driver}) antiguo. Se recomienda rama 32.0.101.x "
                     "para acelerar Vulkan, DirectML y OpenVINO en IA local."
@@ -191,6 +192,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "GPU / IA Local (NVIDIA)",
                 "estado": "COMPATIBLE",
+                "reinicio": "Opcional (driver)",
                 "detalle": f"{gpu_name} ({gpu_driver}) apta para aceleracion CUDA / TensorRT / Ollama.",
                 "action_id": "update_nvidia_gpu",
                 "action_label": "Actualizar Drivers",
@@ -201,6 +203,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "GPU / IA Local (AMD)",
                 "estado": "COMPATIBLE",
+                "reinicio": "Opcional (driver)",
                 "detalle": f"{gpu_name} ({gpu_driver}) apta para DirectML / Vulkan.",
                 "action_id": "open_windows_update",
                 "action_label": "Buscar Drivers",
@@ -211,6 +214,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "GPU / IA Local",
                 "estado": "OPTIMO",
+                "reinicio": "NO (inmediato)",
                 "detalle": f"Controlador grafico {gpu_name} ({gpu_driver}) actualizado.",
                 "action_id": "open_windows_update",
                 "action_label": "Windows Update",
@@ -223,6 +227,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": f"Termica {cpu_vendor} (Portatil)",
                 "estado": "RECOMENDADO",
+                "reinicio": "NO (inmediato)",
                 "detalle": (
                     "Activar perfil Frio / Silencioso (EPP 65%) para reducir 12-18 C en sesiones "
                     "de IA agentica online y evitar estrangulamiento termico."
@@ -236,6 +241,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": f"Energia {cpu_vendor} (Escritorio)",
                 "estado": "RECOMENDADO",
+                "reinicio": "NO (inmediato)",
                 "detalle": "Calibrar perfil Equilibrado Inteligente para cargas mixtas de agentes IA.",
                 "action_id": "apply_balanced_profile",
                 "action_label": "Aplicar Equilibrado",
@@ -247,6 +253,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
         {
             "area": "BIOS / UEFI Firmware",
             "estado": "REVISAR",
+            "reinicio": "SI (reinicia a UEFI)",
             "detalle": (
                 f"{manufacturer} {model} ({bios_ver}) | Virt: {raw.get('Virt', 'N/D')}. "
                 "Verificar VT-x/AMD-V y modo de enfriamiento inteligente en UEFI."
@@ -262,6 +269,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": f"Almacenamiento ({media_type})",
                 "estado": "MANTENIMIENTO",
+                "reinicio": "NO (inmediato)",
                 "detalle": (
                     f"{raw.get('NvmeModel', 'SSD')} [{raw.get('NvmeHealth', 'Healthy')}]. "
                     "Ejecutar ReTrim seguro en unidad C: para sostener velocidad de escritura."
@@ -275,6 +283,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "Almacenamiento (HDD)",
                 "estado": "MANTENIMIENTO",
+                "reinicio": "NO (inmediato)",
                 "detalle": "Disco mecanico detectado: optimizar fragmentacion de archivos.",
                 "action_id": "optimize_defrag",
                 "action_label": "Optimizar Disco",
@@ -287,6 +296,7 @@ try { if (Confirm-SecureBootUEFI) { $sb = 'Activo' } else { $sb = 'Inactivo' } }
             {
                 "area": "Bateria y Conservacion",
                 "estado": "RECOMENDADO",
+                "reinicio": "NO (inmediato)",
                 "detalle": (
                     "Si trabaja conectado a corriente, active el modo de conservacion (limite 60-80%) "
                     f"en la utilidad de {manufacturer} o configuracion de energia."
