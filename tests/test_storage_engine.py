@@ -102,3 +102,48 @@ def test_junk_scanner_and_orphan_hunter(tmp_path: Path) -> None:
     orphans = scan_orphan_artifacts(extra_roots=[temp_dir])
     assert any(o.path == stale_orphan for o in orphans)
     assert not any(o.path == fresh_tmp for o in orphans)
+
+
+def test_batch_junk_cleanup_progress_and_rollback(tmp_path: Path) -> None:
+    from winoptiai.storage.junk_scanner import clean_junk_targets
+
+    vault = QuarantineVault(root_dir=tmp_path / "vault_batch")
+    temp_dir = tmp_path / "mass_temp"
+    sub = temp_dir / "nested"
+    sub.mkdir(parents=True)
+
+    old_mtime = time.time() - (3 * 86400)
+    for idx in range(320):
+        f = sub / f"tmp_{idx:03d}.tmp"
+        f.write_bytes(b"X" * 256)
+        os.utime(f, (old_mtime, old_mtime))
+
+    target = JunkTarget("mass", "Masivo", "Sistema", temp_dir, False, min_age_days=1)
+    scanned = scan_junk_targets([target])
+    assert scanned[0].file_count == 320
+
+    pcts: list[int] = []
+    t0 = time.perf_counter()
+    res = clean_junk_targets(
+        scanned,
+        vault,
+        use_quarantine=True,
+        progress_cb=lambda p, _m: pcts.append(p),
+    )
+    elapsed = time.perf_counter() - t0
+    assert res["removed"] == 320
+    assert elapsed < 3.0
+    assert pcts and pcts[-1] == 100
+    assert len(set(pcts)) >= 3
+
+    # Only ONE compact batch record should be stored in Quarantine Vault manifest
+    items = vault.list_items()
+    assert len(items) == 1
+    assert items[0].sha256.startswith("BATCH:320")
+    assert not (sub / "tmp_000.tmp").exists()
+
+    # Rollback restores all 320 files cleanly, then purge removes items in batch
+    ok, _ = vault.restore_item(items[0].item_id)
+    assert ok
+    assert (sub / "tmp_000.tmp").exists()
+    assert vault.list_items() == []

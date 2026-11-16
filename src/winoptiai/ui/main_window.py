@@ -266,6 +266,11 @@ class MainWindow(QMainWindow):
         self.telemetry_timer.timeout.connect(self._sample_telemetry)
         self.telemetry_timer.start(2000)
 
+        # Lightweight 1s ETA refresh timer active only while background tasks run
+        self.task_eta_timer = QTimer(self)
+        self.task_eta_timer.timeout.connect(self._sync_active_task_indicators)
+        self.task_eta_timer.setInterval(1000)
+
         # Low-noise periodic optimization advisor (every 15 minutes)
         self.advisor_timer = QTimer(self)
         self.advisor_timer.timeout.connect(self._run_periodic_advisor)
@@ -437,14 +442,23 @@ class MainWindow(QMainWindow):
         self._sample_telemetry()
 
     def _sync_active_task_indicators(self) -> None:
-        summaries = [f"{w.title} ({w.percent}%)" for w in self._active_workers]
+        summaries: list[str] = []
+        for w in self._active_workers:
+            eta = w.eta_label()
+            summaries.append(f"{w.title} ({w.percent}%{' · ' + eta if eta else ''})")
         self.overview_view.set_active_tasks(summaries)
         self.processes_view.set_active_tasks(summaries)
         if self._active_workers:
+            if not self.task_eta_timer.isActive():
+                self.task_eta_timer.start()
             lead = self._active_workers[0]
+            eta = lead.eta_label()
+            eta_part = f" · {eta}" if eta else ""
             extra = f" (+{len(self._active_workers) - 1})" if len(self._active_workers) > 1 else ""
-            self.task_pill_btn.setText(f"{lead.title}: {lead.percent}%{extra}")
+            self.task_pill_btn.setText(f"{lead.title}: {lead.percent}%{eta_part}{extra}")
         else:
+            if self.task_eta_timer.isActive():
+                self.task_eta_timer.stop()
             self.task_pill_btn.setText("Sin procesos en segundo plano")
         if self._notif_dialog is not None and self._notif_dialog.isVisible():
             self._notif_dialog._render_tasks()
@@ -456,6 +470,7 @@ class MainWindow(QMainWindow):
         task_label: str = "Tarea en segundo plano",
         notify_on_complete: bool = True,
         progress_ui_cb=None,
+        on_error=None,
     ) -> None:
         # RAM-aware concurrency guardrail
         free_gb = get_memory_snapshot()["free_gb"]
@@ -463,6 +478,8 @@ class MainWindow(QMainWindow):
             msg = f"Cola llena ({MAX_CONCURRENT_TASKS} procesos en curso). Espere un momento."
             self._set_status(msg)
             self._notify_user("AVISO", "Limite de concurrencia", msg)
+            if on_error is not None:
+                on_error(msg)
             return
         if len(self._active_workers) >= 1 and free_gb < MIN_RAM_FOR_NEW_TASK_GB:
             msg = (
@@ -471,6 +488,8 @@ class MainWindow(QMainWindow):
             )
             self._set_status(msg)
             self._notify_user("AVISO", "Proteccion de RAM activa", msg, action_tab=0)
+            if on_error is not None:
+                on_error(msg)
             return
 
         worker = AsyncTask(task_label, fn)
@@ -504,6 +523,8 @@ class MainWindow(QMainWindow):
             _cleanup_common(tid)
             self._set_status(f"Aviso: {err}")
             self._notify_user("ERROR", task_label, err, tray_toast=True)
+            if on_error is not None:
+                on_error(err)
 
         worker.signals.progress.connect(_on_progress)
         worker.signals.finished.connect(_cleanup_and_emit)
@@ -577,6 +598,7 @@ class MainWindow(QMainWindow):
 
     def _execute_ai_boost(self, actor: str) -> None:
         self.overview_view.boost_btn.setEnabled(False)
+        self.processes_view.boost_btn.setEnabled(False)
         self._set_status("Optimizando Working Set y EcoQoS...")
 
         def _work(progress_cb=None) -> dict[str, float | int]:
@@ -588,8 +610,12 @@ class MainWindow(QMainWindow):
                 progress_cb=progress_cb,
             )
 
-        def _done(res: dict[str, float | int]) -> None:
+        def _re_enable(_err: str = "") -> None:
             self.overview_view.boost_btn.setEnabled(True)
+            self.processes_view.boost_btn.setEnabled(True)
+
+        def _done(res: dict[str, float | int]) -> None:
+            _re_enable()
             msg = (
                 f"RAM libre: {res['free_before_gb']:.2f} -> {res['free_after_gb']:.2f} GB "
                 f"(+{res['freed_mb']:.0f} MB, {res['trimmed_processes']} procesos compactados, "
@@ -601,7 +627,7 @@ class MainWindow(QMainWindow):
             self._sample_telemetry()
             self._notify_user("COMPLETADO", "AI Boost", msg, action_tab=0, tray_toast=(actor == "sre_auto"))
 
-        self._run_async(_work, _done, "AI Boost (RAM + EcoQoS)", notify_on_complete=False)
+        self._run_async(_work, _done, "AI Boost (RAM + EcoQoS)", notify_on_complete=False, on_error=_re_enable)
 
     def _tray_thermal(self, key: str) -> None:
         self.backup_mgr.backup_power_scheme(f"tray_{key}")

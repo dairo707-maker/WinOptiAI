@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from typing import Callable
 import uuid
 
 from .win32_bridge import (
@@ -115,7 +116,11 @@ def is_protected_path(path: str | Path, allow_system_temp: bool = False) -> bool
     return False
 
 
-def is_safe_to_touch_file(path: str | Path, allow_system_temp: bool = False) -> tuple[bool, str]:
+def is_safe_to_touch_file(
+    path: str | Path,
+    allow_system_temp: bool = False,
+    skip_lock_check: bool = False,
+) -> tuple[bool, str]:
     """Validate OS protocols before reading content or moving a file.
 
     Returns (is_safe, reason_code).
@@ -130,10 +135,11 @@ def is_safe_to_touch_file(path: str | Path, allow_system_temp: bool = False) -> 
     if is_reparse_or_system_file(p):
         return False, "SISTEMA_O_ENLACE"
 
-    lockers = get_locking_processes([p])
-    if lockers:
-        names = ", ".join(str(x["app_name"] or x["pid"]) for x in lockers[:2])
-        return False, f"EN_USO ({names})"
+    if not skip_lock_check:
+        lockers = get_locking_processes([p])
+        if lockers:
+            names = ", ".join(str(x["app_name"] or x["pid"]) for x in lockers[:2])
+            return False, f"EN_USO ({names})"
 
     return True, "SEGURO"
 
@@ -165,10 +171,21 @@ class QuarantineVault:
     """Transactional Quarantine Vault supporting 1-click rollback."""
 
     def __init__(self, root_dir: Path | None = None) -> None:
+        import threading
+
+        self._lock = threading.Lock()
         self.root_dir = (root_dir or default_app_data_dir()) / "Quarantine"
         self.items_dir = self.root_dir / "items"
         self.manifest_path = self.root_dir / "manifest.json"
         self.items_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _move_fast(src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(src, dst)
+        except OSError:
+            shutil.move(str(src), str(dst))
 
     def _load_manifest(self) -> list[dict]:
         if not self.manifest_path.exists():
@@ -186,17 +203,23 @@ class QuarantineVault:
         tmp.replace(self.manifest_path)
 
     def list_items(self) -> list[QuarantineRecord]:
-        return [QuarantineRecord(**item) for item in self._load_manifest()]
+        with self._lock:
+            return [QuarantineRecord(**item) for item in self._load_manifest()]
 
     def quarantine_path(
         self,
         source: str | Path,
         category: str,
         allow_system_temp: bool = False,
+        skip_lock_check: bool = False,
     ) -> tuple[bool, str, QuarantineRecord | None]:
         """Verify OS safety, move source into Quarantine Vault, and persist manifest."""
         src = Path(source)
-        safe, reason = is_safe_to_touch_file(src, allow_system_temp=allow_system_temp)
+        safe, reason = is_safe_to_touch_file(
+            src,
+            allow_system_temp=allow_system_temp,
+            skip_lock_check=skip_lock_check,
+        )
         if not safe:
             return False, f"Bloqueado por seguridad: {reason}", None
 
@@ -211,7 +234,7 @@ class QuarantineVault:
 
         vault_target = self.items_dir / f"{item_id}__{src.name}"
         try:
-            shutil.move(str(src), str(vault_target))
+            self._move_fast(src, vault_target)
         except OSError as exc:
             return False, f"No se pudo mover a cuarentena: {exc}", None
 
@@ -225,54 +248,284 @@ class QuarantineVault:
             quarantined_at=datetime.now().astimezone().isoformat(),
             is_dir=is_dir,
         )
-        records = self._load_manifest()
-        records.append(asdict(record))
-        self._save_manifest(records)
+        with self._lock:
+            records = self._load_manifest()
+            records.append(asdict(record))
+            self._save_manifest(records)
         return True, "Movido a cuarentena con respaldo de restauracion", record
 
+    def quarantine_many(
+        self,
+        entries: list[tuple[Path, str]],
+        allow_system_temp: bool = False,
+        skip_lock_check: bool = False,
+        compute_hashes: bool = True,
+        progress_cb: Callable[[int, str], None] | None = None,
+    ) -> dict[str, int]:
+        """Move multiple individual paths in one manifest transaction (O(N) instead of O(N^2))."""
+        moved = 0
+        skipped = 0
+        perm_denied = 0
+        freed_bytes = 0
+        new_records: list[dict] = []
+        total = max(1, len(entries))
+        now_iso = datetime.now().astimezone().isoformat()
+
+        for idx, (src, category) in enumerate(entries, start=1):
+            if progress_cb and (idx == 1 or idx % 20 == 0 or idx == total):
+                pct = 10 + int(idx * 85 / total)
+                progress_cb(pct, f"Respaldando en cuarentena ({idx}/{total})...")
+            safe, reason = is_safe_to_touch_file(
+                src,
+                allow_system_temp=allow_system_temp,
+                skip_lock_check=skip_lock_check,
+            )
+            if not safe:
+                if "Permiso" in reason or "EN_USO" in reason:
+                    perm_denied += 1
+                skipped += 1
+                continue
+            item_id = uuid.uuid4().hex[:12]
+            try:
+                is_dir = src.is_dir()
+                if is_dir:
+                    size_bytes = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
+                    sha256 = "DIRECTORY"
+                else:
+                    size_bytes = src.stat().st_size
+                    sha256 = compute_sha256(src) if compute_hashes else "FAST_SKIP"
+                vault_target = self.items_dir / f"{item_id}__{src.name}"
+                orig_resolved = str(src.resolve())
+                self._move_fast(src, vault_target)
+            except PermissionError:
+                perm_denied += 1
+                skipped += 1
+                continue
+            except OSError:
+                skipped += 1
+                continue
+
+            moved += 1
+            freed_bytes += int(size_bytes)
+            new_records.append(
+                asdict(
+                    QuarantineRecord(
+                        item_id=item_id,
+                        original_path=orig_resolved,
+                        vault_path=str(vault_target),
+                        category=category,
+                        size_bytes=int(size_bytes),
+                        sha256=sha256,
+                        quarantined_at=now_iso,
+                        is_dir=is_dir,
+                    )
+                )
+            )
+
+        if new_records:
+            with self._lock:
+                records = self._load_manifest()
+                records.extend(new_records)
+                self._save_manifest(records)
+        return {
+            "moved": moved,
+            "skipped": skipped,
+            "permission_denied": perm_denied,
+            "freed_bytes": freed_bytes,
+        }
+
+    def quarantine_batch_bundle(
+        self,
+        sources: list[tuple[Path, int]],
+        base_dir: Path,
+        bundle_name: str,
+        category: str,
+        allow_system_temp: bool = False,
+        progress_cb: Callable[[int, str], None] | None = None,
+    ) -> dict[str, int]:
+        """Move thousands of disposable/temp files into ONE reversible batch bundle in O(N) time."""
+        if not sources:
+            return {"moved": 0, "skipped": 0, "permission_denied": 0, "freed_bytes": 0}
+
+        if is_protected_path(base_dir, allow_system_temp=allow_system_temp):
+            return {"moved": 0, "skipped": len(sources), "permission_denied": 0, "freed_bytes": 0}
+
+        batch_id = uuid.uuid4().hex[:12]
+        safe_slug = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in bundle_name)[:40]
+        bundle_dir = self.items_dir / f"batch_{batch_id}__{safe_slug}"
+        files_dir = bundle_dir / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+
+        moved = 0
+        skipped = 0
+        perm_denied = 0
+        freed_bytes = 0
+        total = max(1, len(sources))
+        base_resolved = base_dir.resolve()
+        base_str = str(base_resolved)
+        base_prefix_low = base_str.lower() + "\\"
+        files_dir_str = str(files_dir)
+        made_dirs: set[str] = {files_dir_str}
+        bundle_entries: list[list[str]] = []
+
+        for idx, (src, est_size) in enumerate(sources, start=1):
+            if progress_cb and (idx == 1 or idx % 250 == 0 or idx == total):
+                pct = 15 + int(idx * 80 / total)
+                progress_cb(pct, f"Moviendo a respaldo seguro ({idx}/{total})...")
+            try:
+                src_abs = os.path.abspath(str(src))
+                if not src_abs.lower().startswith(base_prefix_low):
+                    if is_protected_path(src, allow_system_temp=allow_system_temp):
+                        skipped += 1
+                        continue
+                    rel_str = f"item_{idx}_{src.name}"
+                else:
+                    rel_str = os.path.relpath(src_abs, base_str)
+                dst_str = os.path.join(files_dir_str, rel_str)
+                dst_parent = os.path.dirname(dst_str)
+                if dst_parent not in made_dirs:
+                    os.makedirs(dst_parent, exist_ok=True)
+                    made_dirs.add(dst_parent)
+                try:
+                    os.replace(src_abs, dst_str)
+                except OSError:
+                    shutil.move(src_abs, dst_str)
+                bundle_entries.append([rel_str, src_abs])
+                moved += 1
+                freed_bytes += int(est_size)
+            except PermissionError:
+                perm_denied += 1
+                skipped += 1
+            except OSError:
+                skipped += 1
+
+        if moved == 0:
+            shutil.rmtree(bundle_dir, ignore_errors=True)
+            return {
+                "moved": 0,
+                "skipped": skipped,
+                "permission_denied": perm_denied,
+                "freed_bytes": 0,
+            }
+
+        bundle_meta = bundle_dir / "_bundle_manifest.json"
+        bundle_meta.write_text(json.dumps(bundle_entries, ensure_ascii=False), encoding="utf-8")
+
+        record = QuarantineRecord(
+            item_id=batch_id,
+            original_path=f"{base_resolved} ({moved} archivos)",
+            vault_path=str(bundle_dir),
+            category=category,
+            size_bytes=int(freed_bytes),
+            sha256=f"BATCH:{moved}",
+            quarantined_at=datetime.now().astimezone().isoformat(),
+            is_dir=True,
+        )
+        with self._lock:
+            records = self._load_manifest()
+            records.append(asdict(record))
+            self._save_manifest(records)
+        return {
+            "moved": moved,
+            "skipped": skipped,
+            "permission_denied": perm_denied,
+            "freed_bytes": freed_bytes,
+        }
+
     def restore_item(self, item_id: str) -> tuple[bool, str]:
-        """Restore a quarantined file/directory back to its exact original location."""
-        records = self._load_manifest()
-        match = next((r for r in records if r["item_id"] == item_id), None)
+        """Restore a quarantined file, directory, or batch bundle back to original locations."""
+        with self._lock:
+            records = self._load_manifest()
+            match = next((r for r in records if r["item_id"] == item_id), None)
         if not match:
             return False, "Registro no encontrado en el manifiesto de cuarentena"
 
         vault_path = Path(match["vault_path"])
-        original_path = Path(match["original_path"])
         if not vault_path.exists():
             return False, "El archivo fisico ya no existe en la boveda"
+
+        sha_tag = str(match.get("sha256") or "")
+        bundle_meta = vault_path / "_bundle_manifest.json"
+        if sha_tag.startswith("BATCH:") and bundle_meta.exists():
+            try:
+                entries = json.loads(bundle_meta.read_text(encoding="utf-8"))
+                files_dir = vault_path / "files"
+                restored = 0
+                for rel_str, orig_str in entries:
+                    src_f = files_dir / rel_str
+                    dst_f = Path(orig_str)
+                    if src_f.exists() and not dst_f.exists():
+                        self._move_fast(src_f, dst_f)
+                        restored += 1
+                shutil.rmtree(vault_path, ignore_errors=True)
+                with self._lock:
+                    cur = self._load_manifest()
+                    self._save_manifest([r for r in cur if r["item_id"] != item_id])
+                return True, f"Lote restaurado: {restored} archivos devueltos a su ubicacion original"
+            except (OSError, json.JSONDecodeError) as exc:
+                return False, f"Error restaurando lote: {exc}"
+
+        original_path = Path(match["original_path"])
         if original_path.exists():
             return False, "Ya existe un archivo en la ruta original de destino"
 
-        if not match.get("is_dir", False) and match.get("sha256") != "DIRECTORY":
-            if compute_sha256(vault_path) != match["sha256"]:
+        if not match.get("is_dir", False) and sha_tag not in ("DIRECTORY", "FAST_SKIP", ""):
+            if compute_sha256(vault_path) != sha_tag:
                 return False, "Fallo de integridad SHA-256 en boveda"
 
-        original_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(vault_path), str(original_path))
-        updated = [r for r in records if r["item_id"] != item_id]
-        self._save_manifest(updated)
+        self._move_fast(vault_path, original_path)
+        with self._lock:
+            cur = self._load_manifest()
+            self._save_manifest([r for r in cur if r["item_id"] != item_id])
         return True, f"Restaurado en {original_path}"
 
     def purge_item(self, item_id: str, use_recycle_bin: bool = True) -> tuple[bool, str]:
         """Permanently purge or recycle an item from the Quarantine Vault."""
-        records = self._load_manifest()
-        match = next((r for r in records if r["item_id"] == item_id), None)
-        if not match:
+        res = self.purge_items([item_id], use_recycle_bin=use_recycle_bin)
+        if res["purged"] == 0:
             return False, "Registro no encontrado"
-
-        vault_path = Path(match["vault_path"])
-        if vault_path.exists():
-            if use_recycle_bin and send_to_recycle_bin(vault_path):
-                pass
-            elif vault_path.is_dir():
-                shutil.rmtree(vault_path, ignore_errors=False)
-            else:
-                vault_path.unlink()
-
-        updated = [r for r in records if r["item_id"] != item_id]
-        self._save_manifest(updated)
         return True, "Elemento depurado de la boveda"
+
+    def purge_items(
+        self,
+        item_ids: list[str],
+        use_recycle_bin: bool = False,
+        progress_cb: Callable[[int, str], None] | None = None,
+    ) -> dict[str, int]:
+        """Remove multiple Quarantine Vault entries efficiently in a single manifest save."""
+        target_set = set(item_ids)
+        with self._lock:
+            records = self._load_manifest()
+        targets = [r for r in records if r.get("item_id") in target_set]
+        if not targets:
+            return {"purged": 0, "freed_bytes": 0}
+
+        purged_ids: set[str] = set()
+        freed_bytes = 0
+        total = max(1, len(targets))
+        for idx, match in enumerate(targets, start=1):
+            if progress_cb and (idx == 1 or idx % 100 == 0 or idx == total):
+                pct = 10 + int(idx * 85 / total)
+                progress_cb(pct, f"Depurando boveda ({idx}/{total})...")
+            vault_path = Path(match["vault_path"])
+            try:
+                if vault_path.exists():
+                    if use_recycle_bin and send_to_recycle_bin(vault_path):
+                        pass
+                    elif vault_path.is_dir():
+                        shutil.rmtree(vault_path, ignore_errors=False)
+                    else:
+                        vault_path.unlink()
+                purged_ids.add(str(match["item_id"]))
+                freed_bytes += int(match.get("size_bytes") or 0)
+            except OSError:
+                continue
+
+        if purged_ids:
+            with self._lock:
+                cur = self._load_manifest()
+                self._save_manifest([r for r in cur if r.get("item_id") not in purged_ids])
+        return {"purged": len(purged_ids), "freed_bytes": freed_bytes}
 
 
 class PreOpBackupManager:

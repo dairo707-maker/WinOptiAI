@@ -2,6 +2,18 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.3.3] - 2026-11-16
+
+### Corregido y Optimizado
+- **Limpieza Masiva de Temporales en Segundos (sin atasco al 5% ni esperas de horas) (`junk_scanner.py`, `safety_guard.py`):**
+  - Se elimino la reescritura cuadratica $O(N^2)$ de `manifest.json` y el calculo redundante de SHA-256/Restart Manager archivo por archivo: ahora los temporales limpios se mueven en un unico lote reversible (`quarantine_batch_bundle`) con `os.replace` en NTFS y verificacion de bloqueos binaria divide-y-venceras (`_filter_unlocked_binary`), reduciendo decenas de miles de archivos de ~14 horas a segundos.
+  - Se agrego barra de progreso real (`5% -> 100%`) y tiempo restante estimado realista (`AsyncTask.eta_label()`) en todas las operaciones de Almacenamiento (temporales, duplicados, autolimpiador, hardlinks NTFS, arbol de carpetas, huerfanos y boveda de cuarentena).
+- **Depuracion y Vaciado de Boveda Cuarentena (`storage_view.py`, `safety_guard.py`):** nuevo boton **Depurar / Vaciar Boveda** con eliminacion por lote `O(N)`.
+- **Escaneo Rapido de Disco, Procesos y Hardware Real (`win32_bridge.py`, `process_manager.py`, `bios_auditor.py`):**
+  - `os.scandir` de una sola llamada con `st_file_attributes` en los 4 motores de disco.
+  - `detect_orphan_ai_workers` optimizado de ~7 s a `< 0.2 s` evitando leer `cmdline()` de procesos del sistema.
+  - Correccion del ordenamiento en `Get-PhysicalDisk` excluyendo discos virtuales (`Msft Virtual Disk`) para mostrar correctamente la unidad NVMe fisica (`KINGSTON SNV3S1000G`).
+
 ## [0.3.2] - 2026-11-16
 
 ### Mejorado y Corregido

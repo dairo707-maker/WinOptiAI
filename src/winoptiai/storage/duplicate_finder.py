@@ -18,7 +18,11 @@ from typing import Callable
 from blake3 import blake3
 
 from ..core.safety_guard import QuarantineVault, is_protected_path, is_safe_to_touch_file
-from ..core.win32_bridge import create_ntfs_hardlink, is_cloud_only_file, is_reparse_or_system_file
+from ..core.win32_bridge import (
+    attrs_is_cloud_only,
+    attrs_is_reparse_or_system,
+    create_ntfs_hardlink,
+)
 
 
 PARTIAL_CHUNK_BYTES = 4096
@@ -75,29 +79,29 @@ def find_duplicates(
     for root in roots:
         if not root.exists() or is_protected_path(root):
             continue
-        for dirpath, dirs, filenames in os.walk(root):
-            current = Path(dirpath)
+        stack: list[Path] = [root]
+        while stack:
+            current = stack.pop()
             if is_protected_path(current):
-                dirs[:] = []
                 continue
-            dirs[:] = [
-                d
-                for d in dirs
-                if not d.startswith(".git")
-                and d != "__pycache__"
-                and not is_reparse_or_system_file(current / d)
-            ]
-            for name in filenames:
-                fpath = current / name
-                if is_cloud_only_file(fpath) or is_reparse_or_system_file(fpath):
-                    continue
-                try:
-                    st = fpath.stat()
-                except OSError:
-                    continue
-                if st.st_size < min_size_bytes:
-                    continue
-                size_buckets[st.st_size].append((fpath, st.st_dev, st.st_ino))
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        ep = Path(entry.path)
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+                        attrs = getattr(st, "st_file_attributes", None)
+                        if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            if not entry.name.startswith(".git") and entry.name != "__pycache__":
+                                stack.append(ep)
+                        elif entry.is_file(follow_symlinks=False) and st.st_size >= min_size_bytes:
+                            size_buckets[st.st_size].append((ep, st.st_dev, st.st_ino))
+            except OSError:
+                continue
 
     if progress_cb:
         progress_cb(40, "Calculando pre-hash 4KB de candidatos...")
@@ -105,7 +109,18 @@ def find_duplicates(
     candidate_sizes = [(sz, items) for sz, items in size_buckets.items() if len(items) >= 2]
     partial_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
     total_cand = max(1, len(candidate_sizes))
-    for idx, (size, items) in enumerate(candidate_sizes, start=1):
+    for idx, (size, raw_items) in enumerate(candidate_sizes, start=1):
+        # DirEntry.stat() returns st_ino=0 on Windows; fetch true (dev, ino) only for candidate sizes
+        items: list[tuple[Path, int, int]] = []
+        for fpath, dev, ino in raw_items:
+            if ino == 0:
+                try:
+                    fst = fpath.stat()
+                    dev, ino = fst.st_dev, fst.st_ino
+                except OSError:
+                    continue
+            items.append((fpath, dev, ino))
+
         unique_inodes = {(dev, ino) for _, dev, ino in items if ino != 0}
         if ino_all_nonzero(items) and len(unique_inodes) < 2:
             continue
@@ -167,21 +182,23 @@ def deduplicate_group_to_quarantine(
     vault: QuarantineVault,
 ) -> dict[str, int]:
     """Keep one primary copy and move redundant copies to the Quarantine Vault."""
-    moved = 0
-    skipped = 0
-    freed = 0
     keep_resolved = keep_path.resolve()
+    entries = [(p, "Duplicado BLAKE3") for p in group.paths if p.resolve() != keep_resolved]
+    res = vault.quarantine_many(entries)
+    return {"moved": res["moved"], "skipped": res["skipped"], "freed_bytes": res["freed_bytes"]}
 
-    for p in group.paths:
-        if p.resolve() == keep_resolved:
-            continue
-        ok, _, _ = vault.quarantine_path(p, category="Duplicado BLAKE3")
-        if ok:
-            moved += 1
-            freed += group.size_bytes
-        else:
-            skipped += 1
-    return {"moved": moved, "skipped": skipped, "freed_bytes": freed}
+
+def quarantine_duplicates_plan(
+    plan: list[tuple[DuplicateGroup, Path, list[Path]]],
+    vault: QuarantineVault,
+    progress_cb: Callable[[int, str], None] | None = None,
+) -> dict[str, int]:
+    """Batch-quarantine redundant duplicate copies across multiple groups in O(N) time."""
+    entries: list[tuple[Path, str]] = []
+    for _, _, remove_paths in plan:
+        for rp in remove_paths:
+            entries.append((rp, "Duplicado BLAKE3"))
+    return vault.quarantine_many(entries, progress_cb=progress_cb)
 
 
 def deduplicate_group_via_hardlink(

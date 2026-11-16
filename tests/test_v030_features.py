@@ -98,3 +98,11 @@ def test_detached_updater_script_generation(tmp_path: Path) -> None:
     assert "/SILENT /CURRENTUSER /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS" in script
     assert str(inst) in script
     assert detect_installed_dir() is not None
+
+
+def test_eta_formatter_human_units() -> None:
+    from winoptiai.ui.workers import format_eta_seconds
+
+    assert format_eta_seconds(14) == "~14s rest."
+    assert format_eta_seconds(125) == "~2m 05s rest."
+    assert format_eta_seconds(3720) == "~1h 02m rest."

@@ -126,7 +126,10 @@ $cs = Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer, Model, 
 $bios = Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors, VirtualizationFirmwareEnabled
 $gpus = @(Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion)
-$disk = Get-PhysicalDisk | Sort-Object @{E={if($_.BusType -eq 'NVMe'){0}elseif($_.MediaType -eq 'SSD'){1}else{2}}}, Size -Descending | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType
+$disk = Get-PhysicalDisk | Where-Object { $_.BusType -notlike '*Virtual*' -and $_.FriendlyName -notlike '*Virtual*' } | Sort-Object @{E={if($_.BusType -eq 'NVMe'){0}elseif($_.MediaType -eq 'SSD'){1}else{2}};Descending=$false}, @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType
+if (-not $disk) {
+  $disk = Get-PhysicalDisk | Sort-Object @{E={$_.Size};Descending=$true} | Select-Object -First 1 FriendlyName, HealthStatus, MediaType, BusType
+}
 $vol = Get-PSDrive -Name C -PSProvider FileSystem | Select-Object @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}}, @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,2)}}
 $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1 EstimatedChargeRemaining
 $sb = 'Desconocido'

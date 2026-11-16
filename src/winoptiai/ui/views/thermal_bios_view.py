@@ -214,7 +214,12 @@ class ThermalBiosView(QWidget):
             self.on_elevated_temps(cpu_c, nvme_c)
             self.notify_cb(msg)
 
-        self.run_async(probe_elevated_temperatures, _done, "Lectura termica UAC")
+        self.run_async(
+            probe_elevated_temperatures,
+            _done,
+            "Lectura termica UAC",
+            on_error=lambda _e: self.uac_temp_btn.setEnabled(True),
+        )
 
     def _highlight_profile_button(self, active_key: str) -> None:
         for key, btn in self.profile_buttons.items():
@@ -256,7 +261,12 @@ class ThermalBiosView(QWidget):
 
     def refresh_audit(self) -> None:
         self.audit_btn.setEnabled(False)
-        self.run_async(run_hardware_bios_audit, self._on_audit_ready, "Auditoria universal hardware")
+        self.run_async(
+            run_hardware_bios_audit,
+            self._on_audit_ready,
+            "Auditoria universal hardware",
+            on_error=lambda _e: self.audit_btn.setEnabled(True),
+        )
 
     def _run_recommendation(self, item: dict[str, str]) -> None:
         action_id = item.get("action_id", "")

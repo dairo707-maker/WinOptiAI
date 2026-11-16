@@ -9,7 +9,11 @@ import time
 from typing import Callable
 
 from ..core.safety_guard import QuarantineVault, is_protected_path
-from ..core.win32_bridge import get_locking_processes, is_cloud_only_file, is_reparse_or_system_file
+from ..core.win32_bridge import (
+    attrs_is_cloud_only,
+    attrs_is_reparse_or_system,
+    get_locking_processes,
+)
 
 
 @dataclass(slots=True)
@@ -65,29 +69,68 @@ def _build_default_targets() -> list[JunkTarget]:
     return [c for c in candidates if c.path.exists()]
 
 
-def _iter_eligible_files(target: JunkTarget, now_ts: float) -> list[Path]:
+def _scan_eligible_with_sizes(target: JunkTarget, now_ts: float) -> list[tuple[Path, int]]:
+    """Collect (Path, size_bytes) in a single scandir+stat syscall pass."""
     if not target.path.exists():
         return []
     if is_protected_path(target.path, allow_system_temp=target.allow_system_temp):
         return []
 
     cutoff = now_ts - (target.min_age_days * 86400)
-    eligible: list[Path] = []
-    for root, dirs, files in os.walk(target.path):
-        root_path = Path(root)
-        # Never traverse junctions/symlinks
-        dirs[:] = [d for d in dirs if not is_reparse_or_system_file(root_path / d)]
-        for name in files:
-            fpath = root_path / name
-            if is_cloud_only_file(fpath) or is_reparse_or_system_file(fpath):
-                continue
-            try:
-                st = fpath.stat()
-            except OSError:
-                continue
-            if st.st_mtime <= cutoff:
-                eligible.append(fpath)
+    eligible: list[tuple[Path, int]] = []
+    stack: list[Path] = [target.path]
+
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    ep = Path(entry.path)
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    attrs = getattr(st, "st_file_attributes", None)
+                    if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(ep)
+                    elif entry.is_file(follow_symlinks=False) and st.st_mtime <= cutoff:
+                        eligible.append((ep, int(st.st_size)))
+        except OSError:
+            continue
     return eligible
+
+
+def _iter_eligible_files(target: JunkTarget, now_ts: float) -> list[Path]:
+    return [p for p, _ in _scan_eligible_with_sizes(target, now_ts)]
+
+
+def _filter_unlocked_binary(
+    items: list[tuple[Path, int]],
+    chunk_size: int = 256,
+) -> tuple[list[tuple[Path, int]], int]:
+    """Use divide-and-conquer Restart Manager checks so 100k unlocked files run in milliseconds."""
+    unlocked: list[tuple[Path, int]] = []
+    locked_count = 0
+
+    def _inspect(batch: list[tuple[Path, int]]) -> None:
+        nonlocal locked_count
+        if not batch:
+            return
+        if not get_locking_processes([p for p, _ in batch]):
+            unlocked.extend(batch)
+            return
+        if len(batch) == 1:
+            locked_count += 1
+            return
+        mid = len(batch) // 2
+        _inspect(batch[:mid])
+        _inspect(batch[mid:])
+
+    for i in range(0, len(items), chunk_size):
+        _inspect(items[i : i + chunk_size])
+    return unlocked, locked_count
 
 
 def scan_junk_targets(
@@ -101,15 +144,9 @@ def scan_junk_targets(
     for idx, target in enumerate(resolved, start=1):
         if progress_cb:
             progress_cb(int((idx - 1) * 100 / total_targets), f"Analizando {target.label}...")
-        files = _iter_eligible_files(target, now_ts)
-        total = 0
-        for f in files:
-            try:
-                total += f.stat().st_size
-            except OSError:
-                continue
+        files = _scan_eligible_with_sizes(target, now_ts)
         target.file_count = len(files)
-        target.reclaimable_bytes = total
+        target.reclaimable_bytes = sum(sz for _, sz in files)
         target.locked_skipped = 0
     if progress_cb:
         progress_cb(100, "Temporales analizados")
@@ -120,67 +157,61 @@ def clean_junk_target(
     target: JunkTarget,
     vault: QuarantineVault,
     use_quarantine: bool = False,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> dict[str, int]:
-    """Clean eligible unlocked files inside target.
+    """Clean eligible unlocked files inside target with O(N) performance and % updates.
 
-    System temp/cache files are checked against Windows Restart Manager before removal.
-    When use_quarantine=True, files are moved to the reversible Quarantine Vault.
+    When use_quarantine=True, unlocked files are moved rapidly into a single reversible
+    batch bundle in Quarantine Vault instead of O(N^2) per-file manifest rewrites.
     """
     now_ts = time.time()
-    files = _iter_eligible_files(target, now_ts)
+    if progress_cb:
+        progress_cb(8, f"Indexando {target.label}...")
+    files = _scan_eligible_with_sizes(target, now_ts)
     if not files:
-        return {"removed": 0, "skipped_locked": 0, "freed_bytes": 0}
+        if progress_cb:
+            progress_cb(100, f"Sin temporales pendientes en {target.label}")
+        return {"removed": 0, "skipped_locked": 0, "permission_denied": 0, "freed_bytes": 0}
 
-    # Batch check active locks with Restart Manager in chunks of 100
-    locked_pids_exist = False
-    for i in range(0, len(files), 100):
-        chunk = files[i : i + 100]
-        if get_locking_processes(chunk):
-            locked_pids_exist = True
-            break
+    if progress_cb:
+        progress_cb(14, f"Verificando bloqueos Win32 en {len(files)} archivos...")
+    unlocked, rm_locked = _filter_unlocked_binary(files)
+
+    if use_quarantine:
+        res = vault.quarantine_batch_bundle(
+            unlocked,
+            base_dir=target.path,
+            bundle_name=target.target_id,
+            category=f"Basura:{target.category}",
+            allow_system_temp=target.allow_system_temp,
+            progress_cb=progress_cb,
+        )
+        skipped = rm_locked + res["skipped"]
+        target.locked_skipped = skipped
+        return {
+            "removed": res["moved"],
+            "skipped_locked": skipped,
+            "permission_denied": res["permission_denied"],
+            "freed_bytes": res["freed_bytes"],
+        }
 
     removed = 0
-    skipped = 0
+    skipped = rm_locked
     permission_denied = 0
     freed = 0
-
-    for fpath in files:
-        if locked_pids_exist and get_locking_processes([fpath]):
-            skipped += 1
-            continue
+    total = max(1, len(unlocked))
+    for idx, (fpath, size) in enumerate(unlocked, start=1):
+        if progress_cb and (idx == 1 or idx % 250 == 0 or idx == total):
+            progress_cb(20 + int(idx * 75 / total), f"Limpiando {target.label} ({idx}/{total})...")
         try:
-            size = fpath.stat().st_size
+            fpath.unlink()
+            removed += 1
+            freed += size
         except PermissionError:
             permission_denied += 1
             skipped += 1
-            continue
         except OSError:
             skipped += 1
-            continue
-
-        if use_quarantine:
-            ok, reason, _ = vault.quarantine_path(
-                fpath,
-                category=f"Basura:{target.category}",
-                allow_system_temp=target.allow_system_temp,
-            )
-            if ok:
-                removed += 1
-                freed += size
-            else:
-                if "Permiso" in reason or "Acceso denegado" in reason:
-                    permission_denied += 1
-                skipped += 1
-        else:
-            try:
-                fpath.unlink()
-                removed += 1
-                freed += size
-            except PermissionError:
-                permission_denied += 1
-                skipped += 1
-            except OSError:
-                skipped += 1
 
     target.locked_skipped = skipped
     return {
@@ -189,3 +220,33 @@ def clean_junk_target(
         "permission_denied": permission_denied,
         "freed_bytes": freed,
     }
+
+
+def clean_junk_targets(
+    targets: list[JunkTarget],
+    vault: QuarantineVault,
+    use_quarantine: bool = True,
+    progress_cb: Callable[[int, str], None] | None = None,
+) -> dict[str, int]:
+    """Clean multiple JunkTargets reporting smooth cumulative progress 5%..99%."""
+    freed = removed = skipped = perm = 0
+    total = max(1, len(targets))
+    for idx, t in enumerate(targets):
+        base_pct = int(idx * 95 / total)
+        span_pct = max(5, int(95 / total))
+
+        def _sub_cb(sub_pct: int, msg: str, b: int = base_pct, s: int = span_pct) -> None:
+            if progress_cb:
+                overall = min(98, max(5, b + int(sub_pct * s / 100)))
+                progress_cb(overall, msg)
+
+        if progress_cb:
+            progress_cb(max(5, base_pct), f"Procesando {t.label} ({idx + 1}/{total})...")
+        res = clean_junk_target(t, vault, use_quarantine=use_quarantine, progress_cb=_sub_cb)
+        freed += res["freed_bytes"]
+        removed += res["removed"]
+        skipped += res["skipped_locked"]
+        perm += res.get("permission_denied", 0)
+    if progress_cb:
+        progress_cb(100, "Limpieza completada")
+    return {"freed": freed, "removed": removed, "skipped": skipped, "perm": perm}

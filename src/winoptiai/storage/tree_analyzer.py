@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..core.safety_guard import is_protected_path
-from ..core.win32_bridge import is_cloud_only_file, is_reparse_or_system_file
+from ..core.win32_bridge import attrs_is_cloud_only, attrs_is_reparse_or_system
 
 
 EXTENSION_CATEGORIES: dict[str, str] = {
@@ -131,9 +131,11 @@ def analyze_storage_hierarchy(
                 if progress_cb:
                     progress_cb(min(92, int(done_top * 90 / total_top)), f"Analizando {entry.name}...")
             ep = Path(entry.path)
-            if is_cloud_only_file(ep) or is_reparse_or_system_file(ep):
-                continue
             try:
+                st = entry.stat(follow_symlinks=False)
+                attrs = getattr(st, "st_file_attributes", None)
+                if attrs_is_cloud_only(attrs) or attrs_is_reparse_or_system(attrs):
+                    continue
                 if entry.is_dir(follow_symlinks=False):
                     if is_protected_path(ep):
                         continue
@@ -143,7 +145,6 @@ def analyze_storage_hierarchy(
                     if depth < max_depth and child.size_bytes > 0:
                         node.children.append(child)
                 elif entry.is_file(follow_symlinks=False):
-                    st = entry.stat(follow_symlinks=False)
                     sz = int(st.st_size)
                     node.size_bytes += sz
                     node.file_count += 1

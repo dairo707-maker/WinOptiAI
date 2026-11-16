@@ -129,7 +129,9 @@ class NotificationsTasksDialog(QDialog):
             title.setStyleSheet("font-size: 12px; font-weight: 600;")
             top.addWidget(title)
             top.addStretch()
-            pct_lbl = QLabel(f"{task.percent}%  |  {task.stage}")
+            eta = task.eta_label()
+            eta_part = f" ({eta})" if eta else ""
+            pct_lbl = QLabel(f"{task.percent}%{eta_part}  |  {task.stage}")
             pct_lbl.setObjectName("MonoValue")
             top.addWidget(pct_lbl)
             rl.addLayout(top)

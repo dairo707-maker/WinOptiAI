@@ -150,16 +150,16 @@ def detect_orphan_ai_workers(min_ram_mb: float = 35.0) -> list[ZombieWorker]:
     live_pids = set(psutil.pids())
     zombies: list[ZombieWorker] = []
 
-    for proc in psutil.process_iter(["pid", "ppid", "name", "memory_info"]):
+    for proc in psutil.process_iter(["pid", "name"]):
         try:
             pid = int(proc.info["pid"])
-            ppid = int(proc.info.get("ppid") or 0)
-            name = (proc.info.get("name") or "").strip()
+            name = (proc.info["name"] or "").strip()
             lname = name.lower()
             if lname not in ZOMBIE_AI_WORKER_NAMES or pid <= 4:
                 continue
 
-            mem = proc.info.get("memory_info")
+            ppid = int(proc.ppid() or 0)
+            mem = proc.memory_info()
             ram_mb = round((mem.rss if mem else 0) / (1024 * 1024), 1)
             if ram_mb < min_ram_mb:
                 continue

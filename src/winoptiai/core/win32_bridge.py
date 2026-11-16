@@ -130,20 +130,26 @@ def get_file_attributes(path: str | Path) -> int | None:
     return int(attrs)
 
 
-def is_cloud_only_file(path: str | Path) -> bool:
-    """Return True when a file is a OneDrive/cloud placeholder that must NEVER be hydrated."""
-    attrs = get_file_attributes(path)
+def attrs_is_cloud_only(attrs: int | None) -> bool:
+    """Fast attribute-bitmask check avoiding an extra Win32 GetFileAttributesW call."""
+    return bool(attrs & CLOUD_ONLY_MASK) if attrs is not None else False
+
+
+def attrs_is_reparse_or_system(attrs: int | None) -> bool:
+    """Fast attribute-bitmask check for junctions/symlinks or OS system files."""
     if attrs is None:
         return False
-    return bool(attrs & CLOUD_ONLY_MASK)
+    return bool(attrs & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SYSTEM))
+
+
+def is_cloud_only_file(path: str | Path) -> bool:
+    """Return True when a file is a OneDrive/cloud placeholder that must NEVER be hydrated."""
+    return attrs_is_cloud_only(get_file_attributes(path))
 
 
 def is_reparse_or_system_file(path: str | Path) -> bool:
     """Return True if path is a reparse point (junction/symlink) or hidden OS system file."""
-    attrs = get_file_attributes(path)
-    if attrs is None:
-        return False
-    return bool(attrs & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SYSTEM))
+    return attrs_is_reparse_or_system(get_file_attributes(path))
 
 
 def get_locking_processes(paths: Iterable[str | Path]) -> list[dict[str, str | int]]:

@@ -20,6 +20,8 @@ from typing import Callable
 from ..core.safety_guard import QuarantineVault, is_protected_path
 from ..core.win32_bridge import (
     IS_WINDOWS,
+    attrs_is_cloud_only,
+    attrs_is_reparse_or_system,
     get_locking_processes,
     is_cloud_only_file,
     is_reparse_or_system_file,
@@ -120,17 +122,25 @@ def _get_installed_program_tokens() -> set[str]:
 
 def _dir_size(path: Path) -> int:
     total = 0
-    for root, dirs, files in os.walk(path):
-        rp = Path(root)
-        dirs[:] = [d for d in dirs if not is_reparse_or_system_file(rp / d)]
-        for f in files:
-            fp = rp / f
-            if is_cloud_only_file(fp):
-                continue
-            try:
-                total += fp.stat().st_size
-            except OSError:
-                continue
+    stack: list[Path] = [path]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    attrs = getattr(st, "st_file_attributes", None)
+                    if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        total += int(st.st_size)
+        except OSError:
+            continue
     return total
 
 
@@ -270,19 +280,19 @@ def scan_orphan_artifacts(
 def quarantine_orphans(
     items: list[OrphanCandidate],
     vault: QuarantineVault,
+    progress_cb: Callable[[int, str], None] | None = None,
 ) -> dict[str, int]:
-    """Move selected orphan items into the reversible Quarantine Vault."""
-    moved = 0
+    """Move selected orphan items into the reversible Quarantine Vault in one batch."""
+    eligible: list[tuple[Path, str]] = []
     skipped = 0
-    freed = 0
     for item in items:
         if item.confidence == "EN_USO":
             skipped += 1
             continue
-        ok, _, _ = vault.quarantine_path(item.path, category=item.kind)
-        if ok:
-            moved += 1
-            freed += item.size_bytes
-        else:
-            skipped += 1
-    return {"moved": moved, "skipped": skipped, "freed_bytes": freed}
+        eligible.append((item.path, item.kind))
+    res = vault.quarantine_many(eligible, progress_cb=progress_cb)
+    return {
+        "moved": res["moved"],
+        "skipped": skipped + res["skipped"],
+        "freed_bytes": res["freed_bytes"],
+    }
