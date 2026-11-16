@@ -1,0 +1,1 @@
+Verificacion v0.2.2: 18/18 pytest PASSED (21.82s). PreOpBackupManager (.pow + snapshot.json), retiro de pendientes completados con registro inmediato, columna REINICIO, hora local exacta del sistema, OpenSSL Python + curl.exe fallback.
