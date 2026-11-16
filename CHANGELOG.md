@@ -2,6 +2,14 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.4.2] - 2026-11-16
+
+### Corregido y Optimizado
+- **Eliminacion del Cuello de Botella Restart Manager en Limpieza Masiva (`junk_scanner.py`, `workers.py`):**
+  - Se detecto que `_filter_unlocked_binary()` sobre 150,000+ archivos temporales ejecutaba miles de sesiones COM/RPC a `Rstrtmgr.dll` antes de mover el primer archivo y quedaba clavado en `5%` sin activar la ETA.
+  - Para directorios masivos (`> 400` archivos) ahora usa deteccion atomica nativa NTFS (`WinError 32` / `PermissionError` en microsegundos al intentar `os.replace`), reusa el indice escaneado reciente (`_cached_eligible`), excluye la propia carpeta temporal `_MEIPASS` activa de PyInstaller, poda subcarpetas temporales vacias y pondera el `%` por cantidad real de archivos (`6% -> 100%`) para mostrar tiempo restante real desde los primeros 2 segundos.
+- **Oferta Directa de Elevacion Admin UAC en Limpieza Profunda (`storage_view.py`):** si la limpieza seleccionada incluye carpetas del sistema (`Windows\Temp`, `Minidump`, `WER`) en modo estandar, pregunta en 1 clic si se desea elevar por UAC o limpiar de inmediato las rutas de usuario.
+
 ## [0.4.1] - 2026-11-16
 
 ### Corregido

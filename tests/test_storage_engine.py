@@ -147,3 +147,41 @@ def test_batch_junk_cleanup_progress_and_rollback(tmp_path: Path) -> None:
     assert ok
     assert (sub / "tmp_000.tmp").exists()
     assert vault.list_items() == []
+
+
+def test_bulk_over_400_temp_files_fast_and_weighted_progress(tmp_path: Path) -> None:
+    from winoptiai.storage.junk_scanner import clean_junk_targets
+
+    vault = QuarantineVault(root_dir=tmp_path / "vault_bulk")
+    big_dir = tmp_path / "big_temp"
+    small_dir = tmp_path / "small_temp"
+    big_dir.mkdir()
+    small_dir.mkdir()
+
+    old_mtime = time.time() - (3 * 86400)
+    for idx in range(520):
+        f = big_dir / f"bulk_{idx:03d}.tmp"
+        f.write_bytes(b"B" * 64)
+        os.utime(f, (old_mtime, old_mtime))
+    tiny = small_dir / "one.tmp"
+    tiny.write_bytes(b"S" * 64)
+    os.utime(tiny, (old_mtime, old_mtime))
+
+    t1 = JunkTarget("big", "Grande", "Sistema", big_dir, False, min_age_days=1)
+    t2 = JunkTarget("small", "Pequeno", "Sistema", small_dir, False, min_age_days=1)
+    scanned = scan_junk_targets([t1, t2])
+    assert scanned[0].file_count == 520
+
+    pcts: list[int] = []
+    t0 = time.perf_counter()
+    res = clean_junk_targets(
+        scanned,
+        vault,
+        use_quarantine=True,
+        progress_cb=lambda p, _m: pcts.append(p),
+    )
+    elapsed = time.perf_counter() - t0
+    assert res["removed"] == 521
+    assert elapsed < 3.0
+    assert pcts and pcts[-1] == 100
+    assert any(10 < p < 95 for p in pcts)

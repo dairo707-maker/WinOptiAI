@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Callable
 
 from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -31,7 +33,7 @@ from PySide6.QtWidgets import (
 from ...core.i18n import tr
 from ...core.safety_guard import PreOpBackupManager, QuarantineVault
 from ...core.sre_policy import SREPolicyEngine
-from ...core.win32_bridge import reveal_in_explorer
+from ...core.win32_bridge import is_user_admin, reveal_in_explorer, run_elevated_command
 from ...storage.duplicate_finder import (
     DuplicateGroup,
     deduplicate_group_via_hardlink,
@@ -866,6 +868,26 @@ class StorageView(QWidget):
             targets = [self.junk_targets[i] for i in idxs if i < len(self.junk_targets)]
             if not targets:
                 return
+            if any(t.requires_admin for t in targets) and not is_user_admin():
+                reply = QMessageBox.question(
+                    self,
+                    "Limpieza Profunda con Permisos Admin (UAC)",
+                    "Algunas rutas seleccionadas (Windows\\Temp, Minidump, WER) requieren permisos "
+                    "de Administrador para limpiarse a profundidad.\n\n"
+                    "Deseas relanzar WinOptiAI como Administrador ahora?\n"
+                    "(Pulsa 'No' para limpiar ahora mismo todas las carpetas de tu usuario.)",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    args = "" if getattr(sys, "frozen", False) else "-m winoptiai.app"
+                    if run_elevated_command(sys.executable, args):
+                        win = self.window()
+                        if win is not None and hasattr(win, "_quit_app"):
+                            win._quit_app()
+                        else:
+                            QApplication.quit()
+                    return
             self.secondary_btn.setEnabled(False)
 
             def _clean(progress_cb=None) -> dict[str, int]:

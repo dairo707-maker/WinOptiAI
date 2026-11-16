@@ -47,7 +47,7 @@ class AsyncTask(QRunnable):
 
     def eta_label(self) -> str:
         """Return realistic remaining time estimate once task progresses past initialization."""
-        if self.percent <= 6 or self.percent >= 100:
+        if self.percent <= 5 or self.percent >= 100:
             return ""
         elapsed = time.monotonic() - self.started_monotonic
         if elapsed < 1.2:
