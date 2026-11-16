@@ -44,6 +44,7 @@ class AboutUpdaterDialog(QDialog):
         hardware_summary: str,
         active_tasks_fn: Callable[[], list[AsyncTask]] | None = None,
         parent: QWidget | None = None,
+        on_open_diagnostics: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.lang = lang
@@ -121,6 +122,14 @@ class AboutUpdaterDialog(QDialog):
         repo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         repo_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_WEB_URL)))
         actions.addWidget(repo_btn)
+
+        if on_open_diagnostics is not None:
+            diag_btn = QPushButton("Diagnostico")
+            diag_btn.setObjectName("GhostAction")
+            diag_btn.setToolTip("Ver o copiar crash.log y cierres inesperados detectados")
+            diag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            diag_btn.clicked.connect(on_open_diagnostics)
+            actions.addWidget(diag_btn)
 
         actions.addStretch()
         self.check_btn = QPushButton(tr("about_check_updates", lang))

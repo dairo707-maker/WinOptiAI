@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -23,7 +23,9 @@ from ...core.sre_policy import SREPolicyEngine
 from ...core.telemetry import LiveSystemTelemetry, probe_elevated_temperatures
 from ...core.win32_bridge import reveal_in_explorer
 from ...thermal_bios.bios_auditor import (
+    SERVICING_ACTIONS,
     HardwareAuditReport,
+    detect_active_servicing_processes,
     execute_audit_action,
     run_hardware_bios_audit,
 )
@@ -34,6 +36,12 @@ from ...thermal_bios.thermal_controller import (
 )
 from ..svg_icons import load_svg_icon
 from ..widgets import GlassPanel, StatusTag, configure_sortable_table
+
+
+# Acciones que lanzan una consola PowerShell elevada desacoplada (seguimiento informativo).
+DETACHED_CONSOLE_ACTIONS: frozenset[str] = frozenset(
+    {"run_chkdsk_scan", "run_sfc_dism", "run_winsxs_cleanup", "optimize_defrag", "optimize_trim"}
+)
 
 
 class ThermalBiosView(QWidget):
@@ -60,6 +68,9 @@ class ThermalBiosView(QWidget):
         self.lang = lang
         self.profile_buttons: dict[str, QPushButton] = {}
         self.last_report: HardwareAuditReport | None = None
+        # v0.5.1: acciones en curso (evita doble clic) y re-render diferido pendiente
+        self._running_actions: set[str] = set()
+        self._render_pending = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
@@ -255,8 +266,7 @@ class ThermalBiosView(QWidget):
 
     def _on_reset_pending(self) -> None:
         self.policy.reset_completed_audits()
-        if self.last_report:
-            self._render_recommendations(self.last_report)
+        self._schedule_render_recommendations()
         self.notify_cb("Pendientes de auditoria restablecidos.")
 
     def refresh_audit(self) -> None:
@@ -269,9 +279,31 @@ class ThermalBiosView(QWidget):
         )
 
     def _run_recommendation(self, item: dict[str, str]) -> None:
+        """Slot of a cell-widget button: never rebuild the table synchronously from here.
+
+        v0.5.1 (fix 0xc0000005 en shiboken6): el boton emisor vive dentro de ``rec_table``.
+        Reconstruir la tabla (``setRowCount``/``setCellWidget``) mientras su senal
+        ``clicked`` sigue en la pila de Qt destruia el ``QPushButton`` en C++ y provocaba
+        un acceso a memoria liberada. Ahora el respaldo + la accion corren en
+        ``run_async`` (sin bloquear el event loop durante UAC/PowerShell) y el re-render
+        se difiere con ``QTimer.singleShot(0, ...)``.
+        """
         action_id = item.get("action_id", "")
         area = item.get("area", "Auditoria")
         reinicio = item.get("reinicio", "NO")
+
+        if action_id in self._running_actions:
+            self.notify_cb(f"La accion '{area}' ya esta en curso.")
+            return
+
+        if action_id in SERVICING_ACTIONS:
+            active = detect_active_servicing_processes()
+            if active:
+                self.notify_cb(
+                    f"Ya hay una operacion de servicio de Windows en curso ({', '.join(active)}). "
+                    f"Espere a que termine antes de lanzar '{area}' para no encolar DISM/SFC/WinSxS."
+                )
+                return
 
         if action_id == "open_uefi_bios":
             reply = QMessageBox.question(
@@ -286,15 +318,37 @@ class ThermalBiosView(QWidget):
                 self.notify_cb("Reinicio a UEFI cancelado por el usuario.")
                 return
 
-        # Mandatory pre-operation backup before applying system changes
-        bdir = self.backup_mgr.backup_power_scheme(f"audit_{action_id}")
+        self._running_actions.add(action_id)
+        self.notify_cb(f"Ejecutando '{area}' en segundo plano (respaldo previo + accion)...")
+        backup_mgr = self.backup_mgr
+
+        def _work() -> tuple[bool, str, str]:
+            # Worker thread: solo subprocess/ShellExecuteW y escritura en la carpeta Backups propia.
+            # Mandatory pre-operation backup before applying system changes
+            bdir = backup_mgr.backup_power_scheme(f"audit_{action_id}")
+            ok, msg = execute_audit_action(action_id)
+            return ok, msg, (bdir.name if bdir else "Backups")
+
+        def _done(res: tuple[bool, str, str]) -> None:
+            self._on_recommendation_done(action_id, area, reinicio, res)
+
+        def _failed(err: str) -> None:
+            self._running_actions.discard(action_id)
+            self.notify_cb(f"No se pudo ejecutar '{area}': {err}")
+
+        self.run_async(_work, _done, f"Auditoria: {area}", notify_on_complete=False, on_error=_failed)
+
+    def _on_recommendation_done(
+        self, action_id: str, area: str, reinicio: str, res: tuple[bool, str, str]
+    ) -> None:
+        """Main-thread completion: config/audit writes stay on the UI thread (thread-safe)."""
+        self._running_actions.discard(action_id)
+        ok, msg, bdir_name = res
         self.policy.record_audit_event(
             "backup",
             f"Respaldo previo ({area})",
-            f"Copia de seguridad guardada en {bdir.name if bdir else 'Backups'}",
+            f"Copia de seguridad guardada en {bdir_name}",
         )
-
-        ok, msg = execute_audit_action(action_id)
         if ok:
             if action_id == "apply_cool_profile":
                 self.policy.config.active_thermal_profile = "cool"
@@ -311,10 +365,28 @@ class ThermalBiosView(QWidget):
                 msg,
             )
             self.audit_log_updated.emit()
-            if self.last_report:
-                self._render_recommendations(self.last_report)
+            self._schedule_render_recommendations()
 
-        self.notify_cb(f"{msg} | Reinicio: {reinicio}")
+        detached = ok and action_id in DETACHED_CONSOLE_ACTIONS
+        suffix = (
+            " | Consola elevada independiente en curso: WinOptiAI sigue disponible; "
+            "revise y cierre esa ventana al terminar."
+            if detached
+            else ""
+        )
+        self.notify_cb(f"{msg} | Reinicio: {reinicio}{suffix}")
+
+    def _schedule_render_recommendations(self) -> None:
+        """Coalesce and defer table rebuilds until the current event's call-stack unwinds."""
+        if self._render_pending:
+            return
+        self._render_pending = True
+        QTimer.singleShot(0, self._deferred_render_recommendations)
+
+    def _deferred_render_recommendations(self) -> None:
+        self._render_pending = False
+        if self.last_report is not None:
+            self._render_recommendations(self.last_report)
 
     def _on_audit_ready(self, report: HardwareAuditReport) -> None:
         self.audit_btn.setEnabled(True)
@@ -333,6 +405,7 @@ class ThermalBiosView(QWidget):
         pending = [r for r in report.recommendations if r.get("action_id", "") not in completed]
 
         self.rec_table.setSortingEnabled(False)
+        self._release_cell_widgets()
         self.rec_table.setRowCount(len(pending))
         for r, item in enumerate(pending):
             self.rec_table.setItem(r, 0, QTableWidgetItem(item["area"]))
@@ -344,7 +417,27 @@ class ThermalBiosView(QWidget):
             btn = QPushButton(action_label)
             btn.setObjectName("GhostAction")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setEnabled(item.get("action_id", "") not in self._running_actions)
             btn.clicked.connect(lambda _=False, rec=dict(item): self._run_recommendation(rec))
             self.rec_table.setCellWidget(r, 4, btn)
         self.rec_table.setSortingEnabled(True)
         self.rec_table.resizeRowsToContents()
+
+    def _release_cell_widgets(self) -> None:
+        """Detach old action buttons safely: disconnect, hide and deleteLater (never immediate delete).
+
+        Se desconecta la senal (sin lambdas colgantes hacia filas ya inexistentes), se oculta
+        y se retira con ``removeCellWidget`` (que internamente usa ``deleteLater``), de modo
+        que ningun ``QPushButton`` se destruye mientras una emision siga en la pila.
+        """
+        col = 4
+        for r in range(self.rec_table.rowCount()):
+            w = self.rec_table.cellWidget(r, col)
+            if w is None:
+                continue
+            try:
+                w.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            w.hide()
+            self.rec_table.removeCellWidget(r, col)

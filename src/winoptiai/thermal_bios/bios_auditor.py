@@ -504,6 +504,28 @@ def run_nvme_trim_analysis() -> tuple[bool, str]:
     return False, "Autorizacion UAC cancelada por el usuario."
 
 
+# v0.5.1: acciones de servicio de imagen que no deben encolarse si ya hay una en curso.
+SERVICING_ACTIONS: frozenset[str] = frozenset({"run_sfc_dism", "run_winsxs_cleanup"})
+SERVICING_PROCESS_NAMES: frozenset[str] = frozenset({"dism.exe", "dismhost.exe", "sfc.exe"})
+
+
+def detect_active_servicing_processes() -> list[str]:
+    """Return names of running DISM/SFC processes (read-only, names visible without admin)."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+    found: set[str] = set()
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+        except Exception:  # noqa: BLE001
+            continue
+        if name in SERVICING_PROCESS_NAMES:
+            found.add(name)
+    return sorted(found)
+
+
 def execute_audit_action(action_id: str) -> tuple[bool, str]:
     """Launch an automated remediation directly from an Audit table recommendation."""
     if action_id == "apply_cool_profile":

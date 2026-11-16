@@ -391,6 +391,14 @@ def run_elevated_command(executable: str, arguments: str) -> bool:
         "_PYI_SPLASH_IPC",
     )
     saved = {k: os.environ.pop(k) for k in pyi_keys if k in os.environ}
+    # v0.5.1: ShellExecuteW puede invocarse desde un hilo QThreadPool (acciones de auditoria
+    # sin bloquear la UI durante UAC). Microsoft exige COM inicializado (STA) en ese hilo.
+    com_initialized = False
+    try:
+        hr = ctypes.windll.ole32.CoInitializeEx(None, 0x2 | 0x4)  # APARTMENTTHREADED | DISABLE_OLE1DDE
+        com_initialized = hr in (0, 1)  # S_OK / S_FALSE -> requiere CoUninitialize balanceado
+    except (AttributeError, OSError):
+        com_initialized = False
     try:
         rc = ctypes.windll.shell32.ShellExecuteW(
             None,
@@ -402,6 +410,11 @@ def run_elevated_command(executable: str, arguments: str) -> bool:
         )
         return int(rc) > 32
     finally:
+        if com_initialized:
+            try:
+                ctypes.windll.ole32.CoUninitialize()
+            except (AttributeError, OSError):
+                pass
         os.environ.update(saved)
 
 

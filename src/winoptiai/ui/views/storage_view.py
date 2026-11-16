@@ -11,6 +11,7 @@ from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -67,6 +68,9 @@ from ..widgets import (
     configure_sortable_table,
 )
 
+
+# v0.5.1: sub-modos cuya tabla principal admite seleccion multiple con "Seleccionar todo"
+SELECTABLE_TABLE_MODES: frozenset[str] = frozenset({"junk", "duplicates", "orphans", "quarantine", "onedrive"})
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".ico"}
 TEXT_EXTS = {".txt", ".md", ".py", ".json", ".csv", ".log", ".yaml", ".yml", ".xml", ".ini", ".iss"}
@@ -165,6 +169,18 @@ class StorageView(QWidget):
         self.tertiary_btn.clicked.connect(self._on_tertiary_action)
         self.tertiary_btn.setVisible(False)
         actions_bar.addWidget(self.tertiary_btn)
+
+        # v0.5.1: casilla tri-estado "Seleccionar todo" + conteo/tamano de la seleccion activa
+        self.select_all_chk = QCheckBox(tr("select_all", lang))
+        self.select_all_chk.setObjectName("SelectAllCheck")
+        self.select_all_chk.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.select_all_chk.setToolTip("Seleccionar o deseleccionar todas las filas visibles de la tabla")
+        self.select_all_chk.clicked.connect(self._on_select_all_clicked)
+        actions_bar.addWidget(self.select_all_chk)
+
+        self.selection_lbl = QLabel("")
+        self.selection_lbl.setObjectName("MonoValue")
+        actions_bar.addWidget(self.selection_lbl)
 
         actions_bar.addStretch()
 
@@ -274,6 +290,10 @@ class StorageView(QWidget):
         configure_sortable_table(self.table)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        tmodel = self.table.model()
+        tmodel.rowsInserted.connect(lambda *_a: self._sync_select_all_state())
+        tmodel.rowsRemoved.connect(lambda *_a: self._sync_select_all_state())
+        tmodel.modelReset.connect(self._sync_select_all_state)
         self.table.cellDoubleClicked.connect(lambda _r, _c: self._reveal_selected_item())
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(lambda pos: self._show_explorer_menu(self.table, pos))
@@ -373,10 +393,85 @@ class StorageView(QWidget):
             ("onedrive", "mode_onedrive"),
         ):
             self.mode_buttons[key].setText(tr(k_tr, lang))
+        self.select_all_chk.setText(tr("select_all", lang))
+        self._sync_select_all_state()
 
     def _on_selection_changed(self) -> None:
         self._update_explorer_tooltip()
         self._preview_selected_group()
+        self._sync_select_all_state()
+
+    # ------------------------------------------------------------------ Seleccionar todo (v0.5.1)
+    def _selected_row_set(self) -> set[int]:
+        model = self.table.selectionModel()
+        if model is None:
+            return set()
+        return {idx.row() for idx in model.selectedRows()}
+
+    def _visible_row_count(self) -> int:
+        return sum(1 for r in range(self.table.rowCount()) if not self.table.isRowHidden(r))
+
+    def _size_column(self) -> int:
+        # junk: RECUPERABLE (col 3); resto: DESPERDICIO / TAMANO (col 2)
+        return 3 if self.mode == "junk" else 2
+
+    def _selected_bytes(self, rows: set[int]) -> int:
+        col = self._size_column()
+        total = 0
+        for r in rows:
+            it = self.table.item(r, col)
+            if it is None:
+                continue
+            val = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(val, (int, float)):
+                total += int(val)
+        return total
+
+    def _on_select_all_clicked(self, _checked: bool = False) -> None:
+        """Select or clear every visible row; deletion still flows through Quarantine/safety_guard."""
+        if self.mode not in SELECTABLE_TABLE_MODES:
+            self._sync_select_all_state()
+            return
+        visible = self._visible_row_count()
+        if visible == 0:
+            self._sync_select_all_state()
+            return
+        selected = {r for r in self._selected_row_set() if not self.table.isRowHidden(r)}
+        if len(selected) >= visible:
+            self.table.clearSelection()
+        else:
+            self.table.selectAll()
+        self._sync_select_all_state()
+
+    def _sync_select_all_state(self) -> None:
+        """Reflect manual selection as Checked / PartiallyChecked / Unchecked without re-emitting."""
+        if not hasattr(self, "select_all_chk"):
+            return
+        applicable = self.mode in SELECTABLE_TABLE_MODES
+        self.select_all_chk.setVisible(applicable)
+        self.selection_lbl.setVisible(applicable)
+        if not applicable:
+            return
+        visible = self._visible_row_count()
+        rows = {r for r in self._selected_row_set() if not self.table.isRowHidden(r)}
+        n = len(rows)
+        if visible == 0 or n == 0:
+            state = Qt.CheckState.Unchecked
+        elif n >= visible:
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self.select_all_chk.blockSignals(True)
+        self.select_all_chk.setTristate(state == Qt.CheckState.PartiallyChecked)
+        self.select_all_chk.setCheckState(state)
+        self.select_all_chk.blockSignals(False)
+        self.select_all_chk.setEnabled(visible > 0)
+        if visible == 0:
+            self.selection_lbl.setText("")
+        else:
+            self.selection_lbl.setText(
+                tr("selected_count", self.lang).format(n=n, total=visible, size=format_bytes(self._selected_bytes(rows)))
+            )
 
     def _update_explorer_tooltip(self) -> None:
         target = self._get_selected_explorer_path()
@@ -432,6 +527,7 @@ class StorageView(QWidget):
             self.secondary_btn.setText("Restaurar Seleccionado")
             self._configure_columns(["FECHA", "CATEGORIA", "TAMANO", "RUTA ORIGINAL"])
             self._render_quarantine()
+        self._sync_select_all_state()
 
     def _configure_columns(self, headers: list[str]) -> None:
         self.table.setColumnCount(len(headers))

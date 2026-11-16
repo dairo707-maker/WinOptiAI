@@ -2,6 +2,28 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.1] - 2026-11-16
+
+### Corregido (P0)
+- **Crash nativo `0xc0000005` en `shiboken6.abi3.dll` al usar "Acciones Automaticas" (`thermal_bios_view.py`):**
+  - El slot `clicked` de un `QPushButton` incrustado con `setCellWidget` reconstruia sincronamente la tabla (`setRowCount`), y `backup_power_scheme()` + `execute_audit_action()` (UAC / `ShellExecuteW` / PowerShell) se ejecutaban en el hilo UI, bombeando mensajes de forma reentrante dentro del slot.
+  - Ahora respaldo + accion corren en `run_async` (QThreadPool); las escrituras de configuracion y `audit.jsonl` quedan en el hilo UI; el re-render se difiere y agrupa con `QTimer.singleShot(0, ...)`; los botones viejos se desconectan y retiran con `removeCellWidget` (`deleteLater`); doble clic ignorado mientras la accion esta en curso.
+  - Aviso explicito cuando `CHKDSK` / `DISM` / `SFC` / WinSxS / Defrag / TRIM siguen corriendo en una consola elevada desacoplada.
+  - `detect_active_servicing_processes()` (`bios_auditor.py`): si ya hay un `Dism.exe` / `DismHost.exe` / `sfc.exe` activo, WinOptiAI no encola otra accion `DISM + SFC` ni `WinSxS` y lo indica al usuario.
+- **Blindaje general (`main_window.py`, `notifications_drawer.py`, `win32_bridge.py`):**
+  - Senales de `AsyncTask` conectadas con `Qt.QueuedConnection` explicita y workers finalizados retenidos un ciclo del event loop antes de liberarse.
+  - Re-renders del cajon de notificaciones disparados desde botones hijos diferidos con `QTimer.singleShot(0, ...)`; widgets retirados con `hide()` + `deleteLater()`.
+  - `run_elevated_command()` inicializa COM (STA) en el hilo llamador, requisito de `ShellExecuteW` fuera del hilo principal.
+
+### Agregado
+- **Detector de cierres inesperados y telemetria post-mortem local (`core/crash_guard.py`, `app.py`, `main_window.py`, `dialogs/crash_report_dialog.py`):**
+  - `faulthandler` (todos los hilos) + `sys.excepthook` + `threading.excepthook` + `qInstallMessageHandler` escriben en `%LOCALAPPDATA%\WinOptiAI\crash.log` (rotacion a 1 MB) con fecha, version, traceback y ultimos eventos.
+  - Marcador `session_lock.json` (PID, version, inicio, latido 60 s, `clean_exit`) marcado limpio en `closeEvent`, salida desde bandeja y `aboutToQuit`.
+  - Si la sesion previa no cerro limpiamente: evento en `audit.jsonl`, notificacion `ERROR` prioritaria en la campanita, consulta de solo lectura de eventos `APPCRASH` (ID 1000) de `WinOptiAI.exe` y boton `Diagnostico` en Notificaciones y Acerca de para ver, abrir o copiar el informe. Sin envio a servicios externos.
+- **Casilla tri-estado "Seleccionar todo" en Almacenamiento (`storage_view.py`, `i18n.py`, `theme.py`):**
+  - Disponible en `Temporales`, `Duplicados`, `Huerfanos`, `Cuarentena` y `OneDrive`; oculta en `Arbol y Formatos`; sincronizada con la seleccion manual y el cambio de sub-modo; muestra `N de M seleccionados | tamano`.
+  - El borrado sigue pasando por `QuarantineVault` / `safety_guard.py` sin cambios.
+
 ## [0.5.0] - 2026-11-16
 
 ### Agregado y Mejorado (Auditoria Experta v0.5.0)

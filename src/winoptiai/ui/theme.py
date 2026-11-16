@@ -347,6 +347,19 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border-color: {p["primary_bg"]};
     }}
 
+    QCheckBox::indicator:indeterminate {{
+        background-color: {p["border_strong"]};
+        border-color: {p["primary_bg"]};
+    }}
+
+    QCheckBox::indicator {{
+        border-radius: 0px;
+    }}
+
+    QCheckBox:disabled {{
+        color: {p["text_secondary"]};
+    }}
+
     QScrollBar:vertical {{
         background: transparent;
         width: 8px;

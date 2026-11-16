@@ -25,6 +25,7 @@ from ..ai_optimizer.process_manager import (
     get_memory_snapshot,
     run_ai_boost,
 )
+from ..core.crash_guard import CrashGuard
 from ..core.i18n import tr
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
@@ -35,6 +36,7 @@ from ..core.win32_bridge import apply_window_theme, is_user_admin, run_elevated_
 from ..storage.junk_scanner import resume_junk_session, scan_junk_targets
 from ..thermal_bios.thermal_controller import THERMAL_PROFILES, apply_thermal_profile
 from .dialogs.about_updater_dialog import AboutUpdaterDialog
+from .dialogs.crash_report_dialog import CrashReportDialog
 from .dialogs.notifications_drawer import NotificationsTasksDialog
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .system_tray import WinOptiTray
@@ -54,8 +56,9 @@ MIN_RAM_FOR_NEW_TASK_GB = 1.0
 class MainWindow(QMainWindow):
     """Primary desktop shell with RAM-aware concurrent jobs, Bell drawer, and periodic advisor."""
 
-    def __init__(self) -> None:
+    def __init__(self, crash_guard: CrashGuard | None = None) -> None:
         super().__init__()
+        self.crash_guard = crash_guard
         self.setWindowTitle(f"WinOptiAI {__version__}")
         self.resize(1200, 760)
         self.setMinimumSize(980, 650)
@@ -64,6 +67,9 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.pool.setMaxThreadCount(max(4, self.pool.maxThreadCount()))
         self._active_workers: list[AsyncTask] = []
+        # v0.5.1: workers finalizados se retienen hasta el siguiente ciclo del event loop para
+        # que su QObject de senales no se libere mientras su propia emision sigue en la pila.
+        self._retired_workers: list[AsyncTask] = []
         self._notif_dialog: NotificationsTasksDialog | None = None
 
         self.vault = QuarantineVault()
@@ -306,6 +312,12 @@ class MainWindow(QMainWindow):
         self.advisor_timer.timeout.connect(self._run_periodic_advisor)
         self.advisor_timer.start(900_000)
 
+        # v0.5.1: latido del marcador de sesion (solo si el crash guard esta activo)
+        self.heartbeat_timer = QTimer(self)
+        if self.crash_guard is not None:
+            self.heartbeat_timer.timeout.connect(self.crash_guard.heartbeat)
+            self.heartbeat_timer.start(60_000)
+
         QTimer.singleShot(80, self._phase2_warmup)
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -320,9 +332,15 @@ class MainWindow(QMainWindow):
             return
         self.telemetry_timer.stop()
         self.advisor_timer.stop()
+        self.heartbeat_timer.stop()
         self.tray.hide()
         self.pool.waitForDone(3000)
+        self._mark_clean_exit()
         event.accept()
+
+    def _mark_clean_exit(self) -> None:
+        if self.crash_guard is not None:
+            self.crash_guard.mark_clean_exit()
 
     def _restore_from_tray(self) -> None:
         self.telemetry_timer.setInterval(2000)
@@ -332,9 +350,15 @@ class MainWindow(QMainWindow):
 
     def _quit_app(self) -> None:
         self._force_quit = True
+        self._mark_clean_exit()
         QApplication.quit()
 
+    def _breadcrumb(self, message: str) -> None:
+        if self.crash_guard is not None:
+            self.crash_guard.breadcrumb(message)
+
     def _switch_tab(self, index: int) -> None:
+        self._breadcrumb(f"Vista {index}")
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setProperty("active", i == index)
@@ -376,6 +400,7 @@ class MainWindow(QMainWindow):
                 on_resume_session=self._resume_saved_session,
                 on_sync_tasks=self._sync_active_task_indicators,
                 parent=self,
+                on_open_diagnostics=self._open_crash_diagnostics if self.crash_guard is not None else None,
             )
         self._notif_dialog.theme_mode = self.policy.config.theme_mode
         self._notif_dialog.refresh()
@@ -467,8 +492,46 @@ class MainWindow(QMainWindow):
             hardware_summary=hw_summary,
             active_tasks_fn=lambda: list(self._active_workers),
             parent=self,
+            on_open_diagnostics=self._open_crash_diagnostics if self.crash_guard is not None else None,
         )
         dlg.exec()
+
+    def _open_crash_diagnostics(self) -> None:
+        if self.crash_guard is None:
+            return
+        dlg = CrashReportDialog(self.crash_guard, parent=self)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _report_previous_dirty_exit(self) -> None:
+        """Notificar (campanita + audit.jsonl) si la sesion previa termino abruptamente."""
+        guard = self.crash_guard
+        if guard is None or guard.previous_session is None or not guard.previous_session.dirty:
+            return
+        prev = guard.previous_session
+        detail = (
+            f"{prev.summary()} Diagnostico guardado en {guard.crash_log_path}. "
+            "Abra Notificaciones > Diagnostico o Acerca de > Diagnostico para verlo o copiarlo."
+        )
+        self.policy.record_audit_event("crash_guard", "Cierre inesperado detectado", prev.summary())
+        self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+        self._notify_user("ERROR", "Cierre inesperado en la sesion anterior", detail, tray_toast=True)
+
+        def _query_events() -> list[str]:
+            return guard.query_recent_appcrash_events(max_events=3)
+
+        def _on_events(entries: list[str]) -> None:
+            prev.event_log_entries = list(entries)
+            if entries:
+                self.policy.record_audit_event(
+                    "crash_guard", "Visor de eventos APPCRASH", " || ".join(entries)[:600]
+                )
+                self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+                guard.write_log_block("EVENTOS APPCRASH (Application, ID 1000)", "\n".join(entries))
+
+        self._run_async(_query_events, _on_events, "Consulta Visor de eventos", notify_on_complete=False)
 
     def _on_elevated_temps(self, cpu_c: float | None, nvme_c: float | None) -> None:
         self.telemetry_reader.set_elevated_temps(cpu_c, nvme_c)
@@ -598,6 +661,7 @@ class MainWindow(QMainWindow):
 
         worker = AsyncTask(task_label, fn)
         self._active_workers.append(worker)
+        self._breadcrumb(f"Tarea iniciada: {task_label}")
         self._sync_active_task_indicators()
 
         def _on_progress(_tid: str, pct: int, stage: str) -> None:
@@ -609,7 +673,11 @@ class MainWindow(QMainWindow):
                     pass
 
         def _cleanup_common(tid: str) -> None:
+            finished = [w for w in self._active_workers if w.task_id == tid]
             self._active_workers[:] = [w for w in self._active_workers if w.task_id != tid]
+            if finished:
+                self._retired_workers.extend(finished)
+                QTimer.singleShot(0, self._release_retired_workers)
             self._sync_active_task_indicators()
 
         def _cleanup_and_emit(tid: str, result) -> None:
@@ -639,19 +707,27 @@ class MainWindow(QMainWindow):
 
         def _cleanup_on_err(tid: str, err: str) -> None:
             _cleanup_common(tid)
+            self._breadcrumb(f"Tarea con error: {task_label}: {err[:160]}")
             self._set_status(f"Aviso: {err}")
             self._notify_user("ERROR", task_label, err, tray_toast=True)
             if on_error is not None:
                 on_error(err)
 
-        worker.signals.progress.connect(_on_progress)
-        worker.signals.finished.connect(_cleanup_and_emit)
-        worker.signals.paused_saved.connect(_cleanup_on_paused_saved)
-        worker.signals.canceled.connect(_cleanup_on_canceled)
-        worker.signals.error.connect(_cleanup_on_err)
+        # Conexion en cola explicita: los callbacks tocan widgets y deben ejecutarse siempre
+        # en el hilo GUI, nunca en el hilo del QThreadPool que emite la senal.
+        queued = Qt.ConnectionType.QueuedConnection
+        worker.signals.progress.connect(_on_progress, queued)
+        worker.signals.finished.connect(_cleanup_and_emit, queued)
+        worker.signals.paused_saved.connect(_cleanup_on_paused_saved, queued)
+        worker.signals.canceled.connect(_cleanup_on_canceled, queued)
+        worker.signals.error.connect(_cleanup_on_err, queued)
         self.pool.start(worker)
 
+    def _release_retired_workers(self) -> None:
+        self._retired_workers.clear()
+
     def _phase2_warmup(self) -> None:
+        self._report_previous_dirty_exit()
         self._refresh_disk_stats()
         self._sample_telemetry()
         self._sync_active_task_indicators()

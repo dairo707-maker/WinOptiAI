@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -37,6 +37,7 @@ class NotificationsTasksDialog(QDialog):
         session_mgr: SessionManager | None = None,
         on_resume_session: Callable[[TaskSessionRecord], None] | None = None,
         on_sync_tasks: Callable[[], None] | None = None,
+        on_open_diagnostics: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.center = center
@@ -46,6 +47,7 @@ class NotificationsTasksDialog(QDialog):
         self.session_mgr = session_mgr
         self.on_resume_session = on_resume_session
         self.on_sync_tasks = on_sync_tasks
+        self.on_open_diagnostics = on_open_diagnostics
 
         self.setWindowTitle("Procesos Activos, Sesiones y Notificaciones")
         self.resize(610, 620)
@@ -99,6 +101,14 @@ class NotificationsTasksDialog(QDialog):
         mark_btn.clicked.connect(self._mark_all_read)
         n_hdr.addWidget(mark_btn)
 
+        if on_open_diagnostics is not None:
+            diag_btn = QPushButton("Diagnostico")
+            diag_btn.setObjectName("GhostAction")
+            diag_btn.setToolTip("Ver o copiar crash.log y cierres inesperados detectados")
+            diag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            diag_btn.clicked.connect(on_open_diagnostics)
+            n_hdr.addWidget(diag_btn)
+
         clear_btn = QPushButton("Limpiar todas")
         clear_btn.setObjectName("GhostAction")
         clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -119,11 +129,18 @@ class NotificationsTasksDialog(QDialog):
         self.refresh()
 
     def _clear_layout(self, layout: QVBoxLayout) -> None:
+        # v0.5.1: nunca destruir de inmediato; ocultar y deleteLater para que un boton
+        # hijo cuya senal sigue en la pila (clicked -> re-render) no sea liberado en C++.
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
                 w.deleteLater()
+
+    def _defer(self, fn: Callable[[], None]) -> None:
+        """Run a re-render after the emitting child button's slot has fully unwound."""
+        QTimer.singleShot(0, self, fn)
 
     def refresh(self) -> None:
         self._render_tasks()
@@ -135,19 +152,19 @@ class NotificationsTasksDialog(QDialog):
             task.controller.resume()
         else:
             task.controller.pause()
-        self._render_tasks()
+        self._defer(self._render_tasks)
         if self.on_sync_tasks is not None:
-            self.on_sync_tasks()
+            self._defer(self.on_sync_tasks)
 
     def _save_and_pause(self, task: AsyncTask) -> None:
         task.controller.pause_and_save()
         if self.on_sync_tasks is not None:
-            self.on_sync_tasks()
+            self._defer(self.on_sync_tasks)
 
     def _cancel_task(self, task: AsyncTask) -> None:
         task.controller.cancel()
         if self.on_sync_tasks is not None:
-            self.on_sync_tasks()
+            self._defer(self.on_sync_tasks)
 
     def _render_tasks(self) -> None:
         self._clear_layout(self.tasks_container)
@@ -242,14 +259,14 @@ class NotificationsTasksDialog(QDialog):
     def _resume_saved(self, rec: TaskSessionRecord) -> None:
         if self.on_resume_session is not None:
             self.on_resume_session(rec)
-            self.refresh()
+            self._defer(self.refresh)
 
     def _discard_saved(self, sid: str) -> None:
         if self.session_mgr is not None:
             self.session_mgr.remove_session(sid)
-        self._render_sessions()
+        self._defer(self._render_sessions)
         if self.on_sync_tasks is not None:
-            self.on_sync_tasks()
+            self._defer(self.on_sync_tasks)
 
     def _render_notifications(self) -> None:
         self._clear_layout(self.notif_layout)
@@ -315,12 +332,12 @@ class NotificationsTasksDialog(QDialog):
 
     def _delete_one(self, notif_id: str) -> None:
         self.center.remove(notif_id)
-        self._render_notifications()
+        self._defer(self._render_notifications)
 
     def _mark_all_read(self) -> None:
         self.center.mark_all_read()
-        self._render_notifications()
+        self._defer(self._render_notifications)
 
     def _clear_all(self) -> None:
         self.center.clear_all()
-        self._render_notifications()
+        self._defer(self._render_notifications)
