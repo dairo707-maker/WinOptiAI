@@ -1,0 +1,3 @@
+WinOptiAI v0.4.2 verified: 28/28 pytest passed (24.64s); PortableV042Alive=True; bulk >400 temp cleanup skips RM RPC hang using atomic NTFS WinError32 + file-count weighted % + 1-click UAC elevation prompt.
+0f63cf0794817bdcf9edcd1b7fea9682d90fd6c7f37d53123761244f66618d3e  WinOptiAI-Portable.exe
+42083252c5063b044fed01d83ec93c409f7f5fca124229dec18637f4a53454a8  WinOptiAI-Setup.exe
