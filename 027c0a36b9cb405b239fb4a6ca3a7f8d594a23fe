@@ -1,0 +1,1 @@
+Contexto actualizado a v0.5.3 (commit base 422adcf): mapa completo de modulos, invariantes PySide6/shiboken6 (__lt__ sin super, QTimer.singleShot(0), COM STA), OneDrive PKCE+DPAPI, TaskController/SessionManager, CrashGuard/CrashReporter y comandos uv --no-sync. Verificado: uv run --no-sync pytest -v -> 69 passed.
