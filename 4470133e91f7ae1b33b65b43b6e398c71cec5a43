@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 119 passed (13 nuevas en test_v059_safe_quarantine). Restauracion real (PowerShell, sin Python): 164.096 restaurados, 176 conflictos (original recreado), 1 acceso denegado (ProgramData Lenovo). Python 3.13, Anaconda, uv 3.10 y uv 3.11+PySide6 verificados tras restaurar. Auditoria visual oscuro/claro: 0 recortes.
