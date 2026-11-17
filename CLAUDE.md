@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.4`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -36,7 +36,7 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
 - **Proteccion de Archivos y Bloqueos:** en directorios pequeños se verifica `Rstrtmgr.dll` (`get_locking_processes`); para temporales masivos (`> 400` archivos) `junk_scanner.py` evita sesiones RPC lentas delegando la proteccion al kernel NTFS (`os.replace` / `WinError 32`). Re-verificar tamano + hash BLAKE3 justo antes de crear hardlinks NTFS.
 - **NUNCA** tocar `PROTECTED_PATH_PREFIXES` ni procesos criticos (`PROTECTED_PROCESS_NAMES`, `get_foreground_pid()`, `os.getpid()` y `AI_FOREGROUND_AGENTS`).
 - **Cuarentena y Rollback (`safety_guard.py`):** toda depuracion usa `QuarantineVault` transaccional (`manifest.json` escrito con `atomic_write_text`), `PreOpBackupManager`, y auto-purga al arranque solo de lotes `Basura:*` mayores a 30 dias. La purga usa `force_remove_tree` (quita solo-lectura, rutas largas `\\?\`), conserva el registro con el tamano restante si algo queda bloqueado y lo informa; "Vaciar todo" limpia tambien restos de `items/` sin registro (`list_orphan_entries`).
-- **OneDrive Nube:** requiere un registro de aplicacion propio en Microsoft Entra ID (Client ID, cliente publico, redirect `http://localhost`, permisos delegados `User.Read Files.ReadWrite offline_access`). Cuentas de la Fundacion pueden requerir consentimiento del administrador del tenant.
+- **OneDrive Nube:** requiere un registro de aplicacion propio en Microsoft Entra ID (Client ID, cliente publico, redirect `http://localhost` exacto (la app envia `http://localhost:<puerto>` sin ruta; Entra ignora el puerto pero no la ruta, ver AADSTS50011 en `v0.5.5`), permisos delegados `User.Read Files.ReadWrite offline_access`). Cuentas de la Fundacion pueden requerir consentimiento del administrador del tenant.
 - **Auditorias Hardware, S.M.A.R.T. y CBS (`bios_auditor.py`, `thermal_controller.py`):** nunca modificar NVRAM/SPI directamente; verificar cambios `powercfg` por lectura (`/q`); detectar procesos activos `Dism.exe`/`sfc.exe` para no encimar sesiones CBS concurrentes.
 - **Crash Guard y Reporte Anonimizado (`crash_guard.py`, `crash_reporter.py`):** `faulthandler` (todos los hilos) + `excepthooks` + vigilante de bloqueos GUI (8 s) hacia `%LOCALAPPDATA%\WinOptiAI\crash.log`, `session_lock.json`, `RegisterApplicationRestart` y consulta `wevtutil` decodificada en ANSI (`mbcs`). Todo envio a GitHub Issues es opcional y anonimizado bajo revision del usuario.
 
@@ -59,7 +59,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.4`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.5`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

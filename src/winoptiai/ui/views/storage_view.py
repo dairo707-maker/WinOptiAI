@@ -1593,8 +1593,9 @@ class StorageView(QWidget):
         guide = QLabel(
             "Para explorar duplicados y cuota directo en Microsoft Graph (sin descargar archivos):\n"
             "1. En portal.azure.com -> Microsoft Entra ID -> Registros de aplicaciones -> Nuevo registro.\n"
-            "2. Plataforma: Aplicacion movil y de escritorio -> Redirect URI: http://localhost\n"
-            "3. Permisos API (Microsoft Graph Delegado): User.Read y Files.ReadWrite.\n"
+            "2. Plataforma: Aplicacion movil y de escritorio -> Redirect URI: http://localhost "
+            "(exactamente asi, sin puerto ni ruta).\n"
+            "3. Permisos API (Microsoft Graph Delegado): User.Read, Files.ReadWrite y offline_access.\n"
             "Nota: Tus tokens se cifran en disco con Windows DPAPI. El modo Local no requiere Client ID."
         )
         guide.setObjectName("PageSubtitle")

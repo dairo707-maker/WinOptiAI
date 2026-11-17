@@ -424,7 +424,10 @@ def start_oauth_pkce_login(
 
     server = HTTPServer(("127.0.0.1", 0), _CallbackHandler)
     port = server.server_address[1]
-    redirect_uri = f"http://localhost:{port}/callback"
+    # v0.5.5: sin ruta "/callback". Entra ID ignora el puerto en http://localhost para apps de
+    # escritorio, pero SI compara la ruta: con "/callback" el registro "http://localhost" daba
+    # AADSTS50011. El servidor local acepta la respuesta en cualquier ruta (valida "state").
+    redirect_uri = f"http://localhost:{port}"
 
     serve_thread = threading.Thread(target=server.serve_forever, daemon=True)
     serve_thread.start()

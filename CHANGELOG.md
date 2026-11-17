@@ -2,6 +2,12 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.5] - 2026-11-16
+
+### Corregido
+- **OneDrive Nube: error `AADSTS50011` al iniciar sesion.** La app enviaba `http://localhost:<puerto>/callback` y Microsoft lo rechazaba si el registro tenia `http://localhost` (Entra ID ignora el puerto pero compara la ruta). Ahora usa `http://localhost:<puerto>`, que coincide con el registro indicado en la guia; la guia del dialogo lo aclara.
+- **Error al guardar notificaciones simultaneas:** dos avisos a la vez (p. ej. AI Boost automatico) compartian el archivo temporal `notifications.tmp` y el segundo fallaba con `FileNotFoundError`, mostrando el aviso de error. Cada escritura atomica usa ahora un temporal unico.
+
 ## [0.5.4] - 2026-11-16
 
 ### Agregado

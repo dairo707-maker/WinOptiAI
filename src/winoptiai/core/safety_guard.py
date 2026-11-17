@@ -100,16 +100,26 @@ PROTECTED_PROCESS_NAMES: frozenset[str] = frozenset(
 def atomic_write_text(path: Path, text: str, retries: int = 5) -> None:
     """Atomically replace a local JSON/config file with retry backoff against AV locks."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    # v0.5.5: temporal unico por escritura. Con un nombre fijo (notifications.tmp), dos
+    # escrituras simultaneas (p. ej. dos avisos de AI Boost) se pisaban y la segunda fallaba con
+    # FileNotFoundError al renombrar (crash.log 16/11 22:45).
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    for attempt in range(retries):
-        try:
-            tmp.replace(path)
-            return
-        except PermissionError:
-            if attempt == retries - 1:
-                raise
-            time.sleep(0.06 * (attempt + 1))
+    try:
+        for attempt in range(retries):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(0.06 * (attempt + 1))
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def default_app_data_dir() -> Path:
