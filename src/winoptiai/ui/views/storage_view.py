@@ -1213,9 +1213,9 @@ class StorageView(QWidget):
         # v0.5.4: al vaciar toda la boveda tambien se limpian restos sin registro (purgas
         # interrumpidas en versiones anteriores), que ocupaban espacio sin verse en la tabla.
         include_orphans = not rows
-        orphan_count = len(self.vault.list_orphan_entries()) if include_orphans else 0
-        if orphan_count:
-            scope_label += f" y {orphan_count} resto(s) sin registro"
+        confirmed_orphans = self.vault.list_orphan_entries() if include_orphans else []
+        if confirmed_orphans:
+            scope_label += f" y {len(confirmed_orphans)} resto(s) sin registro"
 
         reply = QMessageBox.question(
             self,
@@ -1231,7 +1231,11 @@ class StorageView(QWidget):
 
         def _purge(progress_cb=None) -> dict:
             return self.vault.purge_items(
-                item_ids, use_recycle_bin=False, progress_cb=progress_cb, include_orphans=include_orphans
+                item_ids,
+                use_recycle_bin=False,
+                progress_cb=progress_cb,
+                include_orphans=bool(confirmed_orphans),
+                orphan_paths=confirmed_orphans,
             )
 
         def _done(res: dict) -> None:

@@ -160,12 +160,40 @@ def test_purge_vault_with_readonly_files_and_orphans(tmp_path: Path) -> None:
     assert res["moved"] == 3
     orphan = vault.items_dir / "21cdda70d17f__strings.json"
     orphan.write_text("{}", encoding="utf-8")
+    assert vault.list_orphan_entries() == []  # recien creado: podria ser una cuarentena en curso
+    old = os.path.getmtime(orphan) - 3600
+    os.utime(orphan, (old, old))
     assert vault.list_orphan_entries() == [orphan]
 
     ids = [r.item_id for r in vault.list_items()]
     out = vault.purge_items(ids, include_orphans=True)
     assert out["purged"] == 1 and out["failed"] == 0 and out["orphans_removed"] == 1
     assert vault.list_items() == [] and list(vault.items_dir.iterdir()) == []
+
+
+def test_orphan_cleanup_fails_closed_on_corrupt_manifest(tmp_path: Path) -> None:
+    vault = QuarantineVault(root_dir=tmp_path / "app")
+    keep = vault.items_dir / "batch_real__datos"
+    keep.mkdir(parents=True)
+    (keep / "f.txt").write_text("valioso", encoding="utf-8")
+    old = os.path.getmtime(keep) - 3600
+    os.utime(keep, (old, old))
+    vault.manifest_path.write_text("{corrupto", encoding="utf-8")
+    assert vault.list_orphan_entries() == []
+    out = vault.purge_items([], include_orphans=True)
+    assert out["orphans_removed"] == 0 and (keep / "f.txt").exists()
+
+
+def test_purge_only_removes_user_confirmed_orphans(tmp_path: Path) -> None:
+    vault = QuarantineVault(root_dir=tmp_path / "app")
+    a = vault.items_dir / "resto_a"
+    b = vault.items_dir / "resto_b"
+    for p in (a, b):
+        p.mkdir(parents=True)
+        old = os.path.getmtime(p) - 3600
+        os.utime(p, (old, old))
+    out = vault.purge_items([], include_orphans=True, orphan_paths=[a])
+    assert out["orphans_removed"] == 1 and not a.exists() and b.exists()
 
 
 def test_purge_reports_blocked_files_and_keeps_record(tmp_path: Path, monkeypatch) -> None:

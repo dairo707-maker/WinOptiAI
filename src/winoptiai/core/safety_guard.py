@@ -163,6 +163,9 @@ def is_safe_to_touch_file(
     return True, "SEGURO"
 
 
+ORPHAN_MIN_AGE_SEC = 15 * 60  # v0.5.4: no tocar carpetas de cuarentena recien creadas
+
+
 def _long_path(path: Path | str) -> str:
     """Prefijo ``\\\\?\\`` en Windows para rutas de mas de 260 caracteres."""
     p = os.path.abspath(str(path))
@@ -625,21 +628,41 @@ class QuarantineVault:
             return False, "Registro no encontrado"
         return True, "Elemento depurado de la boveda"
 
-    def list_orphan_entries(self) -> list[Path]:
+    def _manifest_is_readable(self) -> bool:
+        """False si el manifiesto existe pero no se puede leer/parsear (fallar cerrado)."""
+        if not self.manifest_path.exists():
+            return True
+        try:
+            return isinstance(json.loads(self.manifest_path.read_text(encoding="utf-8")), list)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    def list_orphan_entries(self, min_age_sec: float = ORPHAN_MIN_AGE_SEC) -> list[Path]:
         """Restos dentro de ``items/`` sin registro en el manifiesto (purgas interrumpidas).
 
-        Solo se listan entradas propias de la boveda; nunca rutas fuera de ``items_dir``.
+        Falla cerrado: si el manifiesto no se puede leer no hay restos (nunca se trata la boveda
+        entera como basura). Se ignoran entradas modificadas hace menos de ``min_age_sec``: una
+        cuarentena en curso crea su carpeta antes de registrarla en el manifiesto.
         """
-        with self._lock:
-            records = self._load_manifest()
-        known = {os.path.normcase(os.path.abspath(str(r.get("vault_path") or ""))) for r in records}
+        now = time.time()
         out: list[Path] = []
-        try:
-            for entry in os.scandir(self.items_dir):
-                if os.path.normcase(os.path.abspath(entry.path)) not in known:
+        with self._lock:
+            if not self._manifest_is_readable():
+                return []
+            records = self._load_manifest()
+            known = {os.path.normcase(os.path.abspath(str(r.get("vault_path") or ""))) for r in records}
+            try:
+                for entry in os.scandir(self.items_dir):
+                    if os.path.normcase(os.path.abspath(entry.path)) in known:
+                        continue
+                    try:
+                        if now - entry.stat(follow_symlinks=False).st_mtime < min_age_sec:
+                            continue
+                    except OSError:
+                        continue
                     out.append(Path(entry.path))
-        except OSError:
-            pass
+            except OSError:
+                pass
         return out
 
     def purge_items(
@@ -648,6 +671,7 @@ class QuarantineVault:
         use_recycle_bin: bool = False,
         progress_cb: Callable[[int, str], None] | None = None,
         include_orphans: bool = False,
+        orphan_paths: list[Path] | None = None,
     ) -> dict[str, Any]:
         """Remove multiple Quarantine Vault entries efficiently in a single manifest save.
 
@@ -659,7 +683,12 @@ class QuarantineVault:
         with self._lock:
             records = self._load_manifest()
         targets = [r for r in records if r.get("item_id") in target_set]
-        orphans = self.list_orphan_entries() if include_orphans else []
+        orphans: list[Path] = []
+        if include_orphans:
+            # Solo los restos que el usuario confirmo y que siguen siendo restos ahora mismo.
+            current = {os.path.normcase(str(p)) for p in self.list_orphan_entries()}
+            candidates = orphan_paths if orphan_paths is not None else [Path(c) for c in current]
+            orphans = [p for p in candidates if os.path.normcase(str(p)) in current]
         result: dict[str, Any] = {
             "purged": 0,
             "freed_bytes": 0,
