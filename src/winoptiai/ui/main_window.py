@@ -676,6 +676,7 @@ class MainWindow(QMainWindow):
             f"Retomando: {session.title}",
             notify_on_complete=False,
             progress_ui_cb=lambda p, s: self.storage_view._progress_summary(p, s),
+            supports_save=True,
         )
 
     def _sync_active_task_indicators(self) -> None:
@@ -688,7 +689,8 @@ class MainWindow(QMainWindow):
 
         has_active = bool(self._active_workers)
         self.pause_top_btn.setVisible(has_active)
-        self.save_pause_top_btn.setVisible(has_active)
+        lead_can_save = has_active and bool(getattr(self._active_workers[0], "supports_save", False))
+        self.save_pause_top_btn.setVisible(lead_can_save)
         self.cancel_top_btn.setVisible(has_active)
 
         saved_sessions = self.session_mgr.list_sessions()
@@ -721,6 +723,7 @@ class MainWindow(QMainWindow):
         notify_on_complete: bool = True,
         progress_ui_cb=None,
         on_error=None,
+        supports_save: bool = False,
     ) -> None:
         # RAM-aware concurrency guardrail
         free_gb = get_memory_snapshot()["free_gb"]
@@ -743,6 +746,9 @@ class MainWindow(QMainWindow):
             return
 
         worker = AsyncTask(task_label, fn)
+        # v0.5.7: solo las tareas que guardan su punto exacto (limpieza de temporales) ofrecen
+        # "Guardar Pausa"; en las demas el boton no hacia nada y la tarea seguia corriendo.
+        worker.supports_save = supports_save
         self._active_workers.append(worker)
         self._breadcrumb(f"Tarea iniciada: {task_label}")
         self._sync_active_task_indicators()

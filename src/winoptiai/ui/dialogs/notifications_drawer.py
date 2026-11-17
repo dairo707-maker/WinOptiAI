@@ -211,11 +211,14 @@ class NotificationsTasksDialog(QDialog):
             pause_btn.clicked.connect(lambda _=False, t=task: self._toggle_pause(t))
             ctl.addWidget(pause_btn)
 
-            save_btn = QPushButton("Guardar Sesion")
-            save_btn.setObjectName("GhostAction")
-            save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            save_btn.clicked.connect(lambda _=False, t=task: self._save_and_pause(t))
-            ctl.addWidget(save_btn)
+            # v0.5.7: solo tareas con sesion retomable (limpieza de temporales).
+            if getattr(task, "supports_save", False):
+                save_btn = QPushButton("Guardar Sesion")
+                save_btn.setObjectName("GhostAction")
+                save_btn.setToolTip("Detiene la tarea en un punto seguro y la guarda para retomarla despues")
+                save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                save_btn.clicked.connect(lambda _=False, t=task: self._save_and_pause(t))
+                ctl.addWidget(save_btn)
 
             cancel_btn = QPushButton("Cancelar")
             cancel_btn.setObjectName("GhostAction")

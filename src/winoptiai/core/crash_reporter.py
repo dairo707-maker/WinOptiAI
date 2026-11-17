@@ -7,18 +7,24 @@ El usuario revisa y pulsa "Submit" en GitHub. No hay tokens ni claves dentro del
 
 from __future__ import annotations
 
+from datetime import datetime
 import os
+from pathlib import Path
 import platform
 import re
 import sys
 from urllib.parse import quote
 
 from .crash_guard import CrashGuard
+from .safety_guard import default_app_data_dir
 
 GITHUB_REPO = "dairo707-maker/WinOptiAI"
 ISSUE_BASE_URL = f"https://github.com/{GITHUB_REPO}/issues/new"
-# GitHub rechaza URLs muy largas (~8 KB). Margen para titulo y etiquetas.
-MAX_ISSUE_URL_CHARS = 7600
+# v0.5.7: si el usuario no inicio sesion, GitHub redirige a /login?return_to=<URL codificada otra
+# vez> y la direccion casi se duplica; con ~5.900 caracteres GitHub responde "Whoops, something
+# went wrong!" (HTTP 500, verificado el 17/11/2026). Con 3.000 queda margen en ambos casos: la URL
+# lleva el resumen y el informe completo va en el portapapeles y en un archivo local.
+MAX_ISSUE_URL_CHARS = 3000
 
 KIND_CRASH = "crash"  # cierre inesperado (fallo nativo o terminado por Windows)
 KIND_ERROR = "error"  # excepcion de Python no controlada (la app sigue abierta)
@@ -86,7 +92,8 @@ def build_report_markdown(
     if tail:
         lines += ["", "### Final de crash.log", "```", tail.strip(), "```"]
     lines += ["", "### Que estaba haciendo", "(Describa brevemente que hacia en la app cuando ocurrio.)"]
-    return anonymize_text("\n".join(lines))
+    # v0.5.7: crash.log trae saltos CRLF; normalizar ahorra espacio en la URL de GitHub.
+    return anonymize_text("\n".join(lines)).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def build_issue_title(guard: CrashGuard, kind: str = KIND_CRASH, error_type: str = "") -> str:
@@ -97,18 +104,38 @@ def build_issue_title(guard: CrashGuard, kind: str = KIND_CRASH, error_type: str
 
 def build_issue_url(title: str, body: str, max_chars: int = MAX_ISSUE_URL_CHARS) -> tuple[str, bool]:
     """URL de GitHub con el informe precargado. Devuelve (url, recortado)."""
-    note = "\n\n_(Informe recortado por longitud: pegue aqui el texto completo, ya esta en su portapapeles.)_"
+    note = (
+        "\n\n**Informe recortado por longitud.** El texto completo ya esta en su portapapeles: "
+        "borre esta linea y pegue con Ctrl+V. Tambien quedo guardado en "
+        "`%LOCALAPPDATA%\\WinOptiAI\\reports`."
+    )
     prefix = f"{ISSUE_BASE_URL}?labels=crash&title={quote(title)}&body="
     url = prefix + quote(body)
     if len(url) <= max_chars:
         return url, False
-    budget = max_chars - len(prefix) - len(quote(note))
-    # Recortar el final conservando el inicio (resumen, eventos, error) del informe.
-    lo, hi = 0, len(body)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if len(quote(body[:mid])) <= budget:
-            lo = mid
-        else:
-            hi = mid - 1
-    return prefix + quote(body[:lo] + note), True
+    budget = max_chars - len(prefix) - len(quote(note + "\n```"))
+    # Recortar por lineas completas conservando el inicio (resumen, eventos, error).
+    kept: list[str] = []
+    used = 0
+    for line in body.splitlines(keepends=True):
+        cost = len(quote(line))
+        if used + cost > budget:
+            break
+        kept.append(line)
+        used += cost
+    head = "".join(kept).rstrip("\n")
+    if head.count("```") % 2 == 1:  # no dejar un bloque de codigo abierto
+        head += "\n```"
+    return prefix + quote(head + note), True
+
+
+def save_report_file(text: str, app_dir: Path | None = None) -> Path | None:
+    """Guardar el informe completo en %LOCALAPPDATA%\\WinOptiAI\\reports (respaldo del portapapeles)."""
+    base = (app_dir or default_app_data_dir()) / "reports"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / f"informe_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+    except OSError:
+        return None

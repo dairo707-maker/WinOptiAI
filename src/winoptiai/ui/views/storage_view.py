@@ -1361,6 +1361,7 @@ class StorageView(QWidget):
                 _done,
                 "Limpieza temporales",
                 progress_ui_cb=self._progress_summary,
+                supports_save=True,  # v0.5.7: unica tarea con sesion retomable
                 on_error=lambda _e: self.secondary_btn.setEnabled(True),
             )
 

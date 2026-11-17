@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -23,6 +24,7 @@ from ...core.crash_reporter import (
     build_issue_title,
     build_issue_url,
     build_report_markdown,
+    save_report_file,
 )
 from ..widgets import StatusTag
 
@@ -47,6 +49,7 @@ class CrashSendDialog(QDialog):
         self.on_decision = on_decision
         self._open_url = open_url or (lambda url: QDesktopServices.openUrl(QUrl(url)))
         self.sent = False
+        self.saved_path = None
         self.issue_title = build_issue_title(guard, kind, error_type)
         self.report_text = build_report_markdown(guard, kind, error_text, auto_restarted)
 
@@ -131,16 +134,31 @@ class CrashSendDialog(QDialog):
         clip = QApplication.clipboard()
         if clip is not None:
             clip.setText(self.report_text)
+        # v0.5.7: respaldo en disco por si el portapapeles se pierde al iniciar sesion en GitHub.
+        self.saved_path = save_report_file(self.report_text, self.guard.app_dir)
         url, truncated = build_issue_url(self.issue_title, self.report_text)
         opened = bool(self._open_url(url))
         self.sent = opened
         if self.on_decision is not None:
             self.on_decision(opened)
+        where = f"\nCopia guardada en: {self.saved_path}" if self.saved_path else ""
         if opened:
+            QMessageBox.information(
+                self,
+                "Informe abierto en GitHub",
+                "Se abrio GitHub en su navegador con el informe.\n\n"
+                "1. Si GitHub le pide iniciar sesion, hagalo; volvera al formulario.\n"
+                + (
+                    "2. El informe es largo: borre la nota final y pegue el texto completo con Ctrl+V "
+                    "(ya esta en su portapapeles).\n3. Pulse \"Create\" para enviarlo."
+                    if truncated
+                    else "2. Revise el texto y pulse \"Create\" para enviarlo."
+                )
+                + where,
+            )
             self.accept()
             return
         self.status_lbl.setText(
             "No se pudo abrir el navegador. El informe quedo copiado en el portapapeles: "
-            "peguelo en github.com/dairo707-maker/WinOptiAI/issues/new"
-            + (" (texto completo)." if truncated else ".")
+            "peguelo en github.com/dairo707-maker/WinOptiAI/issues/new" + where.replace("\n", " ")
         )

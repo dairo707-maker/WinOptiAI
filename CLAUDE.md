@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.6`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.7`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -40,7 +40,8 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
 - **Cuarentena y Rollback (`safety_guard.py`):** toda depuracion usa `QuarantineVault` transaccional (`manifest.json` escrito con `atomic_write_text`), `PreOpBackupManager`, y auto-purga al arranque solo de lotes `Basura:*` mayores a 30 dias. La purga usa `force_remove_tree` (quita solo-lectura, rutas largas `\\?\`), conserva el registro con el tamano restante si algo queda bloqueado y lo informa; "Vaciar todo" limpia tambien restos de `items/` sin registro (`list_orphan_entries`).
 - **OneDrive Nube:** requiere un registro de aplicacion propio en Microsoft Entra ID (Client ID, cliente publico, redirect `http://localhost` exacto (la app envia `http://localhost:<puerto>` sin ruta; Entra ignora el puerto pero no la ruta, ver AADSTS50011 en `v0.5.5`), permisos delegados `User.Read Files.ReadWrite offline_access`). Cuentas de la Fundacion pueden requerir consentimiento del administrador del tenant.
 - **Auditorias Hardware, S.M.A.R.T. y CBS (`bios_auditor.py`, `thermal_controller.py`):** nunca modificar NVRAM/SPI directamente; verificar cambios `powercfg` por lectura (`/q`); detectar procesos activos `Dism.exe`/`sfc.exe` para no encimar sesiones CBS concurrentes.
-- **Crash Guard y Reporte Anonimizado (`crash_guard.py`, `crash_reporter.py`):** `faulthandler` (todos los hilos) + `excepthooks` + vigilante de bloqueos GUI (8 s) hacia `%LOCALAPPDATA%\WinOptiAI\crash.log`, `session_lock.json`, `RegisterApplicationRestart` y consulta `wevtutil` decodificada en ANSI (`mbcs`). Todo envio a GitHub Issues es opcional y anonimizado bajo revision del usuario.
+- **Crash Guard y Reporte Anonimizado (`crash_guard.py`, `crash_reporter.py`):** `faulthandler` (todos los hilos) + `excepthooks` + vigilante de bloqueos GUI (8 s) hacia `%LOCALAPPDATA%\WinOptiAI\crash.log`, `session_lock.json`, `RegisterApplicationRestart` y consulta `wevtutil` decodificada en ANSI (`mbcs`). Todo envio a GitHub Issues es opcional y anonimizado bajo revision del usuario. La URL prellenada no debe superar `crash_reporter.MAX_ISSUE_URL_CHARS = 3000`: sin sesion GitHub duplica la URL en `/login?return_to=` y desde ~5.900 caracteres responde HTTP 500 ("Whoops"); el informe completo va al portapapeles y a `%LOCALAPPDATA%\WinOptiAI\reports`.
+- **Sesiones retomables (`task_control.py`):** `Pausar` congela cualquier tarea que llame `controller.checkpoint()`; `Guardar Pausa` solo funciona en tareas que manejan `"save_pause"` y guardan un `TaskSessionRecord` (hoy unicamente `junk_clean`: limpieza de temporales y su reanudacion). Lanzar esas tareas con `_run_async(..., supports_save=True)`; las demas no muestran el boton.
 
 ## Comandos Clave (siempre con `uv` — en carpeta OneDrive usar `--no-sync`)
 
@@ -61,7 +62,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.6`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.7`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

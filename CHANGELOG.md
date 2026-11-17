@@ -2,6 +2,12 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.7] - 2026-11-17
+
+### Corregido
+- **"Whoops, something went wrong!" al enviar un informe a GitHub.** El informe viajaba en la direccion web (hasta 7.600 caracteres); sin sesion iniciada, GitHub redirige al inicio de sesion repitiendo esa direccion y con ~5.900 caracteres responde error 500 (reproducido el 17/11). Ahora la direccion lleva un resumen de hasta 3.000 caracteres, el informe completo queda en el portapapeles y en `%LOCALAPPDATA%\WinOptiAI\reports`, y un aviso explica los pasos (iniciar sesion, pegar con Ctrl+V, pulsar Create).
+- **"Guardar Pausa" solo donde funciona:** unicamente la limpieza de temporales (y su reanudacion) guarda un punto exacto para retomar. En las demas tareas el boton no hacia nada y la tarea seguia corriendo; ahora solo aparece cuando la tarea lo admite (barra superior y centro de notificaciones).
+
 ## [0.5.6] - 2026-11-17
 
 ### Cambiado (interfaz)

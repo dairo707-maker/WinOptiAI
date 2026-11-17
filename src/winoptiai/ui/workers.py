@@ -45,6 +45,7 @@ class AsyncTask(QRunnable):
         self.percent = 0
         self.stage = "Iniciando..."
         self._last_emit_pct = -1
+        self.supports_save = False  # v0.5.7: True solo si la tarea guarda sesion retomable
         self._last_emit_ts = 0.0
         self.fn = fn
         self.args = args
