@@ -37,6 +37,7 @@ from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
 from ..core.task_control import SessionManager, TaskSessionRecord, new_session_id
 from ..core.telemetry import PdhTelemetryReader
+from ..core.updater import ReleaseInfo, check_for_updates
 from ..core.win32_bridge import (
     apply_window_theme,
     is_user_admin,
@@ -96,6 +97,8 @@ class MainWindow(QMainWindow):
         self.auto_restarted = auto_restarted
         self._crash_dialog: CrashSendDialog | None = None
         self._tour_dialog: QuickTourDialog | None = None
+        self._available_update: ReleaseInfo | None = None
+        self._checking_updates = False
         self._reported_error_keys: set[str] = set()
         self.unhandled_error.connect(self._on_unhandled_error, Qt.ConnectionType.QueuedConnection)
         if crash_guard is not None:
@@ -342,6 +345,7 @@ class MainWindow(QMainWindow):
             on_quit=self._quit_app,
             on_toggle_sre=self._tray_toggle_sre,
             on_toggle_theme=self._toggle_theme,
+            on_open_updates=self._open_about_from_tray,
             initial_thermal=self.policy.config.active_thermal_profile,
             initial_sre=self.policy.config.auto_ram_relief_enabled,
             initial_theme=self.policy.config.theme_mode,
@@ -368,6 +372,11 @@ class MainWindow(QMainWindow):
         self.advisor_timer = QTimer(self)
         self.advisor_timer.timeout.connect(self._run_periodic_advisor)
         self.advisor_timer.start(900_000)
+
+        # v0.5.13: automatic update check every 12 hours while open or in tray
+        self.update_check_timer = QTimer(self)
+        self.update_check_timer.timeout.connect(self._check_updates_background)
+        self.update_check_timer.start(43_200_000)
 
         # v0.5.1: latido del marcador de sesion (solo si el crash guard esta activo)
         self.heartbeat_timer = QTimer(self)
@@ -403,7 +412,13 @@ class MainWindow(QMainWindow):
             return {"closed": 0, "failed": 0, "pending_tasks": 0}
         self._shutdown_done = True
         self._breadcrumb("Cierre total: cancelando tareas y procesos derivados")
-        for t in (self.telemetry_timer, self.advisor_timer, self.heartbeat_timer, self.task_eta_timer):
+        for t in (
+            self.telemetry_timer,
+            self.advisor_timer,
+            self.update_check_timer,
+            self.heartbeat_timer,
+            self.task_eta_timer,
+        ):
             t.stop()
         workers = list(self._active_workers)
         for w in workers:
@@ -579,7 +594,7 @@ class MainWindow(QMainWindow):
         self.bell_btn.setIcon(load_svg_icon("bell", color=pal["icon_color"], size=15))
         self.tour_btn.setText(f" {tr('btn_tour', lang)}")
         self.tour_btn.setIcon(load_svg_icon("overview", color=pal["icon_color"], size=13))
-        self.about_btn.setText(f" {tr('btn_about', lang)}")
+        self._refresh_about_badge()
         self.about_btn.setIcon(load_svg_icon("shield", color=pal["icon_color"], size=13))
         self._refresh_theme_button_icon(mode, pal["icon_color"])
 
@@ -612,8 +627,24 @@ class MainWindow(QMainWindow):
             parent=self,
             on_open_diagnostics=self._open_crash_diagnostics if self.crash_guard is not None else None,
             on_open_tour=self._open_tour_dialog,
+            preloaded_release=self._available_update,
         )
         dlg.exec()
+
+    def _open_about_from_tray(self) -> None:
+        self._restore_from_tray()
+        QTimer.singleShot(0, self._open_about_dialog)
+
+    def _refresh_about_badge(self) -> None:
+        lang = self.policy.config.language
+        if self._available_update is not None and self._available_update.update_available:
+            self.about_btn.setText(f" Nueva {self._available_update.tag}")
+            self.about_btn.setToolTip(
+                f"Nueva actualizacion disponible ({self._available_update.tag}). Clic para instalar."
+            )
+        else:
+            self.about_btn.setText(f" {tr('btn_about', lang)}")
+            self.about_btn.setToolTip("")
 
     def _open_tour_dialog(self) -> None:
         if self._tour_dialog is not None and self._tour_dialog.isVisible():
@@ -991,6 +1022,11 @@ class MainWindow(QMainWindow):
             and not self.auto_restarted
         ):
             QTimer.singleShot(450, self._open_tour_dialog)
+        if (
+            self.policy.config.auto_check_updates
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+        ):
+            QTimer.singleShot(5000, self._check_updates_background)
 
     def _refresh_disk_stats(self) -> None:
         try:
@@ -1103,12 +1139,79 @@ class MainWindow(QMainWindow):
         if self._active_workers:
             lead = self._active_workers[0]
             task_txt = f"{lead.title} ({lead.percent}%)"
+        upd_tag = (
+            self._available_update.tag
+            if self._available_update is not None and self._available_update.update_available
+            else ""
+        )
         self.tray.sync_state(
             thermal_key=self.policy.config.active_thermal_profile,
             sre_enabled=self.policy.config.auto_ram_relief_enabled,
             theme_mode=self.policy.config.theme_mode,
             task_summary=task_txt,
+            available_update=upd_tag,
         )
+
+    def _check_updates_background(self) -> None:
+        """Silently query GitHub Releases once at startup and every 12h; notify once per new version."""
+        if (
+            not self.policy.config.auto_check_updates
+            or self._checking_updates
+            or getattr(self, "_shutdown_done", False)
+        ):
+            return
+        self._checking_updates = True
+
+        def _probe() -> tuple[bool, ReleaseInfo | None, str]:
+            return check_for_updates(__version__, timeout=6)
+
+        def _done(res: tuple[bool, ReleaseInfo | None, str]) -> None:
+            self._checking_updates = False
+            ok, info, _msg = res
+            self._handle_update_check_result(ok, info)
+
+        def _err(_msg: str) -> None:
+            self._checking_updates = False
+
+        self._run_async(
+            _probe,
+            _done,
+            "Verificar actualizaciones",
+            notify_on_complete=False,
+            on_error=_err,
+        )
+
+    def _handle_update_check_result(self, ok: bool, info: ReleaseInfo | None) -> bool:
+        """Update badges, tray menu, and trigger once-per-version notification when newer release exists."""
+        if getattr(self, "_shutdown_done", False):
+            return False
+        self.policy.config.last_update_check_ts = time.time()
+        if not ok or info is None or not info.update_available:
+            self.policy.save_config()
+            return False
+
+        self._available_update = info
+        self._refresh_about_badge()
+        self._sync_tray_state()
+
+        if self.policy.config.last_notified_version == info.version:
+            self.policy.save_config()
+            return False
+
+        self.policy.config.last_notified_version = info.version
+        self.policy.save_config()
+        title = f"Nueva version WinOptiAI {info.tag}"
+        detail = (
+            "Hay una actualizacion disponible en GitHub Releases. "
+            f"Haz clic en 'Nueva {info.tag}' o en el menu de la bandeja para instalarla."
+        )
+        self.policy.record_audit_event("updater", "Actualizacion disponible", f"Release {info.tag} detectado")
+        self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+        self._set_status(f"Actualizacion disponible: {info.tag}")
+        self._notify_user("SUGERENCIA", title, detail, action_tab=None, tray_toast=True)
+        if self.isVisible() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.tray.showMessage(f"WinOptiAI - {title}", detail)
+        return True
 
     def _tray_toggle_sre(self, enabled: bool) -> None:
         self.policy.config.auto_ram_relief_enabled = bool(enabled)

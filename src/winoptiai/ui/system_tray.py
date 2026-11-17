@@ -77,6 +77,7 @@ class WinOptiTray(QSystemTrayIcon):
         on_quit: Callable[[], None],
         on_toggle_sre: Callable[[bool], None] | None = None,
         on_toggle_theme: Callable[[], None] | None = None,
+        on_open_updates: Callable[[], None] | None = None,
         initial_thermal: str = "balanced",
         initial_sre: bool = True,
         initial_theme: str = "dark",
@@ -94,6 +95,12 @@ class WinOptiTray(QSystemTrayIcon):
         act_open = QAction("Abrir WinOptiAI", menu)
         act_open.triggered.connect(on_show)
         menu.addAction(act_open)
+
+        self.update_action = QAction("Actualizacion disponible", menu)
+        self.update_action.setVisible(False)
+        if on_open_updates is not None:
+            self.update_action.triggered.connect(on_open_updates)
+        menu.addAction(self.update_action)
 
         act_boost = QAction("Ejecutar AI Boost (RAM + EcoQoS)", menu)
         act_boost.triggered.connect(on_boost)
@@ -163,8 +170,9 @@ class WinOptiTray(QSystemTrayIcon):
         sre_enabled: bool | None = None,
         theme_mode: str | None = None,
         task_summary: str | None = None,
+        available_update: str | None = None,
     ) -> None:
-        """Keep tray checkmarks, active mode titles, and tooltip synchronized with MainWindow."""
+        """Keep tray checkmarks, active mode titles, update notice, and tooltip synchronized with MainWindow."""
         if thermal_key is not None:
             act = self._thermal_actions.get(thermal_key)
             if act is not None and not act.isChecked():
@@ -187,6 +195,14 @@ class WinOptiTray(QSystemTrayIcon):
             self.status_action.setText(
                 f"En curso: {clean_task}" if clean_task else "Estado: En reposo"
             )
+
+        if available_update is not None:
+            tag_clean = available_update.strip()
+            if tag_clean:
+                self.update_action.setText(f"Actualizar a {tag_clean} disponible")
+                self.update_action.setVisible(True)
+            else:
+                self.update_action.setVisible(False)
 
         active_therm = next(
             (k for k, a in self._thermal_actions.items() if a.isChecked()),

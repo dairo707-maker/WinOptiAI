@@ -49,6 +49,9 @@ class SREPolicyConfig:
     completed_audit_actions: list[str] = field(default_factory=list)
     onboarding_completed: bool = False
     last_quick_check_at: str = ""
+    auto_check_updates: bool = True
+    last_notified_version: str = ""
+    last_update_check_ts: float = 0.0
 
 
 class SREPolicyEngine:

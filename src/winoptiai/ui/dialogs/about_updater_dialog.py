@@ -48,6 +48,7 @@ class AboutUpdaterDialog(QDialog):
         parent: QWidget | None = None,
         on_open_diagnostics: Callable[[], None] | None = None,
         on_open_tour: Callable[[], None] | None = None,
+        preloaded_release: ReleaseInfo | None = None,
     ) -> None:
         super().__init__(parent)
         self.lang = lang
@@ -161,6 +162,11 @@ class AboutUpdaterDialog(QDialog):
         self.install_btn.clicked.connect(self._on_install_update)
         actions.addWidget(self.install_btn)
         root.addLayout(actions)
+
+        if preloaded_release is not None and preloaded_release.update_available:
+            self._on_check_done(
+                (True, preloaded_release, f"Nueva actualizacion disponible: {preloaded_release.tag}")
+            )
 
     def _on_check(self) -> None:
         self.check_btn.setEnabled(False)

@@ -2,6 +2,13 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.13] - 2026-11-17
+
+### Agregado
+- **Notificacion Automatica de Actualizaciones (`main_window.py`, `system_tray.py`, `about_updater_dialog.py`, `sre_policy.py`):**
+  - Consulta silenciosa de solo lectura contra GitHub Releases al arrancar (+5 s) y cada 12 horas en segundo plano (`auto_check_updates = True`), sin impacto en la apertura.
+  - Al detectar un Release mas reciente: actualiza el boton lateral (`Nueva vX.Y.Z`), habilita acceso directo **`Actualizar a vX.Y.Z disponible`** en el menu de la bandeja, precarga las notas y el boton de descarga en `AboutUpdaterDialog`, registra en `audit.jsonl` y notifica en la campanita + globo de bandeja **una sola vez por version** (`last_notified_version`).
+
 ## [0.5.12] - 2026-11-17
 
 ### Corregido (Issue #1 de GitHub)
