@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from shiboken6 import isValid as qt_is_valid
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -99,6 +101,8 @@ class QuickTourDialog(QDialog):
         self.on_completed = on_completed
         self._step_idx = 0
         self._check_running = False
+        self._closed = False
+        self._completed_notified = False
         self._last_report: QuickCheckReport | None = None
 
         self.setWindowTitle("Tour Rapido Guiado y Prueba del Equipo")
@@ -251,21 +255,46 @@ class QuickTourDialog(QDialog):
         else:
             self._finish_tour()
 
+    def _mark_onboarding_done(self, report: QuickCheckReport | None = None) -> None:
+        if not self.policy.config.onboarding_completed:
+            self.policy.config.onboarding_completed = True
+            self.policy.save_config()
+        if not self._completed_notified and self.on_completed is not None and report is not None:
+            self._completed_notified = True
+            self.on_completed(report)
+
     def _finish_tour(self) -> None:
-        self.policy.config.onboarding_completed = True
-        self.policy.save_config()
-        if self.on_completed is not None:
-            self.on_completed(self._last_report)
+        self._closed = True
+        self._mark_onboarding_done(self._last_report)
         self.accept()
 
+    def reject(self) -> None:
+        self._closed = True
+        self._mark_onboarding_done(self._last_report)
+        super().reject()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._closed = True
+        self._mark_onboarding_done(self._last_report)
+        super().closeEvent(event)
+
+    def _ui_alive(self) -> bool:
+        return (
+            not self._closed
+            and qt_is_valid(self)
+            and qt_is_valid(self.recheck_btn)
+            and qt_is_valid(self.progress_bar)
+            and qt_is_valid(self.check_status_lbl)
+        )
+
     def _on_check_progress(self, pct: int, stage: str) -> None:
-        if not self.isVisible():
+        if not self._ui_alive() or not self.isVisible():
             return
         self.progress_bar.setValue(max(0, min(100, pct)))
         self.check_status_lbl.setText(f"[{pct}%] {stage}")
 
     def _start_quick_check(self) -> None:
-        if self._check_running:
+        if self._check_running or not self._ui_alive():
             return
         self._check_running = True
         self.recheck_btn.setEnabled(False)
@@ -274,10 +303,19 @@ class QuickTourDialog(QDialog):
         self.check_status_lbl.setVisible(True)
         self.check_status_lbl.setText("Ejecutando verificacion segura de hardware, sensores y disco...")
 
+        policy = self.policy
+        vault = self.vault
+        on_completed = self.on_completed
+
         def _work(progress_cb=None) -> QuickCheckReport:
-            return run_new_pc_quick_check(self.policy, self.vault, progress_cb=progress_cb)
+            return run_new_pc_quick_check(policy, vault, progress_cb=progress_cb)
 
         def _done(report: QuickCheckReport) -> None:
+            if not self._ui_alive():
+                if not self._completed_notified and on_completed is not None:
+                    self._completed_notified = True
+                    on_completed(report)
+                return
             self._check_running = False
             self._last_report = report
             self.recheck_btn.setEnabled(True)
@@ -285,6 +323,8 @@ class QuickTourDialog(QDialog):
                 self._render_report(report)
 
         def _err(err: str) -> None:
+            if not self._ui_alive():
+                return
             self._check_running = False
             self.recheck_btn.setEnabled(True)
             self.check_status_lbl.setText(f"Aviso durante prueba rapida: {err}")

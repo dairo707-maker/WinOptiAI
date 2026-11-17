@@ -176,3 +176,56 @@ def test_installer_branding_assets_and_iss_refs() -> None:
     assert "SetupIconFile=..\\assets\\icons\\winoptiai.ico" in iss
     assert "WizardImageFile=..\\assets\\icons\\wizard_large.bmp" in iss
     assert "WizardSmallImageFile=..\\assets\\icons\\wizard_small.bmp" in iss
+
+
+def test_tour_dialog_deleted_before_async_check_finishes_does_not_raise(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """Regression test for GitHub Issue #1 (RuntimeError on deleted QPushButton)."""
+    from PySide6.QtCore import Qt
+    from shiboken6 import isValid as qt_is_valid
+
+    eng = SREPolicyEngine(app_dir=tmp_path / "issue1")
+    vault = QuarantineVault(root_dir=tmp_path / "issue1")
+    captured: dict[str, object] = {}
+    completed_reports: list[object] = []
+
+    def _deferred_run(fn, callback, *_args, **kwargs) -> None:
+        captured["fn"] = fn
+        captured["callback"] = callback
+        captured["progress"] = kwargs.get("progress_ui_cb")
+        captured["on_error"] = kwargs.get("on_error")
+
+    dlg = QuickTourDialog(
+        policy=eng,
+        vault=vault,
+        run_async=_deferred_run,
+        on_switch_tab=lambda _i: None,
+        on_completed=lambda rep: completed_reports.append(rep),
+    )
+    dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    dlg.show()
+    for _ in range(4):
+        dlg._go_next()
+    for _ in range(4):
+        qapp.processEvents()
+
+    assert "callback" in captured
+    # Close dialog while quick check is still pending -> triggers C++ WA_DeleteOnClose
+    dlg.close()
+    for _ in range(10):
+        qapp.processEvents()
+    assert not qt_is_valid(dlg)
+
+    fake_report = QuickCheckReport(
+        checked_at="2026-11-17 15:00:00",
+        device_line="Test PC",
+        recommended_threshold_gb=1.8,
+        items=[],
+    )
+    # Late progress, completion, and error callbacks MUST NOT raise RuntimeError
+    captured["progress"](50, "Mitad")  # type: ignore[misc]
+    captured["callback"](fake_report)  # type: ignore[misc]
+    captured["on_error"]("simulated error")  # type: ignore[misc]
+    assert completed_reports == [fake_report]
+    assert eng.config.onboarding_completed is True

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from shiboken6 import isValid as qt_is_valid
+
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -166,6 +168,8 @@ class AboutUpdaterDialog(QDialog):
         self.run_async(lambda: check_for_updates(__version__), self._on_check_done, "Buscar actualizacion")
 
     def _on_check_done(self, result: tuple[bool, ReleaseInfo | None, str]) -> None:
+        if not qt_is_valid(self) or not qt_is_valid(self.check_btn):
+            return
         self.check_btn.setEnabled(True)
         ok, info, msg = result
         self.status_lbl.setText(msg)
@@ -217,10 +221,14 @@ class AboutUpdaterDialog(QDialog):
             return download_and_launch_update(self.latest_release, progress_cb=progress_cb)
 
         def _on_progress(pct: int, stage: str) -> None:
+            if not qt_is_valid(self) or not qt_is_valid(self.progress_bar):
+                return
             self.progress_bar.setValue(pct)
             self.status_lbl.setText(f"[{pct}%] {stage}")
 
         def _done(res: tuple[bool, str]) -> None:
+            if not qt_is_valid(self) or not qt_is_valid(self.check_btn):
+                return
             ok, msg = res
             self.status_lbl.setText(msg)
             if ok:

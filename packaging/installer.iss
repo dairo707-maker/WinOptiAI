@@ -1,6 +1,6 @@
 ; Inno Setup 6 script for WinOptiAI — Multilingual Dual-Mode Windows Installer Wizard
 #ifndef MyAppVersion
-  #define MyAppVersion "0.5.11"
+  #define MyAppVersion "0.5.12"
 #endif
 
 #define MyAppName "WinOptiAI"

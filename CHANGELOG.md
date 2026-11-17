@@ -2,6 +2,13 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.12] - 2026-11-17
+
+### Corregido (Issue #1 de GitHub)
+- **`RuntimeError: Internal C++ object (QPushButton) already deleted` al cerrar el Tour durante la Prueba Rapida (`tour_dialog.py`, `about_updater_dialog.py`):**
+  - Capturado por el reporte de errores de `v0.5.11` (Issue `#1`): si el usuario cerraba el diálogo del Tour (`WA_DeleteOnClose`) antes de que terminara `run_new_pc_quick_check()` en `QThreadPool` (~3-9 s), el callback `_done()` intentaba habilitar `recheck_btn` ya eliminado en C++.
+  - Protegidos todos los callbacks asincronos (`_on_check_progress`, `_done`, `_err` y actualización de `AboutUpdaterDialog`) con `shiboken6.isValid()` + bandera de cierre (`closeEvent`/`reject`) para ignorar actualizaciones sobre widgets ya liberados y guardar `onboarding_completed = True` aunque se cierre con `X`/`Esc`.
+
 ## [0.5.11] - 2026-11-17
 
 ### Agregado y Mejorado
