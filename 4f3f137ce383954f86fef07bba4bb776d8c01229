@@ -1,0 +1,7 @@
+Verificacion v0.5.4: uv run --no-sync pytest -> 77 passed (incluye cero emojis).
+Boveda real: lote batch_5d5e492b45aa__user_temp (Basura:Sistema, 151360 archivos, 9,9 GB) con
+41285 archivos restantes, 19034 de solo lectura y rutas > 260; purga anterior fallaba en silencio
+(shutil.rmtree + except OSError: continue). Resto sin registro: 21cdda70d17f__strings.json.
+No se borro nada del usuario: la purga queda para la app con confirmacion.
+OneDrive: carpetas con atributos 0x100031 (UNPINNED) eran omitidas; Arbol del proyecto pasaba
+de 132 KB a 962 MB tras el fix. Capturas offscreen revisadas (mapa, top, agrupado).
