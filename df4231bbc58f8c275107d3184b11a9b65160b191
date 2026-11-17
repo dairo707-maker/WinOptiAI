@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 106 passed (1 fallo intermitente previo en test_pause_save_and_resume_junk_session por bloqueo transitorio; paso 3/3 aislado y en la segunda corrida completa). Auditoria visual oscuro/claro 1200 y 980 con el panel nuevo: 0 recortes. Archivo real de Boveda sin procesos bloqueando (Rstrtmgr vacio).
