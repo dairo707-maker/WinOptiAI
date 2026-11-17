@@ -1,1 +1,0 @@
-Verificado: query_recent_appcrash_events devuelve 'versión ... dejó de interactuar' correctamente; pytest 69 passed antes del ajuste de \x00, 25 passed en suites de crash tras el ajuste.
