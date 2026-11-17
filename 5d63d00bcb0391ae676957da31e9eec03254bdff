@@ -1,0 +1,1 @@
+Fix Issue #1 (RuntimeError: Internal C++ object QPushButton already deleted en tour_dialog.py:283): guardas shiboken6.isValid + closeEvent/reject en QuickTourDialog y AboutUpdaterDialog; entrega tardia segura de QuickCheckReport. Verificado: uv run --no-sync pytest -v -> 126 passed + SmokeAlive=True PID=35636.
