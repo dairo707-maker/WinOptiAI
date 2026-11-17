@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 90 passed. Navegador integrado sin sesion GitHub: URL de 4000 -> pagina de login; 5933 -> HTTP 500 'Whoops'; informe real de 2898 -> login OK.
