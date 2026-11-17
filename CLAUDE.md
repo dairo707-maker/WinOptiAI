@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.3`, commit base `422adcf`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.4`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -20,20 +20,23 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - `Instrument Sans` (UI) + `IBM Plex Mono` (metricas, rutas, hashes, tags), cargadas desde `assets/fonts/`.
 4. **Limpieza, Arranque Fluido y Concurrencia Segura:**
    - Arranque en 2 fases: pintar ventana principal antes de lanzar escaneos WMI/disco/retencion en `QThreadPool`.
-   - Limite de concurrencia: maximo **2 tareas de almacenamiento simultaneas** (`MAX_CONCURRENT_TASKS = 2`) y proteccion por RAM libre minima; control cooperativo global (`Pausar`, `Guardar Pausa`, `Cancelar`, `Retomar Sesion`) en barra superior y cajon de tareas.
+   - Limite de concurrencia: maximo **2 tareas de almacenamiento simultaneas** (`storage_view.MAX_STORAGE_TASKS = 2`; global `main_window.MAX_CONCURRENT_TASKS = 4`) y proteccion por RAM libre minima; control cooperativo global (`Pausar`, `Guardar Pausa`, `Cancelar`, `Retomar Sesion`) en barra superior y cajon de tareas.
    - **Reglas criticas de PySide6 / Shiboken6 (lecciones P0 de `v0.5.1`–`v0.5.3`):**
      - **NUNCA** llamar a `super().__lt__()` dentro de `NumericTableItem.__lt__` o `NumericTreeItem.__lt__` (`ui/widgets.py`): en PySide6 vuelve a despachar al override de Python hasta desbordar la pila (`0xc0000005` en `shiboken6.abi3.dll`). Usar comparacion de texto propia en Python.
      - **NUNCA** llamar `setRowCount()` ni destruir widgets hijos (`deleteLater()` / `removeCellWidget()`) de forma sincrona dentro de un slot `clicked` (`thermal_bios_view.py`, `notifications_drawer.py`): diferir siempre la reconstruccion con `QTimer.singleShot(0, ...)`.
      - Conectar senales de `AsyncTask` con `Qt.QueuedConnection` explicita, limitar senales de progreso (~10/s o cambio de `%`) y usar carga perezosa (*lazy loading*) en `QTreeWidget` (`storage_view.py`).
      - En llamadas UAC (`ShellExecuteW`) fuera del hilo UI (`win32_bridge.run_elevated_command`), inicializar COM (`CoInitializeEx`) en el hilo trabajador.
+   - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, monocromo, 2 niveles, clic = entrar, doble clic = Explorador), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
 
 ## Invariantes de Seguridad del Sistema Operativo
 
 - **NUNCA** leer contenido, previsualizar ni hidratar archivos con atributos `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`, `FILE_ATTRIBUTE_OFFLINE`, `FILE_ATTRIBUTE_RECALL_ON_OPEN` o `FILE_ATTRIBUTE_UNPINNED` (`win32_bridge.is_cloud_only_file`).
+  - **Carpetas vs. archivos (`v0.5.4`):** OneDrive marca casi todas sus CARPETAS con `UNPINNED` (`0x100000`) aunque esten en disco. En recorridos usar `win32_bridge.attrs_skip_entry(attrs, is_dir)`: en carpetas solo se omiten `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` (listar no hidrata); en archivos se mantiene la mascara completa. Antes Arbol/Duplicados ignoraban todo el contenido de OneDrive.
 - **OneDrive Hibrido (`onedrive_optimizer.py`):** en local usa unicamente atributos Win32 Files On-Demand (`SetFileAttributesW` `+U -P`) protegiendo `.git`/`.venv`/`node_modules`; en nube usa Microsoft Graph OAuth 2.0 PKCE + cifrado local DPAPI (`CryptProtectData`), excluyendo elementos compartidos de terceros por defecto y moviendo solo a Papelera de OneDrive.
 - **Proteccion de Archivos y Bloqueos:** en directorios pequeños se verifica `Rstrtmgr.dll` (`get_locking_processes`); para temporales masivos (`> 400` archivos) `junk_scanner.py` evita sesiones RPC lentas delegando la proteccion al kernel NTFS (`os.replace` / `WinError 32`). Re-verificar tamano + hash BLAKE3 justo antes de crear hardlinks NTFS.
 - **NUNCA** tocar `PROTECTED_PATH_PREFIXES` ni procesos criticos (`PROTECTED_PROCESS_NAMES`, `get_foreground_pid()`, `os.getpid()` y `AI_FOREGROUND_AGENTS`).
-- **Cuarentena y Rollback (`safety_guard.py`):** toda depuracion usa `QuarantineVault` transaccional (`manifest.json` escrito con `atomic_write_text`), `PreOpBackupManager`, y auto-purga al arranque solo de lotes `Basura:*` mayores a 30 dias.
+- **Cuarentena y Rollback (`safety_guard.py`):** toda depuracion usa `QuarantineVault` transaccional (`manifest.json` escrito con `atomic_write_text`), `PreOpBackupManager`, y auto-purga al arranque solo de lotes `Basura:*` mayores a 30 dias. La purga usa `force_remove_tree` (quita solo-lectura, rutas largas `\\?\`), conserva el registro con el tamano restante si algo queda bloqueado y lo informa; "Vaciar todo" limpia tambien restos de `items/` sin registro (`list_orphan_entries`).
+- **OneDrive Nube:** requiere un registro de aplicacion propio en Microsoft Entra ID (Client ID, cliente publico, redirect `http://localhost`, permisos delegados `User.Read Files.ReadWrite offline_access`). Cuentas de la Fundacion pueden requerir consentimiento del administrador del tenant.
 - **Auditorias Hardware, S.M.A.R.T. y CBS (`bios_auditor.py`, `thermal_controller.py`):** nunca modificar NVRAM/SPI directamente; verificar cambios `powercfg` por lectura (`/q`); detectar procesos activos `Dism.exe`/`sfc.exe` para no encimar sesiones CBS concurrentes.
 - **Crash Guard y Reporte Anonimizado (`crash_guard.py`, `crash_reporter.py`):** `faulthandler` (todos los hilos) + `excepthooks` + vigilante de bloqueos GUI (8 s) hacia `%LOCALAPPDATA%\WinOptiAI\crash.log`, `session_lock.json`, `RegisterApplicationRestart` y consulta `wevtutil` decodificada en ANSI (`mbcs`). Todo envio a GitHub Issues es opcional y anonimizado bajo revision del usuario.
 
@@ -56,7 +59,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.3`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.4`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -61,6 +62,7 @@ from ...storage.orphan_hunter import OrphanCandidate, quarantine_orphans, scan_o
 from ...storage.tree_analyzer import FolderNode, StorageHierarchyReport, analyze_storage_hierarchy
 from ..svg_icons import load_svg_icon
 from ..theme import format_bytes, get_palette
+from ..treemap import TreemapWidget
 from ..widgets import (
     GlassPanel,
     NumericTableItem,
@@ -383,10 +385,68 @@ class StorageView(QWidget):
         fhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.tree_splitter.addWidget(self.format_table)
         self.tree_splitter.setSizes([500, 480])
-        self.tree_splitter.setVisible(False)
+
+        # v0.5.4: modo Arbol en pestanas -> Mapa jerarquico | Carpetas y formatos | Archivos pesados
+        self.tree_tabs = QTabWidget()
+        self.tree_tabs.setDocumentMode(True)
+
+        map_page = QWidget()
+        mlay = QVBoxLayout(map_page)
+        mlay.setContentsMargins(0, 8, 0, 0)
+        mlay.setSpacing(6)
+        crumb_row = QHBoxLayout()
+        self.map_up_btn = QPushButton("Subir")
+        self.map_up_btn.setObjectName("GhostAction")
+        self.map_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.map_up_btn.clicked.connect(lambda: self.treemap.go_up())
+        crumb_row.addWidget(self.map_up_btn)
+        self.map_crumb_lbl = QLabel("")
+        self.map_crumb_lbl.setObjectName("MonoValue")
+        crumb_row.addWidget(self.map_crumb_lbl, stretch=1)
+        mlay.addLayout(crumb_row)
+        self.treemap = TreemapWidget(lambda: get_palette(self.policy.config.theme_mode))
+        self.treemap.path_changed.connect(self._on_treemap_path_changed)
+        self.treemap.reveal_requested.connect(self._reveal_path)
+        mlay.addWidget(self.treemap, stretch=1)
+        self.tree_tabs.addTab(map_page, "Mapa jerarquico")
+        self.tree_tabs.addTab(self.tree_splitter, "Carpetas y formatos")
+
+        heavy_page = QWidget()
+        hlay = QVBoxLayout(heavy_page)
+        hlay.setContentsMargins(0, 8, 0, 0)
+        hlay.setSpacing(6)
+        filt_row = QHBoxLayout()
+        self.heavy_view_combo = QComboBox()
+        self.heavy_view_combo.addItem("Top 100 mas pesados", "top")
+        self.heavy_view_combo.addItem("Agrupados por extension", "group")
+        self.heavy_view_combo.currentIndexChanged.connect(lambda _i: self._render_heavy_files())
+        filt_row.addWidget(self.heavy_view_combo)
+        self.heavy_type_combo = QComboBox()
+        self.heavy_type_combo.currentIndexChanged.connect(lambda _i: self._render_heavy_files())
+        filt_row.addWidget(self.heavy_type_combo, stretch=1)
+        hlay.addLayout(filt_row)
+        self.heavy_tree = QTreeWidget()
+        self.heavy_tree.setHeaderLabels(["ARCHIVO", "PESO", "TIPO", "CARPETA"])
+        self.heavy_tree.setAlternatingRowColors(True)
+        self.heavy_tree.setRootIsDecorated(True)
+        self.heavy_tree.itemDoubleClicked.connect(lambda it, _c: self._reveal_heavy_item(it))
+        self.heavy_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.heavy_tree.customContextMenuRequested.connect(self._show_heavy_menu)
+        hh = self.heavy_tree.header()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(0, 300)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hlay.addWidget(self.heavy_tree, stretch=1)
+        self.heavy_hint_lbl = QLabel("Doble clic en un archivo: abrir su carpeta en el Explorador con el archivo seleccionado.")
+        self.heavy_hint_lbl.setObjectName("PageSubtitle")
+        hlay.addWidget(self.heavy_hint_lbl)
+        self.tree_tabs.addTab(heavy_page, "Archivos mas pesados")
+        self.tree_tabs.setVisible(False)
 
         root.addWidget(self.main_splitter, stretch=1)
-        root.addWidget(self.tree_splitter, stretch=1)
+        root.addWidget(self.tree_tabs, stretch=1)
 
         self._switch_mode("junk")
 
@@ -502,7 +562,7 @@ class StorageView(QWidget):
             btn.style().polish(btn)
 
         self.main_splitter.setVisible(mode != "tree")
-        self.tree_splitter.setVisible(mode == "tree")
+        self.tree_tabs.setVisible(mode == "tree")
         self.preview_panel.setVisible(mode == "duplicates")
         self.dup_autoclean_panel.setVisible(mode == "duplicates")
         self.onedrive_panel.setVisible(mode == "onedrive")
@@ -818,6 +878,11 @@ class StorageView(QWidget):
                         vp = Path(rec.vault_path)
                         return vp if vp.exists() else Path(rec.original_path).parent
         elif self.mode == "tree" and self.tree_report:
+            page = self.tree_tabs.currentIndex()
+            if page == 0 and self.treemap.current is not None:
+                return self.treemap.current.path
+            if page == 2:
+                return self._selected_heavy_path()
             rows = sorted({idx.row() for idx in self.format_table.selectedIndexes()})
             if rows:
                 it = self.format_table.item(rows[0], 0)
@@ -865,6 +930,119 @@ class StorageView(QWidget):
         self.tree_report = report
         self._render_tree()
 
+    # ------------------------------------------------------------------ v0.5.4: mapa y pesados
+    def _on_treemap_path_changed(self, crumb: str) -> None:
+        self.map_crumb_lbl.setText(crumb)
+        self.map_up_btn.setEnabled(self.treemap.can_go_up())
+
+    def _reveal_path(self, path_str: str) -> None:
+        if path_str and reveal_in_explorer(Path(path_str)):
+            self.notify_cb(f"Abriendo en Explorador: {path_str}")
+        else:
+            self.notify_cb("No se encontro la ruta seleccionada en disco.")
+
+    def _populate_heavy_type_combo(self) -> None:
+        self.heavy_type_combo.blockSignals(True)
+        prev = self.heavy_type_combo.currentData()
+        self.heavy_type_combo.clear()
+        self.heavy_type_combo.addItem("Todos los tipos", "")
+        if self.tree_report:
+            cats: dict[str, int] = {}
+            for fg in self.tree_report.formats:
+                cats[fg.category] = cats.get(fg.category, 0) + fg.total_bytes
+            for cat, total in sorted(cats.items(), key=lambda kv: kv[1], reverse=True):
+                self.heavy_type_combo.addItem(f"{cat} ({format_bytes(total)})", f"cat:{cat}")
+            for fg in self.tree_report.formats[:30]:
+                self.heavy_type_combo.addItem(f"Extension {fg.extension} ({format_bytes(fg.total_bytes)})", f"ext:{fg.extension}")
+        idx = self.heavy_type_combo.findData(prev)
+        self.heavy_type_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.heavy_type_combo.blockSignals(False)
+
+    def _filtered_formats(self) -> list:
+        if not self.tree_report:
+            return []
+        key = str(self.heavy_type_combo.currentData() or "")
+        fmts = self.tree_report.formats
+        if key.startswith("cat:"):
+            return [f for f in fmts if f.category == key[4:]]
+        if key.startswith("ext:"):
+            return [f for f in fmts if f.extension == key[4:]]
+        return list(fmts)
+
+    def _make_heavy_file_item(self, path: Path, size: int, category: str) -> QTreeWidgetItem:
+        it = NumericTreeItem([path.name, format_bytes(size), category, str(path.parent)])
+        it.setData(1, Qt.ItemDataRole.UserRole, float(size))
+        it.setData(0, Qt.ItemDataRole.UserRole + 1, str(path))
+        it.setToolTip(0, str(path))
+        it.setToolTip(3, str(path.parent))
+        return it
+
+    def _render_heavy_files(self) -> None:
+        self.heavy_tree.clear()
+        if not self.tree_report:
+            return
+        fmts = self._filtered_formats()
+        key = str(self.heavy_type_combo.currentData() or "")
+        view = str(self.heavy_view_combo.currentData() or "top")
+        self.heavy_tree.setSortingEnabled(False)
+        if view == "group":
+            groups = []
+            for fg in fmts:
+                grp = NumericTreeItem(
+                    [f"{fg.extension}  ({fg.file_count} archivos)", format_bytes(fg.total_bytes), fg.category, ""]
+                )
+                grp.setData(1, Qt.ItemDataRole.UserRole, float(fg.total_bytes))
+                grp.setFirstColumnSpanned(False)
+                grp.addChildren([self._make_heavy_file_item(p, sz, fg.category) for p, sz in fg.top_files])
+                groups.append(grp)
+            self.heavy_tree.addTopLevelItems(groups)
+            self.heavy_tree.setRootIsDecorated(True)
+            hint = "Despliegue una extension para ver sus archivos mas pesados (hasta 30 por extension)."
+        else:
+            cat_of = {f.extension: f.category for f in self.tree_report.formats}
+            if not key:
+                files = [(p, sz, cat_of.get(ext, "Otros")) for p, ext, sz in self.tree_report.heaviest_files]
+            else:
+                files = [(p, sz, fg.category) for fg in fmts for p, sz in fg.top_files]
+                files.sort(key=lambda x: x[1], reverse=True)
+            files = files[:100]
+            self.heavy_tree.addTopLevelItems([self._make_heavy_file_item(p, sz, cat) for p, sz, cat in files])
+            self.heavy_tree.setRootIsDecorated(False)
+            hint = f"{len(files)} archivos. Doble clic: abrir su carpeta en el Explorador con el archivo seleccionado."
+        self.heavy_tree.setSortingEnabled(True)
+        self.heavy_tree.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+        self.heavy_hint_lbl.setText(hint)
+
+    def _selected_heavy_path(self) -> Path | None:
+        it = self.heavy_tree.currentItem()
+        p = it.data(0, Qt.ItemDataRole.UserRole + 1) if it is not None else None
+        return Path(str(p)) if p else None
+
+    def _reveal_heavy_item(self, item: QTreeWidgetItem) -> None:
+        p = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if p:
+            self._reveal_path(str(p))
+        else:
+            item.setExpanded(not item.isExpanded())
+
+    def _show_heavy_menu(self, pos: QPoint) -> None:
+        it = self.heavy_tree.itemAt(pos)
+        p = it.data(0, Qt.ItemDataRole.UserRole + 1) if it is not None else None
+        if not p:
+            return
+        self.heavy_tree.setCurrentItem(it)
+        menu = QMenu(self.heavy_tree)
+        act = QAction("Ver en el Explorador de Windows", menu)
+        act.triggered.connect(lambda: self._reveal_path(str(p)))
+        menu.addAction(act)
+        act_copy = QAction("Copiar ruta", menu)
+        act_copy.triggered.connect(lambda: QApplication.clipboard().setText(str(p)))
+        menu.addAction(act_copy)
+        act_q = QAction("Enviar a Cuarentena", menu)
+        act_q.triggered.connect(self._on_secondary_action)
+        menu.addAction(act_q)
+        menu.exec(self.heavy_tree.viewport().mapToGlobal(pos))
+
     def _make_tree_item(self, node: FolderNode) -> NumericTreeItem:
         total = max(1, self.tree_report.root_node.size_bytes) if self.tree_report else 1
         pct = (node.size_bytes / total) * 100.0
@@ -907,6 +1085,9 @@ class StorageView(QWidget):
             return
         self.folder_tree.clear()
         self.format_table.setRowCount(0)
+        self.treemap.set_root(self.tree_report.root_node if self.tree_report else None)
+        self._populate_heavy_type_combo()
+        self._render_heavy_files()
         if not self.tree_report:
             self.summary_lbl.setText("Elija una carpeta o unidad para analizar la jerarquia y formatos.")
             return
@@ -1029,11 +1210,17 @@ class StorageView(QWidget):
         else:
             item_ids = [rec.item_id for rec in all_items]
             scope_label = f"TODOS los {len(item_ids)} elementos de la Boveda"
+        # v0.5.4: al vaciar toda la boveda tambien se limpian restos sin registro (purgas
+        # interrumpidas en versiones anteriores), que ocupaban espacio sin verse en la tabla.
+        include_orphans = not rows
+        orphan_count = len(self.vault.list_orphan_entries()) if include_orphans else 0
+        if orphan_count:
+            scope_label += f" y {orphan_count} resto(s) sin registro"
 
         reply = QMessageBox.question(
             self,
             "Depurar Boveda de Cuarentena",
-            f"Desea eliminar permanentemente de la Boveda {scope_label}?",
+            f"Desea eliminar permanentemente de la Boveda {scope_label}?\nEsta accion no se puede deshacer.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1042,12 +1229,23 @@ class StorageView(QWidget):
 
         self.tertiary_btn.setEnabled(False)
 
-        def _purge(progress_cb=None) -> dict[str, int]:
-            return self.vault.purge_items(item_ids, use_recycle_bin=False, progress_cb=progress_cb)
+        def _purge(progress_cb=None) -> dict:
+            return self.vault.purge_items(
+                item_ids, use_recycle_bin=False, progress_cb=progress_cb, include_orphans=include_orphans
+            )
 
-        def _done(res: dict[str, int]) -> None:
+        def _done(res: dict) -> None:
             self.tertiary_btn.setEnabled(True)
             msg = f"Boveda depurada: {res['purged']} elementos eliminados ({format_bytes(res['freed_bytes'])})."
+            if res.get("orphans_removed"):
+                msg += f" Restos sin registro eliminados: {res['orphans_removed']}."
+            if res.get("blocked_files"):
+                sample = "\n".join(res.get("blocked_samples", [])[:5])
+                msg += (
+                    f" {res['blocked_files']} archivo(s) siguen bloqueados (probablemente abiertos por otro "
+                    "programa); se conservan en la Boveda. Cierre ese programa y vuelva a intentarlo."
+                )
+                QMessageBox.warning(self, "Archivos bloqueados en la Boveda", f"{msg}\n\nEjemplos:\n{sample}")
             self.policy.record_audit_event("usuario", "Depuracion cuarentena", msg, res["freed_bytes"] / (1024 * 1024))
             self.notify_cb(msg)
             self._render_quarantine()
@@ -1182,15 +1380,34 @@ class StorageView(QWidget):
         elif self.mode == "tree":
             if not self.tree_report:
                 return
-            rows = sorted({idx.row() for idx in self.format_table.selectedIndexes()})
-            if not rows:
-                self.summary_lbl.setText("Seleccione una extension en la tabla derecha para enviar su archivo mas pesado.")
-                return
-            item0 = self.format_table.item(rows[0], 0)
-            orig = item0.data(Qt.ItemDataRole.UserRole + 1) if item0 else None
-            if orig is None or orig >= len(self.tree_report.formats):
-                return
-            heavy = self.tree_report.formats[orig].heaviest_file
+            heavy: Path | None = None
+            if self.tree_tabs.currentIndex() == 2:
+                # v0.5.4: archivo elegido en "Archivos mas pesados" (con confirmacion).
+                heavy = self._selected_heavy_path()
+                if heavy is None:
+                    self.summary_lbl.setText("Seleccione un archivo en 'Archivos mas pesados' para enviarlo a Cuarentena.")
+                    return
+                reply = QMessageBox.question(
+                    self,
+                    "Enviar a Cuarentena",
+                    f"Mover a la Boveda de Cuarentena (reversible):\n{heavy}",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+            else:
+                rows = sorted({idx.row() for idx in self.format_table.selectedIndexes()})
+                if not rows:
+                    self.summary_lbl.setText(
+                        "Seleccione una extension en 'Carpetas y formatos' o un archivo en 'Archivos mas pesados'."
+                    )
+                    return
+                item0 = self.format_table.item(rows[0], 0)
+                orig = item0.data(Qt.ItemDataRole.UserRole + 1) if item0 else None
+                if orig is None or orig >= len(self.tree_report.formats):
+                    return
+                heavy = self.tree_report.formats[orig].heaviest_file
             if not heavy:
                 return
 

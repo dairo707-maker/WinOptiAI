@@ -16,7 +16,7 @@ from typing import Callable
 
 from ..core.safety_guard import is_protected_path
 from ..core.task_control import TaskCanceledError, TaskController
-from ..core.win32_bridge import attrs_is_cloud_only, attrs_is_reparse_or_system
+from ..core.win32_bridge import attrs_skip_entry
 
 
 EXTENSION_CATEGORIES: dict[str, str] = {
@@ -57,7 +57,32 @@ EXTENSION_CATEGORIES: dict[str, str] = {
     ".wav": "Audio",
     ".mp3": "Audio",
     ".flac": "Audio",
+    # v0.5.4: formatos frecuentes en oficina / analisis de datos
+    ".m4a": "Audio",
+    ".gif": "Imagenes",
+    ".heic": "Imagenes",
+    ".tif": "Imagenes",
+    ".tiff": "Imagenes",
+    ".doc": "Documentos",
+    ".xls": "Documentos",
+    ".xlsm": "Documentos",
+    ".ppt": "Documentos",
+    ".txt": "Documentos",
+    ".dta": "Datos y Codigo",
+    ".sav": "Datos y Codigo",
+    ".rds": "Datos y Codigo",
+    ".shp": "Datos y Codigo",
+    ".gpkg": "Datos y Codigo",
+    ".pst": "Correo (Outlook)",
+    ".ost": "Correo (Outlook)",
+    ".vhdx": "Maquinas virtuales",
+    ".vmdk": "Maquinas virtuales",
+    ".log": "Registros y temporales",
+    ".tmp": "Registros y temporales",
+    ".dmp": "Registros y temporales",
 }
+TOP_FILES_PER_EXTENSION = 30
+TOP_FILES_GLOBAL = 100
 
 
 @dataclass(slots=True)
@@ -81,6 +106,8 @@ class FormatGroup:
     total_bytes: int
     heaviest_file: Path | None
     heaviest_bytes: int
+    # v0.5.4: los archivos mas pesados de esta extension (hasta TOP_FILES_PER_EXTENSION), desc.
+    top_files: list[tuple[Path, int]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -99,7 +126,7 @@ def _categorize_ext(ext: str) -> str:
 def analyze_storage_hierarchy(
     root: Path,
     max_depth: int = 4,
-    top_formats: int = 40,
+    top_formats: int = 80,
     max_children: int = 60,
     progress_cb: Callable[[int, str], None] | None = None,
     controller: TaskController | None = None,
@@ -110,6 +137,7 @@ def analyze_storage_hierarchy(
     ext_counts: dict[str, int] = defaultdict(int)
     ext_heaviest: dict[str, tuple[Path, int]] = {}
     heavy_heap: list[tuple[int, str, str]] = []
+    ext_tops: dict[str, list[tuple[int, str]]] = defaultdict(list)
     top_entries: list[str] = []
     try:
         top_entries = [e.name for e in os.scandir(resolved)]
@@ -140,9 +168,10 @@ def analyze_storage_hierarchy(
             try:
                 st = entry.stat(follow_symlinks=False)
                 attrs = getattr(st, "st_file_attributes", None)
-                if attrs_is_cloud_only(attrs) or attrs_is_reparse_or_system(attrs):
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if attrs_skip_entry(attrs, is_dir):
                     continue
-                if entry.is_dir(follow_symlinks=False):
+                if is_dir:
                     if is_protected_path(ep):
                         continue
                     child = _walk_dir(ep, depth + 1)
@@ -161,13 +190,17 @@ def analyze_storage_hierarchy(
                     prev = ext_heaviest.get(ext)
                     if prev is None or sz > prev[1]:
                         ext_heaviest[ext] = (ep, sz)
-                    if sz >= 5 * 1024 * 1024:
-                        # v0.5.3: top-100 acotado (heap) en vez de una lista sin limite.
-                        item = (sz, str(ep), ext)
-                        if len(heavy_heap) < 100:
-                            heapq.heappush(heavy_heap, item)
-                        elif sz > heavy_heap[0][0]:
-                            heapq.heapreplace(heavy_heap, item)
+                    # v0.5.3/v0.5.4: tops acotados (heaps) global y por extension.
+                    eheap = ext_tops[ext]
+                    if len(eheap) < TOP_FILES_PER_EXTENSION:
+                        heapq.heappush(eheap, (sz, entry.path))
+                    elif sz > eheap[0][0]:
+                        heapq.heapreplace(eheap, (sz, entry.path))
+                    item = (sz, entry.path, ext)
+                    if len(heavy_heap) < TOP_FILES_GLOBAL:
+                        heapq.heappush(heavy_heap, item)
+                    elif sz > heavy_heap[0][0]:
+                        heapq.heapreplace(heavy_heap, item)
             except OSError:
                 continue
 
@@ -191,6 +224,7 @@ def analyze_storage_hierarchy(
                 total_bytes=total,
                 heaviest_file=heavy_path,
                 heaviest_bytes=heavy_sz,
+                top_files=[(Path(p), sz) for sz, p in sorted(ext_tops.get(ext, []), reverse=True)],
             )
         )
     formats.sort(key=lambda f: f.total_bytes, reverse=True)

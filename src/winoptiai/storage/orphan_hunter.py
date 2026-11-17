@@ -20,8 +20,7 @@ from typing import Callable
 from ..core.safety_guard import QuarantineVault, is_protected_path
 from ..core.win32_bridge import (
     IS_WINDOWS,
-    attrs_is_cloud_only,
-    attrs_is_reparse_or_system,
+    attrs_skip_entry,
     get_locking_processes,
     is_cloud_only_file,
     is_reparse_or_system_file,
@@ -133,9 +132,10 @@ def _dir_size(path: Path) -> int:
                     except OSError:
                         continue
                     attrs = getattr(st, "st_file_attributes", None)
-                    if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    if attrs_skip_entry(attrs, is_dir):
                         continue
-                    if entry.is_dir(follow_symlinks=False):
+                    if is_dir:
                         stack.append(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
                         total += int(st.st_size)

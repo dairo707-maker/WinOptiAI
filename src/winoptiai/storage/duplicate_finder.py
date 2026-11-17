@@ -20,8 +20,7 @@ from blake3 import blake3
 from ..core.safety_guard import QuarantineVault, is_protected_path, is_safe_to_touch_file
 from ..core.task_control import TaskCanceledError, TaskController
 from ..core.win32_bridge import (
-    attrs_is_cloud_only,
-    attrs_is_reparse_or_system,
+    attrs_skip_entry,
     create_ntfs_hardlink,
 )
 
@@ -97,9 +96,10 @@ def find_duplicates(
                         except OSError:
                             continue
                         attrs = getattr(st, "st_file_attributes", None)
-                        if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                        if attrs_skip_entry(attrs, is_dir):  # v0.5.4: carpetas OneDrive "unpinned"
                             continue
-                        if entry.is_dir(follow_symlinks=False):
+                        if is_dir:
                             if not entry.name.startswith(".git") and entry.name != "__pycache__":
                                 stack.append(ep)
                         elif entry.is_file(follow_symlinks=False) and st.st_size >= min_size_bytes:

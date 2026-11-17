@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import time
 from typing import Any, Callable
 import uuid
@@ -160,6 +161,97 @@ def is_safe_to_touch_file(
             return False, f"EN_USO ({names})"
 
     return True, "SEGURO"
+
+
+def _long_path(path: Path | str) -> str:
+    """Prefijo ``\\\\?\\`` en Windows para rutas de mas de 260 caracteres."""
+    p = os.path.abspath(str(path))
+    if os.name != "nt" or p.startswith("\\\\?\\"):
+        return p
+    if p.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + p[2:]
+    return "\\\\?\\" + p
+
+
+def _strip_long(p: str) -> str:
+    return p[4:] if p.startswith("\\\\?\\") else p
+
+
+def _force_unlink(path: Path) -> list[Path]:
+    lp = _long_path(path)
+    try:
+        os.chmod(lp, stat.S_IWRITE)
+    except OSError:
+        pass
+    try:
+        os.unlink(lp)
+        return []
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [path]
+
+
+def force_remove_tree(path: Path, progress_cb: Callable[[int, str], None] | None = None) -> list[Path]:
+    """Borrar un arbol de la boveda quitando atributos de solo lectura y usando rutas largas.
+
+    Devuelve los archivos que siguieron bloqueados (vacio = borrado completo). Solo se usa
+    dentro de la boveda de cuarentena, nunca sobre rutas del usuario.
+    """
+    blocked: list[Path] = []
+    root = _long_path(path)
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        for name in filenames:
+            fp = os.path.join(dirpath, name)
+            try:
+                os.unlink(fp)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                try:
+                    os.chmod(fp, stat.S_IWRITE)
+                    os.unlink(fp)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    blocked.append(Path(_strip_long(fp)))
+            count += 1
+            if progress_cb and count % 2000 == 0:
+                progress_cb(50, f"Eliminando archivos de la boveda ({count:,})...".replace(",", "."))
+        for name in dirnames:
+            dp = os.path.join(dirpath, name)
+            try:
+                os.rmdir(dp)
+            except OSError:
+                try:
+                    os.chmod(dp, stat.S_IWRITE)
+                    os.rmdir(dp)
+                except OSError:
+                    pass  # no vacio: contiene archivos bloqueados ya reportados
+    try:
+        os.rmdir(root)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        try:
+            os.chmod(root, stat.S_IWRITE)
+            os.rmdir(root)
+        except OSError:
+            if not blocked and os.path.exists(root):
+                blocked.append(path)
+    return blocked
+
+
+def _tree_size(path: Path) -> int:
+    total = 0
+    for dirpath, _dirs, files in os.walk(_long_path(path)):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                pass
+    return total
 
 
 def compute_sha256(path: Path) -> str:
@@ -527,50 +619,104 @@ class QuarantineVault:
     def purge_item(self, item_id: str, use_recycle_bin: bool = True) -> tuple[bool, str]:
         """Permanently purge or recycle an item from the Quarantine Vault."""
         res = self.purge_items([item_id], use_recycle_bin=use_recycle_bin)
+        if res["failed"]:
+            return False, f"{res['blocked_files']} archivo(s) siguen bloqueados en la boveda"
         if res["purged"] == 0:
             return False, "Registro no encontrado"
         return True, "Elemento depurado de la boveda"
+
+    def list_orphan_entries(self) -> list[Path]:
+        """Restos dentro de ``items/`` sin registro en el manifiesto (purgas interrumpidas).
+
+        Solo se listan entradas propias de la boveda; nunca rutas fuera de ``items_dir``.
+        """
+        with self._lock:
+            records = self._load_manifest()
+        known = {os.path.normcase(os.path.abspath(str(r.get("vault_path") or ""))) for r in records}
+        out: list[Path] = []
+        try:
+            for entry in os.scandir(self.items_dir):
+                if os.path.normcase(os.path.abspath(entry.path)) not in known:
+                    out.append(Path(entry.path))
+        except OSError:
+            pass
+        return out
 
     def purge_items(
         self,
         item_ids: list[str],
         use_recycle_bin: bool = False,
         progress_cb: Callable[[int, str], None] | None = None,
-    ) -> dict[str, int]:
-        """Remove multiple Quarantine Vault entries efficiently in a single manifest save."""
+        include_orphans: bool = False,
+    ) -> dict[str, Any]:
+        """Remove multiple Quarantine Vault entries efficiently in a single manifest save.
+
+        v0.5.4: los archivos de solo lectura y las rutas largas (>260) ya no bloquean la purga en
+        silencio. Si algo queda bloqueado (p. ej. abierto por otro programa), el registro se
+        conserva con el tamano restante y se informa en ``failed`` / ``blocked_samples``.
+        """
         target_set = set(item_ids)
         with self._lock:
             records = self._load_manifest()
         targets = [r for r in records if r.get("item_id") in target_set]
-        if not targets:
-            return {"purged": 0, "freed_bytes": 0}
+        orphans = self.list_orphan_entries() if include_orphans else []
+        result: dict[str, Any] = {
+            "purged": 0,
+            "freed_bytes": 0,
+            "failed": 0,
+            "blocked_files": 0,
+            "blocked_samples": [],
+            "orphans_removed": 0,
+        }
+        if not targets and not orphans:
+            return result
 
         purged_ids: set[str] = set()
-        freed_bytes = 0
-        total = max(1, len(targets))
+        updated_sizes: dict[str, int] = {}
+        total = max(1, len(targets) + len(orphans))
         for idx, match in enumerate(targets, start=1):
-            if progress_cb and (idx == 1 or idx % 100 == 0 or idx == total):
-                pct = 10 + int(idx * 85 / total)
-                progress_cb(pct, f"Depurando boveda ({idx}/{total})...")
+            if progress_cb:
+                progress_cb(10 + int(idx * 85 / total), f"Depurando boveda ({idx}/{total})...")
             vault_path = Path(match["vault_path"])
-            try:
-                if vault_path.exists():
-                    if use_recycle_bin and send_to_recycle_bin(vault_path):
-                        pass
-                    elif vault_path.is_dir():
-                        shutil.rmtree(vault_path, ignore_errors=False)
-                    else:
-                        vault_path.unlink()
-                purged_ids.add(str(match["item_id"]))
-                freed_bytes += int(match.get("size_bytes") or 0)
-            except OSError:
-                continue
+            size_before = int(match.get("size_bytes") or 0)
+            if vault_path.exists() and use_recycle_bin and send_to_recycle_bin(vault_path):
+                pass
+            elif vault_path.exists():
+                blocked = force_remove_tree(vault_path, progress_cb=progress_cb)
+                if blocked:
+                    remaining = _tree_size(vault_path)
+                    updated_sizes[str(match["item_id"])] = remaining
+                    result["failed"] += 1
+                    result["blocked_files"] += len(blocked)
+                    result["blocked_samples"].extend(str(p) for p in blocked[:5])
+                    result["freed_bytes"] += max(0, size_before - remaining)
+                    continue
+            purged_ids.add(str(match["item_id"]))
+            result["freed_bytes"] += size_before
 
-        if purged_ids:
+        for orphan in orphans:
+            blocked = force_remove_tree(orphan) if orphan.is_dir() else _force_unlink(orphan)
+            if not blocked:
+                result["orphans_removed"] += 1
+            else:
+                result["blocked_files"] += len(blocked)
+                result["blocked_samples"].extend(str(p) for p in blocked[:5])
+
+        if purged_ids or updated_sizes:
             with self._lock:
                 cur = self._load_manifest()
-                self._save_manifest([r for r in cur if r.get("item_id") not in purged_ids])
-        return {"purged": len(purged_ids), "freed_bytes": freed_bytes}
+                kept = []
+                for r in cur:
+                    rid = str(r.get("item_id"))
+                    if rid in purged_ids:
+                        continue
+                    if rid in updated_sizes:
+                        r = dict(r, size_bytes=updated_sizes[rid])
+                    kept.append(r)
+                self._save_manifest(kept)
+        result["purged"] = len(purged_ids)
+        result["blocked_samples"] = result["blocked_samples"][:10]
+        return result
 
     def purge_expired_items(
         self,

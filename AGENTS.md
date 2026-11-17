@@ -1,6 +1,6 @@
 # AGENTS.md — Guia Multi-Agente (Antigravity, Claude Code, Codex, Cursor)
 
-Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, estetica UI (`0px` Obsidian Acrylic / Alabaster Frost, cero emojis, `Instrument Sans` + `IBM Plex Mono`), lecciones criticas de `PySide6`/`shiboken6` e invariantes de seguridad del sistema operativo (`v0.5.3`).
+Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, estetica UI (`0px` Obsidian Acrylic / Alabaster Frost, cero emojis, `Instrument Sans` + `IBM Plex Mono`), lecciones criticas de `PySide6`/`shiboken6` e invariantes de seguridad del sistema operativo (`v0.5.4`).
 
 ## Mapa de Modulos
 

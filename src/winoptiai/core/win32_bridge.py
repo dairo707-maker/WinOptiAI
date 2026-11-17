@@ -135,6 +135,22 @@ def attrs_is_cloud_only(attrs: int | None) -> bool:
     return bool(attrs & CLOUD_ONLY_MASK) if attrs is not None else False
 
 
+# v0.5.4: en CARPETAS, OneDrive marca FILE_ATTRIBUTE_UNPINNED como politica ("liberar espacio")
+# aunque la carpeta y su listado esten en disco. Listar una carpeta nunca descarga contenido;
+# solo se omiten carpetas que requieren ir a la nube para enumerarse (RECALL_*/OFFLINE).
+# Para ARCHIVOS se sigue usando CLOUD_ONLY_MASK completo (incluye UNPINNED).
+CLOUD_ONLY_DIR_MASK = FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+
+def attrs_skip_entry(attrs: int | None, is_dir: bool) -> bool:
+    """True si un escaneo debe omitir la entrada: reparse/sistema, o nube segun sea archivo o carpeta."""
+    if attrs is None:
+        return False
+    if attrs & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_SYSTEM):
+        return True
+    return bool(attrs & (CLOUD_ONLY_DIR_MASK if is_dir else CLOUD_ONLY_MASK))
+
+
 def attrs_is_reparse_or_system(attrs: int | None) -> bool:
     """Fast attribute-bitmask check for junctions/symlinks or OS system files."""
     if attrs is None:

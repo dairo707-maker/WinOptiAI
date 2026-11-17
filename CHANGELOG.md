@@ -2,6 +2,17 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.4] - 2026-11-16
+
+### Agregado
+- **Mapa jerarquico (treemap) en Arbol y Formatos (`ui/treemap.py`):** bloques proporcionales al peso de cada carpeta, con sus subcarpetas visibles dentro; clic para entrar, "Subir" para volver, doble clic o menu para abrir en el Explorador. Estilo monocromo con lineas de 1 px y bordes rectos.
+- **Pestana "Archivos mas pesados":** top 100 del analisis o agrupado por extension (desplegable, hasta 30 archivos por extension), filtro por tipo (Video, Documentos, Datos y Codigo, Correo, etc.) o por extension. Doble clic abre la carpeta en el Explorador con el archivo seleccionado; menu con "Copiar ruta" y "Enviar a Cuarentena" (con confirmacion).
+- Nuevas categorias: Stata/SPSS/R/SIG, Outlook (`.pst`/`.ost`), maquinas virtuales, registros y temporales.
+
+### Corregido
+- **OneDrive ignorado en Arbol y Duplicados:** OneDrive marca sus carpetas con el atributo `UNPINNED` aunque esten en disco y los escaneos las trataban como "solo en la nube", omitiendo todo su contenido. Ahora solo se omiten carpetas que realmente requieren la nube para listarse; cada archivo se sigue protegiendo igual (nunca se hidrata).
+- **Boveda de Cuarentena: elemento que no se podia borrar.** Los lotes con archivos de solo lectura o rutas de mas de 260 caracteres fallaban en silencio y quedaban a medias. La purga ahora quita el atributo de solo lectura, usa rutas largas, informa los archivos que siguen bloqueados (y conserva el registro con el tamano restante) y, al vaciar toda la Boveda, elimina tambien restos sin registro de purgas anteriores.
+
 ## [0.5.3] - 2026-11-16
 
 ### Corregido (P0 - "No responde" al terminar Arbol y Formatos)

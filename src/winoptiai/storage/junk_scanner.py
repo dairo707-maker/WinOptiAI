@@ -20,8 +20,7 @@ from ..core.task_control import (
     new_session_id,
 )
 from ..core.win32_bridge import (
-    attrs_is_cloud_only,
-    attrs_is_reparse_or_system,
+    attrs_skip_entry,
     get_locking_processes,
 )
 
@@ -132,9 +131,10 @@ def _scan_eligible_with_sizes(
                     except OSError:
                         continue
                     attrs = getattr(st, "st_file_attributes", None)
-                    if attrs_is_reparse_or_system(attrs) or attrs_is_cloud_only(attrs):
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    if attrs_skip_entry(attrs, is_dir):
                         continue
-                    if entry.is_dir(follow_symlinks=False):
+                    if is_dir:
                         if mei_dir and entry.path.lower() == mei_dir:
                             continue
                         stack.append(ep)

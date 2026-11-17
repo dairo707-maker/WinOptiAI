@@ -8,7 +8,7 @@ Los archivos marcados como solo en linea en OneDrive presentan los atributos Win
 - `FILE_ATTRIBUTE_UNPINNED` (`0x00100000`)
 - `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (`0x00400000`)
 
-WinOptiAI inspecciona `GetFileAttributesW` antes de abrir, hashear o previsualizar cualquier archivo. En modo `OneDrive Nube`, la deshidratacion local usa unicamente `SetFileAttributesW` (`+U -P`) protegiendo repositorios (`.git`, `.venv`, `node_modules`); las acciones en Microsoft Graph usan OAuth 2.0 PKCE con tokens cifrados localmente via DPAPI (`CryptProtectData`), excluyen carpetas compartidas de terceros por defecto y envian solo a la Papelera de OneDrive (recuperable).
+WinOptiAI inspecciona `GetFileAttributesW` antes de abrir, hashear o previsualizar cualquier archivo. **Carpetas (v0.5.4):** OneDrive marca sus carpetas con `UNPINNED` aunque esten en disco; listar una carpeta no descarga contenido, asi que los recorridos (`win32_bridge.attrs_skip_entry`) solo omiten carpetas `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS`, y cada archivo se sigue evaluando con la mascara completa. En modo `OneDrive Nube`, la deshidratacion local usa unicamente `SetFileAttributesW` (`+U -P`) protegiendo repositorios (`.git`, `.venv`, `node_modules`); las acciones en Microsoft Graph usan OAuth 2.0 PKCE con tokens cifrados localmente via DPAPI (`CryptProtectData`), excluyen carpetas compartidas de terceros por defecto y envian solo a la Papelera de OneDrive (recuperable).
 
 ## 2. Verificacion de Bloqueos (Restart Manager y Fallback NTFS)
 
