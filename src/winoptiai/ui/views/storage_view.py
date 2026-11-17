@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import copy
+from dataclasses import replace
 from datetime import datetime
+import os
 from pathlib import Path
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtCore import QEvent, QPoint, Qt, QThreadPool, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,11 +37,18 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.i18n import tr
-from ...core.safety_guard import PreOpBackupManager, QuarantineVault
+from ...core.safety_guard import QUICK_HASH_MAX_BYTES, PreOpBackupManager, QuarantineVault, is_internal_app_path
 from ...core.sre_policy import SREPolicyEngine
-from ...core.win32_bridge import is_cloud_only_file, is_user_admin, reveal_in_explorer, run_elevated_command
+from ...core.win32_bridge import (
+    is_cloud_only_file,
+    is_user_admin,
+    play_recycle_sound,
+    reveal_in_explorer,
+    run_elevated_command,
+)
 from ...storage.duplicate_finder import (
     DuplicateGroup,
+    HashCache,
     deduplicate_group_via_hardlink,
     find_duplicates,
     quarantine_duplicates_plan,
@@ -60,6 +70,7 @@ from ...storage.onedrive_optimizer import (
 )
 from ...storage.orphan_hunter import OrphanCandidate, quarantine_orphans, scan_orphan_artifacts
 from ...storage.tree_analyzer import FolderNode, StorageHierarchyReport, analyze_storage_hierarchy
+from ..fx import TrashColumnDelegate, UndoToast, fade_out_table_rows, pulse_widget, set_badge_text
 from ..svg_icons import load_svg_icon
 from ..theme import format_bytes, get_palette
 from ..treemap import TreemapWidget
@@ -75,10 +86,48 @@ from ..widgets import (
     configure_sortable_table,
     set_button_role,
 )
+from ..workers import AsyncTask
 
 
 # v0.5.1: sub-modos cuya tabla principal admite seleccion multiple con "Seleccionar todo"
 SELECTABLE_TABLE_MODES: frozenset[str] = frozenset({"junk", "duplicates", "orphans", "quarantine", "onedrive"})
+
+QUICK_QUARANTINE_MODES = ("duplicates", "orphans")  # v0.5.9: Supr / caneca por fila en la tabla
+
+
+def _norm(p: str | Path) -> str:
+    return os.path.normcase(os.path.abspath(str(p)))
+
+
+def _subtract_moved_from_tree(report: StorageHierarchyReport, moved: set[str]) -> None:
+    """v0.5.9: descontar del arbol/formatos/tops los archivos enviados a Cuarentena (sin reanalizar)."""
+    sizes: dict[str, int] = {}
+    for p, _ext, sz in report.heaviest_files:
+        if _norm(p) in moved:
+            sizes[_norm(p)] = int(sz)
+    for fg in report.formats:
+        for p, sz in fg.top_files:
+            if _norm(p) in moved:
+                sizes[_norm(p)] = int(sz)
+    if not sizes:
+        return
+    report.heaviest_files = [h for h in report.heaviest_files if _norm(h[0]) not in sizes]
+    for fg in report.formats:
+        gone = [(p, sz) for p, sz in fg.top_files if _norm(p) in sizes]
+        if not gone:
+            continue
+        fg.top_files = [(p, sz) for p, sz in fg.top_files if _norm(p) not in sizes]
+        fg.total_bytes = max(0, fg.total_bytes - sum(sz for _p, sz in gone))
+        fg.file_count = max(0, fg.file_count - len(gone))
+        if fg.heaviest_file is not None and _norm(fg.heaviest_file) in sizes:
+            fg.heaviest_file, fg.heaviest_bytes = fg.top_files[0] if fg.top_files else (None, 0)
+    for key, sz in sizes.items():
+        node = report.root_node
+        while node is not None and (key == _norm(node.path) or key.startswith(_norm(node.path) + os.sep)):
+            node.size_bytes = max(0, node.size_bytes - sz)
+            node.file_count = max(0, node.file_count - 1)
+            node = next((c for c in node.children if key.startswith(_norm(c.path) + os.sep)), None)
+
 
 MAX_STORAGE_TASKS = 2  # v0.5.2: escaneos/limpiezas de almacenamiento simultaneos
 TREE_CHILDREN_PER_LEVEL = 40  # v0.5.3: subcarpetas creadas por nivel al expandir (carga perezosa)
@@ -452,7 +501,33 @@ class StorageView(QWidget):
         root.addWidget(self.main_splitter, stretch=1)
         root.addWidget(self.tree_tabs, stretch=1)
 
+        # v0.5.9: Cuarentena instantanea -> Supr, clic derecho, caneca por fila y arrastrar a la Boveda.
+        self._quick_tasks: list[AsyncTask] = []
+        self._undo_toast = UndoToast(self)
+        self._vault_tab_base = self.mode_buttons["quarantine"].text()
+        self.heavy_tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.table.setMouseTracking(True)
+        self.heavy_tree.setMouseTracking(True)
+        self.table.installEventFilter(self)
+        self.heavy_tree.installEventFilter(self)
+
+        def _trash_icon():
+            return load_svg_icon("quarantine", color=get_palette(self.policy.config.theme_mode)["tag_warn"], size=16)
+
+        self._trash_delegate = TrashColumnDelegate(_trash_icon, self._trash_enabled, self._on_trash_clicked, self.table)
+        self.table.setItemDelegateForColumn(3, self._trash_delegate)
+        self._heavy_trash_delegate = TrashColumnDelegate(
+            _trash_icon, self._heavy_trash_enabled, self._on_heavy_trash_clicked, self.heavy_tree
+        )
+        self.heavy_tree.setItemDelegateForColumn(3, self._heavy_trash_delegate)
+        self._drop_targets = (self.mode_buttons["quarantine"], self.table.viewport())
+        for target in self._drop_targets:
+            target.setAcceptDrops(True)
+            target.installEventFilter(self)
+        self.mode_buttons["quarantine"].setToolTip("Suelte aqui archivos del Explorador para enviarlos a Cuarentena")
+
         self._switch_mode("junk")
+        self._refresh_vault_badge()
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
         self.lang = lang
@@ -640,17 +715,7 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            root = self.scan_root
-            self.dup_root = root
-            self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {root} (en segundo plano)...")
-            self.run_async(
-                lambda progress_cb=None, controller=None, root=root: find_duplicates(
-                    [root], progress_cb=progress_cb, controller=controller
-                ),
-                self._on_dups_scanned,
-                f"Duplicados BLAKE3 ({root.name})",
-                progress_ui_cb=self._progress_summary,
-            )
+            self._start_dup_scan(self.scan_root)
         elif self.mode == "tree":
             chosen = QFileDialog.getExistingDirectory(
                 self, "Seleccionar carpeta o unidad para vista jerarquica", str(self.scan_root)
@@ -658,17 +723,7 @@ class StorageView(QWidget):
             if not chosen:
                 return
             self.scan_root = Path(chosen)
-            root = self.scan_root
-            self.tree_root = root
-            self.summary_lbl.setText(f"Analizando arbol y formatos en {root} (en segundo plano)...")
-            self.run_async(
-                lambda progress_cb=None, controller=None, root=root: analyze_storage_hierarchy(
-                    root, progress_cb=progress_cb, controller=controller
-                ),
-                self._on_tree_scanned,
-                f"Arbol almacenamiento ({root.name})",
-                progress_ui_cb=self._progress_summary,
-            )
+            self._start_tree_scan(self.scan_root)
         elif self.mode == "orphans":
             self.summary_lbl.setText("Analizando artefactos sueltos en segundo plano...")
             self.run_async(
@@ -716,6 +771,53 @@ class StorageView(QWidget):
 
         self._run_async_raw(fn, _wrapped_cb, task_label, *args, on_error=_wrapped_err, **kwargs)
 
+    def _start_dup_scan(self, root: Path) -> None:
+        """v0.5.9: con cache de huellas (lo calculado no se repite) y retomable con Guardar Pausa."""
+        self.dup_root = root
+        self.summary_lbl.setText(f"Calculando firmas BLAKE3 en {root} (en segundo plano)...")
+
+        def _scan(progress_cb=None, controller=None, root=root):
+            cache = HashCache()
+            try:
+                return find_duplicates([root], progress_cb=progress_cb, controller=controller, cache=cache)
+            finally:
+                cache.close()
+
+        self.run_async(
+            _scan,
+            self._on_dups_scanned,
+            f"Duplicados BLAKE3 ({root.name})",
+            progress_ui_cb=self._progress_summary,
+            resume_meta={"mode": "duplicates", "root": str(root)},
+        )
+
+    def _start_tree_scan(self, root: Path) -> None:
+        self.tree_root = root
+        self.summary_lbl.setText(f"Analizando arbol y formatos en {root} (en segundo plano)...")
+        self.run_async(
+            lambda progress_cb=None, controller=None, root=root: analyze_storage_hierarchy(
+                root, progress_cb=progress_cb, controller=controller
+            ),
+            self._on_tree_scanned,
+            f"Arbol almacenamiento ({root.name})",
+            progress_ui_cb=self._progress_summary,
+            resume_meta={"mode": "tree", "root": str(root)},
+        )
+
+    def resume_scan(self, meta: dict) -> bool:
+        """Retomar un analisis guardado con Guardar Pausa (v0.5.9)."""
+        mode = str(meta.get("mode") or "")
+        root = Path(str(meta.get("root") or ""))
+        if mode not in ("duplicates", "tree") or not root.exists():
+            return False
+        self._switch_mode(mode)
+        self.scan_root = root
+        if mode == "duplicates":
+            self._start_dup_scan(root)
+        else:
+            self._start_tree_scan(root)
+        return True
+
     def _rescan_after_action(self, mode: str) -> None:
         """Re-scan only the sub-mode that produced the action (v0.5.2).
 
@@ -730,6 +832,244 @@ class StorageView(QWidget):
             self.junk_targets = []
         elif mode == "orphans":
             self.orphans = []
+
+    # ------------------------------------------------------------------
+    # v0.5.9: Cuarentena instantanea (Supr, clic derecho, caneca por fila, arrastrar) + Deshacer
+    # ------------------------------------------------------------------
+    def _quick_modes_allowed(self) -> bool:
+        return self.mode in QUICK_QUARANTINE_MODES or (self.mode == "tree" and self.tree_tabs.currentIndex() == 2)
+
+    def _selected_quick_targets(self) -> tuple[list[Path], str]:
+        """Rutas a mover segun el modo y la seleccion actual (sin abrir ningun proceso)."""
+        if self.mode == "duplicates":
+            idxs = self._selected_model_indices()
+            groups = [self.dup_groups[i] for i in idxs if i < len(self.dup_groups)]
+            rule = str(self.rule_combo.currentData() or "keep_oldest")
+            paths = [rp for _g, _keep, rem in select_duplicates_by_rule(groups, rule=rule) for rp in rem]
+            return paths, "Duplicado BLAKE3"
+        if self.mode == "orphans":
+            idxs = self._selected_model_indices()
+            items = [self.orphans[i] for i in idxs if i < len(self.orphans)]
+            return [o.path for o in items if o.confidence != "EN_USO" and not o.in_use_by], "Huerfano"
+        if self.mode == "tree" and self.tree_tabs.currentIndex() == 2:
+            paths: list[Path] = []
+            for it in self.heavy_tree.selectedItems():
+                p = it.data(0, Qt.ItemDataRole.UserRole + 1)
+                if p:
+                    paths.append(Path(str(p)))
+            return paths, "Arbol/Formato"
+        return [], ""
+
+    def _quick_quarantine_selected(self) -> None:
+        if self.mode == "junk":
+            self._on_secondary_action()  # limpieza por lotes (muchos archivos por carpeta)
+            return
+        if not self._quick_modes_allowed():
+            if self.mode == "quarantine":
+                self.summary_lbl.setText("En la Boveda use 'Restaurar Seleccionado' o 'Depurar / Vaciar Boveda'.")
+            return
+        paths, category = self._selected_quick_targets()
+        if not paths:
+            self.summary_lbl.setText("Seleccione uno o mas elementos para enviarlos a Cuarentena (Supr).")
+            return
+        self._quarantine_paths(paths, category)
+
+    def _quarantine_paths(self, paths: list[Path], category: str) -> None:
+        """Mover a la Boveda en segundo plano sin tarea visible; al terminar: sonido, animacion y Deshacer."""
+        clean = [p for p in dict.fromkeys(Path(x) for x in paths) if not is_internal_app_path(p)]
+        if not clean:
+            self.summary_lbl.setText("Nada que mover: los elementos ya estan en la Boveda o no son validos.")
+            return
+        mode_at_start = self.mode
+        rows_for_fade = self._rows_for_paths(clean)
+        task = AsyncTask(
+            f"Cuarentena rapida ({len(clean)})",
+            lambda: self.vault.quarantine_many(
+                [(p, category) for p in clean], hash_max_bytes=QUICK_HASH_MAX_BYTES
+            ),
+        )
+        self._quick_tasks.append(task)
+        queued = Qt.ConnectionType.QueuedConnection
+
+        def _done(_tid: str, res: dict) -> None:
+            self._quick_tasks = [t for t in self._quick_tasks if t is not task]
+            self._after_quick_quarantine(res, category, mode_at_start, rows_for_fade)
+
+        def _err(_tid: str, msg: str) -> None:
+            self._quick_tasks = [t for t in self._quick_tasks if t is not task]
+            self.summary_lbl.setText(f"No se pudo mover a Cuarentena: {msg}")
+
+        task.signals.finished.connect(_done, queued)
+        task.signals.error.connect(_err, queued)
+        QThreadPool.globalInstance().start(task)
+
+    def _rows_for_paths(self, paths: list[Path]) -> list[int]:
+        wanted = {_norm(p) for p in paths}
+        rows: list[int] = []
+        if self.mode == "duplicates":
+            for r in range(self.table.rowCount()):
+                it = self.table.item(r, 0)
+                gi = it.data(Qt.ItemDataRole.UserRole + 1) if it else None
+                if isinstance(gi, int) and gi < len(self.dup_groups):
+                    if any(_norm(p) in wanted for p in self.dup_groups[gi].paths):
+                        rows.append(r)
+        elif self.mode == "orphans":
+            for r in range(self.table.rowCount()):
+                it = self.table.item(r, 0)
+                oi = it.data(Qt.ItemDataRole.UserRole + 1) if it else None
+                if isinstance(oi, int) and oi < len(self.orphans) and _norm(self.orphans[oi].path) in wanted:
+                    rows.append(r)
+        return rows
+
+    def _after_quick_quarantine(self, res: dict, category: str, mode_at_start: str, rows: list[int]) -> None:
+        moved_items: list[tuple[str, str]] = list(res.get("moved_items", []))
+        if not moved_items:
+            self.summary_lbl.setText(
+                f"No se movio nada ({res.get('skipped', 0)} omitidos: en uso, protegidos o solo en la nube)."
+            )
+            return
+        play_recycle_sound()
+        moved = {_norm(orig) for _iid, orig in moved_items}
+        undo_data = self._remove_moved_from_lists(moved)
+        msg = f"Movido a Cuarentena: {len(moved_items)} elemento(s), {format_bytes(res.get('freed_bytes', 0))}"
+        if res.get("skipped"):
+            msg += f" | {res['skipped']} omitidos"
+        self.policy.record_audit_event("usuario", "Cuarentena rapida", f"{category}: {msg}", res.get("freed_bytes", 0) / (1024 * 1024))
+        self.summary_lbl.setText(msg + ".")
+
+        def _rerender() -> None:
+            self._render_current_mode()
+            self._refresh_vault_badge(pulse=True)
+
+        if self.mode == mode_at_start and rows:
+            fade_out_table_rows(self.table, rows, get_palette(self.policy.config.theme_mode)["tag_warn"], _rerender)
+        else:
+            _rerender()
+        ids = [iid for iid, _orig in moved_items]
+        self._undo_toast.show_message(
+            f"{len(ids)} a Cuarentena  ·  {format_bytes(res.get('freed_bytes', 0))}",
+            lambda: self._undo_quick_quarantine(ids, undo_data),
+        )
+
+    def _undo_quick_quarantine(self, item_ids: list[str], undo_data: dict) -> None:
+        def _restore() -> int:
+            return sum(1 for iid in item_ids if self.vault.restore_item(iid)[0])
+
+        task = AsyncTask("Deshacer cuarentena", _restore)
+        self._quick_tasks.append(task)
+
+        def _done(_tid: str, restored: int) -> None:
+            self._quick_tasks = [t for t in self._quick_tasks if t is not task]
+            self._restore_lists(undo_data)
+            self._render_current_mode()
+            self._refresh_vault_badge()
+            self.policy.record_audit_event("usuario", "Deshacer cuarentena", f"Restaurados {restored} de {len(item_ids)}")
+            self.summary_lbl.setText(f"Deshecho: {restored} elemento(s) devueltos a su ubicacion original.")
+
+        task.signals.finished.connect(_done, Qt.ConnectionType.QueuedConnection)
+        QThreadPool.globalInstance().start(task)
+
+    def _remove_moved_from_lists(self, moved: set[str]) -> dict:
+        """Quitar de los listados lo que ya esta en la Boveda (sin reescanear). Devuelve copia para Deshacer."""
+        undo = {
+            "dup_groups": list(self.dup_groups),
+            "orphans": list(self.orphans),
+            "tree_report": copy.deepcopy(self.tree_report) if self.tree_report else None,
+        }
+        new_groups: list[DuplicateGroup] = []
+        for g in self.dup_groups:
+            remaining = [p for p in g.paths if _norm(p) not in moved]
+            if len(remaining) == len(g.paths):
+                new_groups.append(g)
+            elif len(remaining) >= 2:
+                new_groups.append(replace(g, paths=remaining, wasted_bytes=g.size_bytes * (len(remaining) - 1)))
+        self.dup_groups = new_groups
+        self.orphans = [o for o in self.orphans if _norm(o.path) not in moved]
+        if self.tree_report:
+            _subtract_moved_from_tree(self.tree_report, moved)
+        return undo
+
+    def _restore_lists(self, undo: dict) -> None:
+        self.dup_groups = undo.get("dup_groups", self.dup_groups)
+        self.orphans = undo.get("orphans", self.orphans)
+        if undo.get("tree_report") is not None:
+            self.tree_report = undo["tree_report"]
+
+    def _render_current_mode(self) -> None:
+        if self.mode == "duplicates":
+            self._render_duplicates()
+        elif self.mode == "orphans":
+            self._render_orphans()
+        elif self.mode == "tree":
+            self._render_tree()
+        elif self.mode == "quarantine":
+            self._render_quarantine()
+        elif self.mode == "junk":
+            self._render_junk()
+
+    def _refresh_vault_badge(self, pulse: bool = False) -> None:
+        btn = self.mode_buttons.get("quarantine")
+        if btn is None:
+            return
+        try:
+            count = len(self.vault.list_items())
+        except Exception:  # noqa: BLE001
+            count = 0
+        set_badge_text(btn, self._vault_tab_base, count)
+        if pulse:
+            pulse_widget(btn, get_palette(self.policy.config.theme_mode)["tag_warn"])
+
+    def _trash_enabled(self, index) -> bool:
+        if self.mode not in QUICK_QUARANTINE_MODES or not index.isValid():
+            return False
+        if self.mode == "duplicates":  # v0.5.9: sin caneca en grupos protegidos (carpetas copiadas)
+            it = self.table.item(index.row(), 0)
+            gi = it.data(Qt.ItemDataRole.UserRole + 1) if it else None
+            if isinstance(gi, int) and gi < len(self.dup_groups):
+                return not getattr(self.dup_groups[gi], "protected_reason", "")
+        return True
+
+    def _heavy_trash_enabled(self, index) -> bool:
+        if not index.isValid():
+            return False
+        item = self.heavy_tree.itemFromIndex(index)
+        return bool(item is not None and item.data(0, Qt.ItemDataRole.UserRole + 1))
+
+    def _on_trash_clicked(self, index) -> None:
+        self.table.clearSelection()
+        self.table.selectRow(index.row())
+        self._quick_quarantine_selected()
+
+    def _on_heavy_trash_clicked(self, index) -> None:
+        item = self.heavy_tree.itemFromIndex(index)
+        if item is None:
+            return
+        self.heavy_tree.clearSelection()
+        item.setSelected(True)
+        self.heavy_tree.setCurrentItem(item)
+        self._quick_quarantine_selected()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        drop_targets = getattr(self, "_drop_targets", None)
+        if drop_targets is None:  # aun construyendo la vista
+            return super().eventFilter(obj, event)
+        et = event.type()
+        if et == QEvent.Type.KeyPress and obj in (self.table, self.heavy_tree):
+            if event.key() == Qt.Key.Key_Delete:
+                self._quick_quarantine_selected()
+                return True
+        if obj in drop_targets:
+            if et in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                if event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls()):
+                    event.acceptProposedAction()
+                    return True
+            elif et == QEvent.Type.Drop:
+                paths = [Path(u.toLocalFile()) for u in event.mimeData().urls() if u.isLocalFile()]
+                if paths:
+                    event.acceptProposedAction()
+                    self._quarantine_paths(paths, "Arrastrado a la Boveda")
+                    return True
+        return super().eventFilter(obj, event)
 
     def _on_junk_scanned(self, targets: list[JunkTarget]) -> None:
         self.primary_btn.setEnabled(True)
@@ -775,6 +1115,8 @@ class StorageView(QWidget):
             joined = " | ".join(str(p) for p in grp.paths[:3])
             if len(grp.paths) > 3:
                 joined += f" (+{len(grp.paths) - 3})"
+            if getattr(grp, "protected_reason", ""):
+                joined = f"[PROTEGIDO: carpeta copiada] {joined}"  # v0.5.9
             c0 = NumericTableItem(str(len(grp.paths)), len(grp.paths))
             c0.setData(Qt.ItemDataRole.UserRole + 1, row)
             self.table.setItem(row, 0, c0)
@@ -782,9 +1124,14 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(grp.wasted_bytes), grp.wasted_bytes))
             self.table.setItem(row, 3, QTableWidgetItem(joined))
         self.table.setSortingEnabled(True)
+        protected_dirs = getattr(self.dup_groups, "protected_dirs", 0)
+        structural = sum(1 for g in self.dup_groups if getattr(g, "protected_reason", ""))
+        extra = ""
+        if protected_dirs or structural:
+            extra = f" | Protegidos: {protected_dirs} carpetas de programas/sistema, {structural} grupos de carpetas copiadas"
         self.summary_lbl.setText(
             f"Grupos duplicados BLAKE3 en {self.dup_root.name}: {len(self.dup_groups)} | "
-            f"Espacio recuperable: {format_bytes(wasted)}"
+            f"Espacio recuperable: {format_bytes(wasted)}{extra}"
         )
 
     def _preview_selected_group(self) -> None:
@@ -933,7 +1280,11 @@ class StorageView(QWidget):
         act = QAction("Ver en el Explorador de Windows", menu)
         act.triggered.connect(self._reveal_selected_item)
         menu.addAction(act)
-        menu.exec(widget.mapToGlobal(pos))
+        if widget is self.table and self.mode in QUICK_QUARANTINE_MODES:
+            act_q = QAction("Enviar a Cuarentena   (Supr)", menu)  # v0.5.9: inmediato, sin proceso
+            act_q.triggered.connect(self._quick_quarantine_selected)
+            menu.addAction(act_q)
+        menu.exec(widget.viewport().mapToGlobal(pos) if hasattr(widget, "viewport") else widget.mapToGlobal(pos))
 
     def _on_tree_scanned(self, report: StorageHierarchyReport) -> None:
         self.primary_btn.setEnabled(True)
@@ -1048,8 +1399,8 @@ class StorageView(QWidget):
         act_copy = QAction("Copiar ruta", menu)
         act_copy.triggered.connect(lambda: QApplication.clipboard().setText(str(p)))
         menu.addAction(act_copy)
-        act_q = QAction("Enviar a Cuarentena", menu)
-        act_q.triggered.connect(self._on_secondary_action)
+        act_q = QAction("Enviar a Cuarentena   (Supr)", menu)  # v0.5.9: inmediato, sin proceso
+        act_q.triggered.connect(self._quick_quarantine_selected)
         menu.addAction(act_q)
         menu.exec(self.heavy_tree.viewport().mapToGlobal(pos))
 
@@ -1183,6 +1534,7 @@ class StorageView(QWidget):
         self.summary_lbl.setText(
             f"Elementos respaldados en Cuarentena: {len(items)} | Espacio en boveda: {format_bytes(total)}"
         )
+        set_badge_text(self.mode_buttons["quarantine"], self._vault_tab_base, len(items))
 
     def _selected_model_indices(self) -> list[int]:
         rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
@@ -1277,26 +1629,51 @@ class StorageView(QWidget):
             return
         rule = str(self.rule_combo.currentData() or "keep_oldest")
         plan = select_duplicates_by_rule(self.dup_groups, rule=rule)
+        if not plan:
+            self.summary_lbl.setText("No hay copias que se puedan mover con seguridad (programas y carpetas copiadas protegidos).")
+            return
+        # v0.5.9: resumen antes de actuar (incidente 17/11: 70.000+ archivos de programas movidos).
+        removes = [rp for _g, _k, rem in plan for rp in rem]
+        total_bytes = sum(g.size_bytes * len(rem) for g, _k, rem in plan)
+        by_folder: dict[str, int] = {}
+        for rp in removes:
+            key = str(rp.parent)
+            by_folder[key] = by_folder.get(key, 0) + 1
+        top = "\n".join(f"  {n:>5}  {f}" for f, n in sorted(by_folder.items(), key=lambda kv: kv[1], reverse=True)[:8])
+        protected = sum(1 for g in self.dup_groups if getattr(g, "protected_reason", ""))
+        reply = QMessageBox.question(
+            self,
+            "Autolimpiar duplicados",
+            f"Se moveran {len(removes)} copias ({format_bytes(total_bytes)}) a la Cuarentena, conservando "
+            f"una copia de cada archivo.\n\nCarpetas con mas copias:\n{top}\n\n"
+            f"Protegidos y NO tocados: {protected} grupos de carpetas copiadas, ademas de todos los programas, "
+            "entornos y carpetas del sistema.\n\nEs reversible desde la Boveda. Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
-        def _run(progress_cb=None) -> dict[str, int]:
+        def _run(progress_cb=None, controller=None) -> dict[str, int]:
             snapshot_items = [
                 {"keep": str(keep), "remove": [str(rp) for rp in rem], "size_bytes": grp.size_bytes}
                 for grp, keep, rem in plan
             ]
             self.backup_mgr.create_operation_snapshot("autolimpieza_duplicados", snapshot_items)
-            res = quarantine_duplicates_plan(plan, self.vault, progress_cb=progress_cb)
-            return {"freed": res["freed_bytes"], "moved": res["moved"]}
+            res = quarantine_duplicates_plan(plan, self.vault, progress_cb=progress_cb, controller=controller)
+            # v0.5.9: si se cancelo (o se cerro la app), lo ya movido queda registrado y se informa.
+            return {"freed": res["freed_bytes"], "moved": res["moved"], "moved_items": res.get("moved_items", [])}
 
-        def _done(res: dict[str, int]) -> None:
+        def _done(res: dict) -> None:
             msg = f"Autolimpiador ({rule}): {res['moved']} copias a Cuarentena ({format_bytes(res['freed'])})."
             self.policy.record_audit_event("usuario", "Autolimpieza duplicados", msg, res["freed"] / (1024 * 1024))
             self.notify_cb(msg)
-            self.run_async(
-                lambda progress_cb=None, root=self.dup_root: find_duplicates([root], progress_cb=progress_cb),
-                self._on_dups_scanned,
-                "Reescaneo BLAKE3",
-                progress_ui_cb=self._progress_summary,
-            )
+            # v0.5.9: quitar de la lista lo movido en vez de recalcular todas las huellas.
+            if res["moved"]:
+                play_recycle_sound()
+            self._remove_moved_from_lists({_norm(orig) for _iid, orig in res["moved_items"]})
+            self._render_duplicates()
+            self._refresh_vault_badge(pulse=bool(res["moved"]))
 
         self.run_async(_run, _done, "Autolimpieza duplicados", progress_ui_cb=self._progress_summary)
 
@@ -1354,7 +1731,13 @@ class StorageView(QWidget):
                 )
                 self.policy.record_audit_event("usuario", "Limpieza temporales", msg, res["freed"] / (1024 * 1024))
                 self.notify_cb(msg)
-                self._rescan_after_action("junk")
+                # v0.5.9: sin reescanear todo; las carpetas procesadas salen de la lista.
+                done_ids = {t.target_id for t in targets}
+                self.junk_targets = [t for t in self.junk_targets if t.target_id not in done_ids]
+                if res.get("removed"):
+                    play_recycle_sound()
+                self._render_junk()
+                self._refresh_vault_badge(pulse=bool(res.get("removed")))
 
             self.run_async(
                 _clean,
@@ -1366,51 +1749,23 @@ class StorageView(QWidget):
             )
 
         elif self.mode == "duplicates":
-            idxs = self._selected_model_indices()
-            groups = [self.dup_groups[i] for i in idxs if i < len(self.dup_groups)]
-            if not groups:
+            # v0.5.9: inmediato (sin tarea ni reescaneo); las filas movidas desaparecen y hay Deshacer.
+            if not self._selected_model_indices():
                 self.summary_lbl.setText("Seleccione uno o mas grupos duplicados en la tabla.")
                 return
-            rule = str(self.rule_combo.currentData() or "keep_oldest")
-            plan = select_duplicates_by_rule(groups, rule=rule)
-
-            def _dedup(progress_cb=None) -> int:
-                return quarantine_duplicates_plan(plan, self.vault, progress_cb=progress_cb)["freed_bytes"]
-
-            def _done(freed: int) -> None:
-                msg = f"Duplicados movidos a Cuarentena: {format_bytes(freed)} recuperados."
-                self.policy.record_audit_event("usuario", "Duplicados BLAKE3", msg, freed / (1024 * 1024))
-                self.notify_cb(msg)
-                self.run_async(
-                    lambda progress_cb=None, controller=None, root=self.dup_root: find_duplicates(
-                        [root], progress_cb=progress_cb, controller=controller
-                    ),
-                    self._on_dups_scanned,
-                    "Reescaneo BLAKE3",
-                    progress_ui_cb=self._progress_summary,
-                )
-
-            self.run_async(_dedup, _done, "Cuarentena duplicados", progress_ui_cb=self._progress_summary)
+            self._quick_quarantine_selected()
 
         elif self.mode == "tree":
             if not self.tree_report:
                 return
             heavy: Path | None = None
             if self.tree_tabs.currentIndex() == 2:
-                # v0.5.4: archivo elegido en "Archivos mas pesados" (con confirmacion).
-                heavy = self._selected_heavy_path()
-                if heavy is None:
+                # v0.5.9: inmediato y reversible con "Deshacer" (sin dialogo de confirmacion).
+                if not self.heavy_tree.selectedItems():
                     self.summary_lbl.setText("Seleccione un archivo en 'Archivos mas pesados' para enviarlo a Cuarentena.")
                     return
-                reply = QMessageBox.question(
-                    self,
-                    "Enviar a Cuarentena",
-                    f"Mover a la Boveda de Cuarentena (reversible):\n{heavy}",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
+                self._quick_quarantine_selected()
+                return
             else:
                 rows = sorted({idx.row() for idx in self.format_table.selectedIndexes()})
                 if not rows:
@@ -1425,49 +1780,13 @@ class StorageView(QWidget):
                 heavy = self.tree_report.formats[orig].heaviest_file
             if not heavy:
                 return
-
-            def _q_heavy(progress_cb=None):
-                if progress_cb:
-                    progress_cb(35, f"Moviendo {heavy.name} a Cuarentena...")
-                return self.vault.quarantine_path(heavy, category="Arbol/Formato")
-
-            def _done_heavy(res) -> None:
-                ok, msg, rec = res
-                if ok and rec:
-                    self.policy.record_audit_event("usuario", "Cuarentena por formato", f"{heavy.name}: {msg}", rec.size_bytes / (1024 * 1024))
-                    self.notify_cb(f"Movido a Cuarentena: {heavy.name}")
-                    self.run_async(
-                        lambda progress_cb=None, controller=None, root=self.tree_root: analyze_storage_hierarchy(
-                            root, progress_cb=progress_cb, controller=controller
-                        ),
-                        self._on_tree_scanned,
-                        "Actualizar arbol",
-                        progress_ui_cb=self._progress_summary,
-                    )
-                else:
-                    self.notify_cb(msg)
-
-            self.run_async(_q_heavy, _done_heavy, f"Cuarentena ({heavy.name})", progress_ui_cb=self._progress_summary)
+            self._quarantine_paths([heavy], "Arbol/Formato")  # v0.5.9: sin reanalizar el arbol
 
         elif self.mode == "orphans":
-            idxs = self._selected_model_indices()
-            items = [self.orphans[i] for i in idxs if i < len(self.orphans)]
-            if not items:
+            if not self._selected_model_indices():
                 self.summary_lbl.setText("Seleccione uno o mas artefactos huerfanos en la tabla.")
                 return
-
-            def _done(res: dict[str, int]) -> None:
-                msg = f"Huerfanos a Cuarentena: {res['moved']} movidos ({format_bytes(res['freed_bytes'])})."
-                self.policy.record_audit_event("usuario", "Cuarentena huerfanos", msg, res["freed_bytes"] / (1024 * 1024))
-                self.notify_cb(msg)
-                self._rescan_after_action("orphans")
-
-            self.run_async(
-                lambda progress_cb=None: quarantine_orphans(items, self.vault, progress_cb=progress_cb),
-                _done,
-                "Cuarentena huerfanos",
-                progress_ui_cb=self._progress_summary,
-            )
+            self._quick_quarantine_selected()  # v0.5.9: inmediato, sin reescanear
 
         elif self.mode == "onedrive":
             self._optimize_selected_onedrive()
@@ -1528,10 +1847,12 @@ class StorageView(QWidget):
             self.summary_lbl.setText("Hardlink NTFS cancelado por el usuario.")
             return
 
-        def _link(progress_cb=None) -> int:
+        def _link(progress_cb=None, controller=None) -> int:
             freed = 0
             total = max(1, len(groups))
             for idx, grp in enumerate(groups, start=1):
+                if controller is not None and controller.checkpoint() in ("cancel", "save_pause"):
+                    break  # v0.5.9: Cancelar / cerrar la app detiene entre grupos
                 if progress_cb and (idx == 1 or idx % 10 == 0 or idx == total):
                     progress_cb(10 + int(idx * 85 / total), f"Enlazando hardlinks NTFS ({idx}/{total})...")
                 freed += deduplicate_group_via_hardlink(grp, grp.paths[0])["freed_bytes"]
@@ -1541,12 +1862,10 @@ class StorageView(QWidget):
             msg = f"Hardlinks NTFS creados: {format_bytes(freed)} ahorrados conservando todas las rutas."
             self.policy.record_audit_event("usuario", "Hardlink NTFS", msg, freed / (1024 * 1024))
             self.notify_cb(msg)
-            self.run_async(
-                lambda progress_cb=None, root=self.dup_root: find_duplicates([root], progress_cb=progress_cb),
-                self._on_dups_scanned,
-                "Reescaneo BLAKE3",
-                progress_ui_cb=self._progress_summary,
-            )
+            # v0.5.9: los grupos enlazados ya no ocupan espacio extra -> salen de la lista sin reescanear.
+            linked_digests = {g.digest for g in groups}
+            self.dup_groups = [g for g in self.dup_groups if g.digest not in linked_digests]
+            self._render_duplicates()
 
         self.run_async(_link, _done, "Hardlinks NTFS", progress_ui_cb=self._progress_summary)
 

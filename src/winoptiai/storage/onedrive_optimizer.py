@@ -33,7 +33,7 @@ import urllib.request
 import webbrowser
 
 from ..core.safety_guard import PreOpBackupManager, default_app_data_dir, is_protected_path
-from ..core.task_control import TaskCanceledError, TaskController
+from ..core.task_control import TaskCanceledError, TaskController, stop_point
 from ..core.win32_bridge import (
     IS_WINDOWS,
     attrs_is_cloud_only,
@@ -194,8 +194,7 @@ def scan_local_onedrive_candidates(
         stack: list[Path] = [root.path]
         visited_dirs = 0
         while stack:
-            if controller is not None and controller.checkpoint() == "cancel":
-                raise TaskCanceledError("Escaneo de OneDrive cancelado por el usuario")
+            stop_point(controller, "Escaneo de OneDrive cancelado por el usuario")
             cur = stack.pop()
             if is_protected_path(cur):
                 continue

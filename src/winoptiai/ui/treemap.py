@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
@@ -98,6 +98,9 @@ class TreemapWidget(QWidget):
         self._stack: list[FolderNode] = []
         self._tiles: list[Tile] = []
         self._hover: Tile | None = None
+        self._zoom_from: QRectF | None = None
+        self._zoom_t = 1.0
+        self._zoom_anim = None
         self.setMouseTracking(True)
         self.setMinimumHeight(260)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -123,8 +126,36 @@ class TreemapWidget(QWidget):
 
     def enter(self, node: FolderNode) -> None:
         if node.children:
+            start = next((t.rect for t in self._tiles if t.depth == 1 and t.node is node), None)
             self._stack.append(node)
             self._relayout()
+            self._animate_zoom(start)
+
+    def _animate_zoom(self, start: QRectF | None) -> None:
+        """v0.5.9: acercamiento breve (180 ms) desde el bloque pulsado hasta toda el area."""
+        from .fx import anims_on
+
+        if start is None or start.isEmpty() or not anims_on():
+            return
+        self._zoom_from = QRectF(start)
+        anim = QVariantAnimation(self)
+        anim.setDuration(180)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._on_zoom_step)
+        anim.finished.connect(self._end_zoom)
+        self._zoom_anim = anim
+        anim.start()
+
+    def _on_zoom_step(self, t: float) -> None:
+        self._zoom_t = float(t)
+        self.update()
+
+    def _end_zoom(self) -> None:
+        self._zoom_from = None
+        self._zoom_t = 1.0
+        self.update()
 
     def breadcrumb(self) -> str:
         return " / ".join(n.name for n in self._stack)
@@ -199,6 +230,18 @@ class TreemapWidget(QWidget):
             p.end()
             return
 
+        if self._zoom_from is not None and self._zoom_t < 1.0:
+            # Interpolar del bloque pulsado al area completa (solo durante la animacion)
+            full = QRectF(self.rect())
+            t = self._zoom_t
+            target = QRectF(
+                self._zoom_from.x() + (full.x() - self._zoom_from.x()) * t,
+                self._zoom_from.y() + (full.y() - self._zoom_from.y()) * t,
+                self._zoom_from.width() + (full.width() - self._zoom_from.width()) * t,
+                self._zoom_from.height() + (full.height() - self._zoom_from.height()) * t,
+            )
+            p.translate(target.x(), target.y())
+            p.scale(target.width() / max(1.0, full.width()), target.height() / max(1.0, full.height()))
         total = max(1, self.current.size_bytes if self.current else 1)
         mono = QFont("IBM Plex Mono", 8)
         ui = QFont("Instrument Sans", 9)

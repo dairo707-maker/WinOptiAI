@@ -258,6 +258,11 @@ def _launch_detached_cmd(cmd_script: Path, work_dir: Path) -> bool:
     )
     saved = {k: os.environ.pop(k) for k in pyi_keys if k in os.environ}
     try:
+        # v0.5.9: el puente del actualizador debe sobrevivir al cierre total de procesos de la app.
+        from .win32_bridge import shell_open_protected
+
+        if shell_open_protected("cmd.exe", f'/c "{cmd_script}"', str(work_dir), 0):
+            return True
         rc = ctypes.windll.shell32.ShellExecuteW(
             None,
             "open",

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import sys
+import time
 
 import psutil
 from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
@@ -31,9 +33,15 @@ from ..core.metrics_history import MetricsHistory, MinuteAggregator
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
-from ..core.task_control import SessionManager, TaskSessionRecord
+from ..core.task_control import SessionManager, TaskSessionRecord, new_session_id
 from ..core.telemetry import PdhTelemetryReader
-from ..core.win32_bridge import apply_window_theme, is_user_admin, run_elevated_command
+from ..core.win32_bridge import (
+    apply_window_theme,
+    is_user_admin,
+    run_elevated_command,
+    running_tracked_children,
+    terminate_app_child_processes,
+)
 from ..storage.junk_scanner import resume_junk_session, scan_junk_targets
 from ..thermal_bios.thermal_controller import THERMAL_PROFILES, apply_thermal_profile
 from .dialogs.about_updater_dialog import AboutUpdaterDialog
@@ -65,6 +73,7 @@ def _task_pill_variants(title: str, percent: int, eta_part: str, extra: str) -> 
     ]
 
 
+SHUTDOWN_WAIT_S = 15.0  # v0.5.9: espera maxima para que las tareas canceladas guarden lo avanzado
 CRASH_RESTART_ARG = "--crash-restart"
 ELEVATED_RELAUNCH_ARG = "--elevated-relaunch"
 MAX_ERROR_PROMPTS_PER_SESSION = 3
@@ -369,14 +378,47 @@ class MainWindow(QMainWindow):
             self.hide()
             self.telemetry_timer.setInterval(10000)
             return
-        self.telemetry_timer.stop()
-        self.advisor_timer.stop()
-        self.heartbeat_timer.stop()
-        self.tray.hide()
-        self.pool.waitForDone(3000)
-        self.metrics_history.shutdown()
-        self._mark_clean_exit()
+        self._shutdown_everything()
         event.accept()
+
+    def _shutdown_everything(self, wait_s: float = SHUTDOWN_WAIT_S) -> dict[str, int]:
+        """v0.5.9: cierre TOTAL. Antes se esperaban 3 s y la tarea seguia sin ventana (17/11: una
+        Autolimpieza continuo 12 minutos tras "Salir"). Ahora: cancelar todas las tareas en un punto
+        seguro (lo hecho queda registrado), esperar, y cerrar consolas y procesos hijos de la app."""
+        if getattr(self, "_shutdown_done", False):
+            return {"closed": 0, "failed": 0, "pending_tasks": 0}
+        self._shutdown_done = True
+        self._breadcrumb("Cierre total: cancelando tareas y procesos derivados")
+        for t in (self.telemetry_timer, self.advisor_timer, self.heartbeat_timer, self.task_eta_timer):
+            t.stop()
+        workers = list(self._active_workers)
+        for w in workers:
+            w.controller.cancel()
+        for t in list(getattr(self.storage_view, "_quick_tasks", [])):
+            t.controller.cancel()
+        global_pool = QThreadPool.globalInstance()
+        deadline = time.monotonic() + wait_s
+        if global_pool.activeThreadCount() > 0:
+            self._set_status("Cerrando de forma segura: guardando lo avanzado...")
+            while global_pool.activeThreadCount() > 0 and time.monotonic() < deadline:
+                QApplication.processEvents()
+                global_pool.waitForDone(100)
+        pending = global_pool.activeThreadCount()
+        res = terminate_app_child_processes()
+        res["pending_tasks"] = pending
+        try:
+            self.metrics_history.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        self.tray.hide()
+        if self.crash_guard is not None:
+            self.crash_guard.write_log_block(
+                "CIERRE TOTAL",
+                f"Tareas canceladas: {len(workers)} | procesos hijos cerrados: {res['closed']} "
+                f"(no cerrados: {res['failed']}) | tareas aun activas tras {wait_s:.0f} s: {pending}",
+            ) if (workers or res["closed"] or res["failed"] or pending) else None
+        self._mark_clean_exit()
+        return res
 
     def _mark_clean_exit(self) -> None:
         if self.crash_guard is not None:
@@ -393,8 +435,23 @@ class MainWindow(QMainWindow):
         self.raise_()
 
     def _quit_app(self) -> None:
+        # v0.5.9: confirmar si hay consolas de mantenimiento (DISM/SFC/CHKDSK) que se interrumpiran.
+        consoles = running_tracked_children()
+        servicing = [c for c in consoles if any(k in c.lower() for k in ("dism", "sfc", "chkdsk"))]
+        if servicing:
+            reply = QMessageBox.warning(
+                self,
+                "Cerrar WinOptiAI",
+                "Al salir se cierran todas las tareas y consolas iniciadas desde la app.\n\n"
+                "Hay una reparacion de Windows en curso:\n  - " + "\n  - ".join(servicing[:4]) + "\n\n"
+                "Interrumpirla puede dejarla incompleta (podra repetirla despues). Desea cerrar todo?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self._force_quit = True
-        self._mark_clean_exit()
+        self._shutdown_everything()
         QApplication.quit()
 
     def _breadcrumb(self, message: str) -> None:
@@ -654,6 +711,13 @@ class MainWindow(QMainWindow):
         self._set_status("Cancelando proceso de forma segura...")
 
     def _resume_saved_session(self, session: TaskSessionRecord) -> None:
+        if session.kind == "rescan":  # v0.5.9: analisis guardado (Duplicados / Arbol)
+            self.session_mgr.remove_session(session.session_id)
+            self._switch_tab(1)
+            if not self.storage_view.resume_scan(session.meta):
+                self._set_status("No se pudo retomar: la carpeta ya no existe.")
+            self._sync_active_task_indicators()
+            return
         if session.kind != "junk_clean":
             self.session_mgr.remove_session(session.session_id)
             self._sync_active_task_indicators()
@@ -735,6 +799,7 @@ class MainWindow(QMainWindow):
         progress_ui_cb=None,
         on_error=None,
         supports_save: bool = False,
+        resume_meta: dict | None = None,
     ) -> None:
         # RAM-aware concurrency guardrail
         free_gb = get_memory_snapshot()["free_gb"]
@@ -759,7 +824,27 @@ class MainWindow(QMainWindow):
         worker = AsyncTask(task_label, fn)
         # v0.5.7: solo las tareas que guardan su punto exacto (limpieza de temporales) ofrecen
         # "Guardar Pausa"; en las demas el boton no hacia nada y la tarea seguia corriendo.
-        worker.supports_save = supports_save
+        worker.supports_save = supports_save or resume_meta is not None
+        if resume_meta is not None:
+            # v0.5.9: "Guardar Pausa" en analisis -> sesion "rescan" que Retomar Sesion relanza
+            # (Duplicados reutiliza las huellas ya calculadas en hash_cache.sqlite).
+            def _save(percent: int, meta=dict(resume_meta), title=task_label) -> str:
+                sid = new_session_id()
+                self.session_mgr.save_session(
+                    TaskSessionRecord(
+                        session_id=sid,
+                        kind="rescan",
+                        title=title,
+                        created_at=datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                        percent=int(percent),
+                        total_items=0,
+                        processed_items=0,
+                        meta=meta,
+                    )
+                )
+                return sid
+
+            worker.save_handler = _save
         self._active_workers.append(worker)
         self._breadcrumb(f"Tarea iniciada: {task_label}")
         self._sync_active_task_indicators()

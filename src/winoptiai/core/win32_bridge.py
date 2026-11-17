@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import os
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -394,6 +395,64 @@ def is_user_admin() -> bool:
         return False
 
 
+def recycle_sound_path() -> str:
+    """v0.5.9: ruta del sonido "Vaciar Papelera" del esquema de sonidos de Windows del usuario.
+
+    Usa el sonido asignado en el esquema activo; si el evento no tiene sonido (lo normal en
+    Windows 11) usa el archivo oficial ``Media\\Windows Recycle.wav``. Solo queda en silencio si el
+    usuario eligio el esquema "Sin sonidos" (``.None``).
+    """
+    if not IS_WINDOWS:
+        return ""
+    try:
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"AppEvents\Schemes") as key:
+                scheme, _ = winreg.QueryValueEx(key, "")
+            if str(scheme).strip().lower() == ".none":
+                return ""
+        except OSError:
+            pass
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"AppEvents\Schemes\Apps\Explorer\EmptyRecycleBin\.Current"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "")
+        value = os.path.expandvars(str(value or "").strip())
+        if value and os.path.isfile(value):
+            return value
+    except OSError:
+        pass
+    fallback = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Media", "Windows Recycle.wav")
+    return fallback if os.path.isfile(fallback) else ""
+
+
+def play_recycle_sound() -> bool:
+    """Reproducir (asincrono) el sonido de Papelera de Windows. Nunca bloquea ni falla."""
+    path = recycle_sound_path()
+    if not path:
+        return False
+    try:
+        import winsound
+
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        return True
+    except (RuntimeError, OSError, ImportError):
+        return False
+
+
+def animations_enabled() -> bool:
+    """v0.5.9: respetar "Mostrar animaciones en Windows" (SPI_GETCLIENTAREAANIMATION)."""
+    if not IS_WINDOWS:
+        return True
+    try:
+        value = wintypes.BOOL(True)
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(value), 0)
+        return bool(value.value) if ok else True
+    except (OSError, AttributeError):
+        return True
+
+
 RESTART_NO_PATCH = 0x4
 RESTART_NO_REBOOT = 0x8
 
@@ -411,6 +470,129 @@ def register_application_restart(arguments: str) -> bool:
         return fn(arguments, RESTART_NO_PATCH | RESTART_NO_REBOOT) == 0
     except (OSError, AttributeError):
         return False
+
+
+class _ShellExecuteInfoW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("fMask", wintypes.ULONG),
+        ("hwnd", wintypes.HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", ctypes.c_void_p),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", wintypes.DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE),
+        ("hProcess", wintypes.HANDLE),
+    ]
+
+
+# v0.5.9: procesos lanzados por la app (consolas elevadas: DISM, SFC, CHKDSK, TRIM...).
+_TRACKED_CHILDREN: list[tuple[int, str]] = []
+_TRACK_LOCK = threading.Lock()
+
+# Programas externos que el usuario abre desde la app y que NO deben cerrarse al salir.
+EXTERNAL_APP_NAMES: frozenset[str] = frozenset(
+    {
+        "explorer.exe", "msedge.exe", "chrome.exe", "firefox.exe", "brave.exe", "opera.exe",
+        "systemsettings.exe", "applicationframehost.exe", "winoptiai-setup.exe",
+    }
+)
+_PROTECTED_CHILD_PIDS: set[int] = set()  # p. ej. el puente del actualizador
+
+
+def _track_child(handle: int, label: str) -> None:
+    with _TRACK_LOCK:
+        _TRACKED_CHILDREN.append((int(handle), label))
+
+
+def shell_open_protected(file: str, params: str, directory: str | None = None, show: int = 0) -> bool:
+    """Lanzar un proceso que debe sobrevivir al cierre de la app (actualizador) y protegerlo."""
+    if not IS_WINDOWS:
+        return False
+    info = _ShellExecuteInfoW()
+    info.cbSize = ctypes.sizeof(_ShellExecuteInfoW)
+    info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "open"
+    info.lpFile = file
+    info.lpParameters = params
+    info.lpDirectory = directory
+    info.nShow = show
+    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+        return False
+    if info.hProcess:
+        pid = ctypes.windll.kernel32.GetProcessId(info.hProcess)
+        if pid:
+            protect_child_pid(pid)
+        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+    return True
+
+
+def protect_child_pid(pid: int) -> None:
+    """Excluir un proceso hijo del cierre total (actualizador que debe seguir tras salir)."""
+    _PROTECTED_CHILD_PIDS.add(int(pid))
+
+
+def running_tracked_children() -> list[str]:
+    """Etiquetas de las consolas lanzadas por la app que siguen abiertas."""
+    if not IS_WINDOWS:
+        return []
+    alive: list[str] = []
+    with _TRACK_LOCK:
+        for handle, label in _TRACKED_CHILDREN:
+            if ctypes.windll.kernel32.WaitForSingleObject(wintypes.HANDLE(handle), 0) == 0x102:  # WAIT_TIMEOUT
+                alive.append(label)
+    return alive
+
+
+def terminate_app_child_processes() -> dict[str, int]:
+    """v0.5.9: cerrar TODO lo que inicio la app (consolas elevadas y procesos descendientes).
+
+    Se respetan los programas externos abiertos para el usuario (navegador, Explorador,
+    Configuracion) y el actualizador. Devuelve cuantos se cerraron y cuantos no se pudieron.
+    """
+    closed = 0
+    failed = 0
+    if IS_WINDOWS:
+        with _TRACK_LOCK:
+            tracked = list(_TRACKED_CHILDREN)
+            _TRACKED_CHILDREN.clear()
+        k32 = ctypes.windll.kernel32
+        for handle, _label in tracked:
+            h = wintypes.HANDLE(handle)
+            if k32.WaitForSingleObject(h, 0) == 0x102:
+                if k32.TerminateProcess(h, 1):
+                    closed += 1
+                else:
+                    failed += 1
+            k32.CloseHandle(h)
+    try:
+        import psutil
+
+        me = psutil.Process(os.getpid())
+        keep: set[int] = set()
+        for pid in list(_PROTECTED_CHILD_PIDS):
+            try:
+                keep.add(pid)
+                keep.update(c.pid for c in psutil.Process(pid).children(recursive=True))
+            except psutil.Error:
+                continue
+        for child in me.children(recursive=True):
+            try:
+                if child.pid in keep or child.name().lower() in EXTERNAL_APP_NAMES:
+                    continue
+                child.kill()
+                closed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                failed += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return {"closed": closed, "failed": failed}
 
 
 def run_elevated_command(executable: str, arguments: str) -> bool:
@@ -435,15 +617,19 @@ def run_elevated_command(executable: str, arguments: str) -> bool:
     except (AttributeError, OSError):
         com_initialized = False
     try:
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            executable,
-            arguments,
-            None,
-            1,
-        )
-        return int(rc) > 32
+        # v0.5.9: ShellExecuteExW con SEE_MASK_NOCLOSEPROCESS para conservar el proceso y poder
+        # cerrarlo cuando el usuario salga de WinOptiAI (cierre total de procesos derivados).
+        info = _ShellExecuteInfoW()
+        info.cbSize = ctypes.sizeof(_ShellExecuteInfoW)
+        info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        info.lpVerb = "runas"
+        info.lpFile = executable
+        info.lpParameters = arguments
+        info.nShow = 1
+        ok = bool(ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)))
+        if ok and info.hProcess:
+            _track_child(info.hProcess, f"{os.path.basename(executable)} {arguments[:80]}")
+        return ok
     finally:
         if com_initialized:
             try:

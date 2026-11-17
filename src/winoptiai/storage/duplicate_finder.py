@@ -12,13 +12,15 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 import os
+import time
 from pathlib import Path
 from typing import Callable
 
 from blake3 import blake3
 
 from ..core.safety_guard import QuarantineVault, is_protected_path, is_safe_to_touch_file
-from ..core.task_control import TaskCanceledError, TaskController
+from ..core.task_control import TaskCanceledError, TaskController, stop_point
+from .program_guard import find_mirrored_parents, is_program_dir_name, program_dir_reason
 from ..core.win32_bridge import (
     attrs_skip_entry,
     create_ntfs_hardlink,
@@ -37,6 +39,111 @@ class DuplicateGroup:
     size_bytes: int
     paths: list[Path]
     wasted_bytes: int
+    # v0.5.9: motivo por el que el grupo NO debe tocarse (p. ej. "carpeta copiada"); "" = seguro
+    protected_reason: str = ""
+
+
+class DuplicateResults(list):
+    """Lista de grupos + estadisticas de proteccion (v0.5.9)."""
+
+    def __init__(self, groups=(), protected_dirs: int = 0, structural_groups: int = 0) -> None:
+        super().__init__(groups)
+        self.protected_dirs = protected_dirs
+        self.structural_groups = structural_groups
+
+
+class HashCache:
+    """v0.5.9 (microprocesos): huellas BLAKE3 ya calculadas, por (ruta, tamano, fecha de modificacion).
+
+    Se guardan cada ``commit_every`` archivos; si el analisis se cancela, se guarda la pausa o la
+    app se cierra, lo calculado sirve para la siguiente vez y solo se procesan archivos nuevos o
+    modificados. Vive en ``%LOCALAPPDATA%\\WinOptiAI\\hash_cache.sqlite`` (excluida de escaneos).
+    """
+
+    def __init__(self, path: Path | None = None, commit_every: int = 200) -> None:
+        import sqlite3
+
+        from ..core.safety_guard import default_app_data_dir
+
+        self.path = path or (default_app_data_dir() / "hash_cache.sqlite")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS h (path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, "
+            "partial TEXT, full TEXT, seen INTEGER)"
+        )
+        self._pending = 0
+        self._commit_every = commit_every
+        self.hits = 0
+        self.misses = 0
+
+    def _row(self, path: Path, size: int, mtime_ns: int):
+        cur = self._db.execute("SELECT size, mtime, partial, full FROM h WHERE path = ?", (os.path.normcase(str(path)),))
+        row = cur.fetchone()
+        if row and row[0] == size and row[1] == mtime_ns:
+            return row
+        return None
+
+    def get(self, path: Path, size: int, mtime_ns: int, kind: str) -> str | None:
+        row = self._row(path, size, mtime_ns)
+        value = (row[2] if kind == "partial" else row[3]) if row else None
+        if value:
+            self.hits += 1
+        else:
+            self.misses += 1
+        return value or None
+
+    def put(self, path: Path, size: int, mtime_ns: int, kind: str, value: str) -> None:
+        key = os.path.normcase(str(path))
+        now = int(time.time())
+        row = self._row(path, size, mtime_ns)
+        partial = value if kind == "partial" else (row[2] if row else None)
+        full = value if kind == "full" else (row[3] if row else None)
+        self._db.execute(
+            "INSERT OR REPLACE INTO h (path, size, mtime, partial, full, seen) VALUES (?, ?, ?, ?, ?, ?)",
+            (key, size, mtime_ns, partial, full, now),
+        )
+        self._pending += 1
+        if self._pending >= self._commit_every:
+            self.commit()
+
+    def commit(self) -> None:
+        try:
+            self._db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        self._pending = 0
+
+    def prune(self, max_age_days: int = 120) -> None:
+        self._db.execute("DELETE FROM h WHERE seen < ?", (int(time.time()) - max_age_days * 86400,))
+        self.commit()
+
+    def close(self) -> None:
+        self.commit()
+        try:
+            self._db.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _cached(cache: "HashCache | None", path: Path, size: int, kind: str, compute) -> str | None:
+    if cache is None:
+        return compute()
+    mt = _mtime_ns(path)
+    hit = cache.get(path, size, mt, kind)
+    if hit:
+        return hit
+    value = compute()
+    if value:
+        cache.put(path, size, mt, kind, value)
+    return value
 
 
 def _partial_hash(path: Path, size_bytes: int) -> str | None:
@@ -70,42 +177,71 @@ def find_duplicates(
     min_size_bytes: int = 1024,
     progress_cb: Callable[[int, str], None] | None = None,
     controller: TaskController | None = None,
+    protect_programs: bool = True,
+    cache: "HashCache | None" = None,
 ) -> list[DuplicateGroup]:
-    """Scan roots and return groups of true duplicate files (excluding existing hardlinks)."""
+    """Buscar duplicados exactos. Con ``cache`` las huellas se guardan aunque el analisis se corte."""
+    try:
+        return _find_duplicates_impl(roots, min_size_bytes, progress_cb, controller, protect_programs, cache)
+    finally:
+        if cache is not None:
+            cache.commit()  # v0.5.9: lo calculado se conserva tambien al cancelar o guardar pausa
+
+
+def _find_duplicates_impl(
+    roots: list[Path],
+    min_size_bytes: int = 1024,
+    progress_cb: Callable[[int, str], None] | None = None,
+    controller: TaskController | None = None,
+    protect_programs: bool = True,
+    cache: "HashCache | None" = None,
+) -> list[DuplicateGroup]:
+    """Scan roots and return groups of true duplicate files (excluding existing hardlinks).
+
+    v0.5.9: ``protect_programs`` omite programas/entornos/sistema y marca "carpetas copiadas".
+    """
     size_buckets: dict[int, list[tuple[Path, int, int]]] = defaultdict(list)
 
     if progress_cb:
         progress_cb(8, "Indexando archivos y tamanos...")
 
+    protected_dirs = 0
     for root in roots:
         if not root.exists() or is_protected_path(root):
             continue
         stack: list[Path] = [root]
         while stack:
-            if controller is not None and controller.checkpoint() == "cancel":
-                raise TaskCanceledError("Busqueda de duplicados cancelada por el usuario")
+            stop_point(controller, "Busqueda de duplicados cancelada por el usuario")
             current = stack.pop()
             if is_protected_path(current):
                 continue
             try:
                 with os.scandir(current) as it:
-                    for entry in it:
-                        ep = Path(entry.path)
-                        try:
-                            st = entry.stat(follow_symlinks=False)
-                        except OSError:
-                            continue
-                        attrs = getattr(st, "st_file_attributes", None)
-                        is_dir = entry.is_dir(follow_symlinks=False)
-                        if attrs_skip_entry(attrs, is_dir):  # v0.5.4: carpetas OneDrive "unpinned"
-                            continue
-                        if is_dir:
-                            if not entry.name.startswith(".git") and entry.name != "__pycache__":
-                                stack.append(ep)
-                        elif entry.is_file(follow_symlinks=False) and st.st_size >= min_size_bytes:
-                            size_buckets[st.st_size].append((ep, st.st_dev, st.st_ino))
+                    entries = list(it)
             except OSError:
                 continue
+            # v0.5.9: carpetas de programas, entornos e instalaciones completas nunca se recorren.
+            if protect_programs and program_dir_reason(current, [e.name for e in entries], base=root):
+                protected_dirs += 1
+                continue
+            for entry in entries:
+                ep = Path(entry.path)
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                attrs = getattr(st, "st_file_attributes", None)
+                is_dir = entry.is_dir(follow_symlinks=False)
+                if attrs_skip_entry(attrs, is_dir):  # v0.5.4: carpetas OneDrive "unpinned"
+                    continue
+                if is_dir:
+                    if protect_programs and is_program_dir_name(entry.name):
+                        protected_dirs += 1
+                        continue
+                    if not entry.name.startswith(".git") and entry.name != "__pycache__":
+                        stack.append(ep)
+                elif entry.is_file(follow_symlinks=False) and st.st_size >= min_size_bytes:
+                    size_buckets[st.st_size].append((ep, st.st_dev, st.st_ino))
 
     if progress_cb:
         progress_cb(40, "Calculando pre-hash 4KB de candidatos...")
@@ -114,8 +250,8 @@ def find_duplicates(
     partial_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
     total_cand = max(1, len(candidate_sizes))
     for idx, (size, raw_items) in enumerate(candidate_sizes, start=1):
-        if controller is not None and idx % 10 == 0 and controller.checkpoint() == "cancel":
-            raise TaskCanceledError("Busqueda de duplicados cancelada por el usuario")
+        if idx % 10 == 0:
+            stop_point(controller, "Busqueda de duplicados cancelada por el usuario")
         # DirEntry.stat() returns st_ino=0 on Windows; fetch true (dev, ino) only for candidate sizes
         items: list[tuple[Path, int, int]] = []
         for fpath, dev, ino in raw_items:
@@ -131,7 +267,7 @@ def find_duplicates(
         if ino_all_nonzero(items) and len(unique_inodes) < 2:
             continue
         for fpath, dev, ino in items:
-            ph = _partial_hash(fpath, size)
+            ph = _cached(cache, fpath, size, "partial", lambda fp=fpath, sz=size: _partial_hash(fp, sz))
             if ph is not None:
                 partial_buckets[(size, ph)].append((fpath, dev, ino))
         if progress_cb and idx % 20 == 0:
@@ -144,10 +280,9 @@ def find_duplicates(
     full_buckets: dict[tuple[int, str], list[tuple[Path, int, int]]] = defaultdict(list)
     total_part = max(1, len(partial_cand))
     for idx, ((size, _), items) in enumerate(partial_cand, start=1):
-        if controller is not None and controller.checkpoint() == "cancel":
-            raise TaskCanceledError("Verificacion BLAKE3 cancelada por el usuario")
+        stop_point(controller, "Verificacion BLAKE3 cancelada por el usuario")
         for fpath, dev, ino in items:
-            fh = _full_blake3(fpath)
+            fh = _cached(cache, fpath, size, "full", lambda fp=fpath: _full_blake3(fp))
             if fh is not None:
                 full_buckets[(size, fh)].append((fpath, dev, ino))
         if progress_cb:
@@ -177,7 +312,18 @@ def find_duplicates(
             )
 
     groups.sort(key=lambda g: g.wasted_bytes, reverse=True)
-    return groups
+    structural = 0
+    if protect_programs and groups:
+        # v0.5.9: dos carpetas con la misma estructura (muchos archivos identicos) = copia completa.
+        # Quitar archivos sueltos de una de ellas la romperia: esos grupos nunca se proponen.
+        mirrored = find_mirrored_parents([g.paths for g in groups])
+        if mirrored:
+            for g in groups:
+                parents = sorted({os.path.normcase(str(p.parent)) for p in g.paths})
+                if any(frozenset((a, b)) in mirrored for i, a in enumerate(parents) for b in parents[i + 1 :]):
+                    g.protected_reason = "Carpeta copiada (misma estructura): no se separan sus archivos"
+                    structural += 1
+    return DuplicateResults(groups, protected_dirs=protected_dirs, structural_groups=structural)
 
 
 def ino_all_nonzero(items: list[tuple[Path, int, int]]) -> bool:
@@ -200,13 +346,14 @@ def quarantine_duplicates_plan(
     plan: list[tuple[DuplicateGroup, Path, list[Path]]],
     vault: QuarantineVault,
     progress_cb: Callable[[int, str], None] | None = None,
+    controller: TaskController | None = None,
 ) -> dict[str, int]:
     """Batch-quarantine redundant duplicate copies across multiple groups in O(N) time."""
     entries: list[tuple[Path, str]] = []
     for _, _, remove_paths in plan:
         for rp in remove_paths:
             entries.append((rp, "Duplicado BLAKE3"))
-    return vault.quarantine_many(entries, progress_cb=progress_cb)
+    return vault.quarantine_many(entries, progress_cb=progress_cb, controller=controller)
 
 
 def deduplicate_group_via_hardlink(
@@ -288,8 +435,20 @@ def select_duplicates_by_rule(
     """Return [(group, keep_path, remove_paths)] computed for smart auto-cleaning."""
     plan: list[tuple[DuplicateGroup, Path, list[Path]]] = []
     for grp in groups:
-        keep = choose_primary_copy(grp.paths, rule=rule)
-        remove = [p for p in grp.paths if p != keep]
+        if getattr(grp, "protected_reason", ""):
+            continue  # v0.5.9: carpetas copiadas / programas -> nunca se proponen
+        # v0.5.9: defensa adicional por si el grupo vino de una version previa o de otra fuente:
+        # las copias dentro de programas/entornos se conservan siempre.
+        # Siempre se conserva al menos una copia del usuario (aunque exista otra dentro de un programa).
+        try:
+            base = Path(os.path.commonpath([str(p.parent) for p in grp.paths]))
+        except ValueError:  # rutas en unidades distintas
+            base = None
+        movable = [p for p in grp.paths if not program_dir_reason(p.parent, base=base)]
+        if len(movable) < 2:
+            continue
+        keep = choose_primary_copy(movable, rule=rule)
+        remove = [p for p in movable if p != keep]
         if remove:
             plan.append((grp, keep, remove))
     return plan

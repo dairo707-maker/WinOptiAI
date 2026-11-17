@@ -10,7 +10,7 @@ import uuid
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
-from ..core.task_control import TaskCanceledError, TaskController, TaskPausedAndSaved
+from ..core.task_control import TaskCanceledError, TaskController, TaskPausedAndSaved, TaskSaveRequested
 
 
 def format_eta_seconds(seconds: float) -> str:
@@ -46,6 +46,7 @@ class AsyncTask(QRunnable):
         self.stage = "Iniciando..."
         self._last_emit_pct = -1
         self.supports_save = False  # v0.5.7: True solo si la tarea guarda sesion retomable
+        self.save_handler = None  # v0.5.9: callable(percent) -> session_id para analisis retomables
         self._last_emit_ts = 0.0
         self.fn = fn
         self.args = args
@@ -111,6 +112,21 @@ class AsyncTask(QRunnable):
                 self.signals.paused_saved.emit(
                     self.task_id, paused_exc.session_id, paused_exc.percent, paused_exc.detail
                 )
+            except RuntimeError:
+                pass
+        except TaskSaveRequested as save_exc:
+            # v0.5.9: "Guardar Pausa" en analisis -> la UI guarda una sesion para retomarlo.
+            sid = ""
+            if self.save_handler is not None:
+                try:
+                    sid = self.save_handler(self.percent) or ""
+                except Exception:  # noqa: BLE001
+                    sid = ""
+            try:
+                if sid:
+                    self.signals.paused_saved.emit(self.task_id, sid, self.percent, save_exc.detail)
+                else:
+                    self.signals.canceled.emit(self.task_id, save_exc.detail)
             except RuntimeError:
                 pass
         except TaskCanceledError as cancel_exc:

@@ -18,6 +18,7 @@ from ..core.task_control import (
     TaskPausedAndSaved,
     TaskSessionRecord,
     new_session_id,
+    stop_point,
 )
 from ..core.win32_bridge import (
     attrs_skip_entry,
@@ -117,8 +118,7 @@ def _scan_eligible_with_sizes(
     visited = 0
 
     while stack:
-        if controller is not None and controller.checkpoint() == "cancel":
-            raise TaskCanceledError("Analisis de temporales cancelado por el usuario")
+        stop_point(controller, "Analisis de temporales cancelado por el usuario")
         cur = stack.pop()
         if mei_dir and str(cur).lower().startswith(mei_dir):
             continue
@@ -143,8 +143,7 @@ def _scan_eligible_with_sizes(
                         if st.st_mtime <= cutoff:
                             eligible.append((ep, int(st.st_size)))
                         if visited % 1000 == 0:
-                            if controller is not None and controller.checkpoint() == "cancel":
-                                raise TaskCanceledError("Analisis cancelado por el usuario")
+                            stop_point(controller, "Analisis cancelado por el usuario")
                             if progress_cb:
                                 progress_cb(12, f"Indexando {target.label} ({len(eligible):,} elegibles)...")
         except OSError:
@@ -210,8 +209,7 @@ def scan_junk_targets(
     now_ts = time.time()
     total_targets = max(1, len(resolved))
     for idx, target in enumerate(resolved, start=1):
-        if controller is not None and controller.checkpoint() == "cancel":
-            raise TaskCanceledError("Analisis cancelado por el usuario")
+        stop_point(controller, "Analisis cancelado por el usuario")
         if progress_cb:
             pct = max(6, int((idx - 1) * 95 / total_targets))
             progress_cb(pct, f"Analizando {target.label}...")

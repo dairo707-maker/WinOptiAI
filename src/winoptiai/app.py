@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QThreadPool, Qt
 from PySide6.QtWidgets import QApplication
 
 from .core.crash_guard import CrashGuard
 from .core.single_instance import SingleInstanceLock
 from .core.sre_policy import SREPolicyEngine
-from .core.win32_bridge import register_application_restart
+from .core.win32_bridge import register_application_restart, terminate_app_child_processes
 from .ui.main_window import CRASH_RESTART_ARG, ELEVATED_RELAUNCH_ARG, MainWindow
 from .ui.svg_icons import load_svg_icon
 from .ui.theme import build_obsidian_qss, register_embedded_fonts
@@ -91,8 +92,16 @@ def main() -> int:
         window.show()
 
     code = app.exec()
+    # v0.5.9: cierre TOTAL tambien si se salio por otra via (cierre de sesion de Windows, etc.).
+    res = window._shutdown_everything()
     crash_guard.mark_clean_exit()
     instance_lock.release()
+    if res.get("pending_tasks") or QThreadPool.globalInstance().activeThreadCount() > 0:
+        # Ninguna tarea puede seguir viva sin ventana: terminar el proceso por completo. Lo movido a
+        # la Boveda ya quedo registrado (confirmacion por lotes de 50 / 500).
+        crash_guard.write_log_block("CIERRE FORZADO", "Tareas aun activas al salir: proceso terminado.")
+        terminate_app_child_processes()
+        os._exit(int(code or 0))
     return code
 
 

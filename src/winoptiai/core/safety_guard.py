@@ -127,12 +127,58 @@ def default_app_data_dir() -> Path:
     return base / "WinOptiAI"
 
 
+# v0.5.9: carpetas propias de WinOptiAI (Boveda, respaldos, informes, cache de huellas).
+# Lo enviado a Cuarentena NO debe reaparecer en Arbol, Duplicados, Huerfanos ni OneDrive.
+_INTERNAL_ROOTS: set[str] = set()
+
+
+def register_internal_root(path: str | Path) -> None:
+    """Marcar una carpeta interna (p. ej. la Boveda) para excluirla de todos los escaneos."""
+    try:
+        _INTERNAL_ROOTS.add(str(Path(path).resolve()).lower().rstrip("\\"))
+    except OSError:
+        _INTERNAL_ROOTS.add(str(path).lower().rstrip("\\"))
+
+
+_DEFAULT_ROOT_CACHE: dict[str, str] = {}
+
+
+def _default_internal_root() -> str:
+    key = os.environ.get("LOCALAPPDATA", "")
+    cached = _DEFAULT_ROOT_CACHE.get(key)
+    if cached is None:
+        try:
+            cached = str(default_app_data_dir().resolve()).lower().rstrip("\\")
+        except OSError:
+            cached = str(default_app_data_dir()).lower().rstrip("\\")
+        _DEFAULT_ROOT_CACHE[key] = cached
+    return cached
+
+
+def _is_internal_norm(norm: str) -> bool:
+    for r in (_default_internal_root(), *_INTERNAL_ROOTS):
+        if norm == r or norm.startswith(r + "\\"):
+            return True
+    return False
+
+
+def is_internal_app_path(path: str | Path) -> bool:
+    """True si la ruta esta dentro de la carpeta de datos de WinOptiAI o de una Boveda registrada."""
+    try:
+        norm = str(Path(path).resolve()).lower()
+    except OSError:
+        norm = str(path).lower()
+    return _is_internal_norm(norm)
+
+
 def is_protected_path(path: str | Path, allow_system_temp: bool = False) -> bool:
     """Return True if path resides inside a protected Windows OS or security directory."""
     try:
         norm = str(Path(path).resolve()).lower()
     except OSError:
         norm = str(path).lower()
+    if _is_internal_norm(norm):  # v0.5.9: nunca escanear ni mover la Boveda ni datos propios
+        return True
 
     if allow_system_temp:
         for allowed in EXPLICIT_TEMP_ALLOWLIST:
@@ -174,6 +220,9 @@ def is_safe_to_touch_file(
 
 
 ORPHAN_MIN_AGE_SEC = 15 * 60  # v0.5.4: no tocar carpetas de cuarentena recien creadas
+QUARANTINE_COMMIT_EVERY = 50  # v0.5.9: confirmar el manifiesto por lotes pequenos
+BATCH_CHECKPOINT_EVERY = 500  # v0.5.9: registro parcial de lotes masivos (temporales)
+QUICK_HASH_MAX_BYTES = 64 * 1024 * 1024  # v0.5.9: SHA-256 solo para archivos <= 64 MB en envios rapidos
 
 
 def _long_path(path: Path | str) -> str:
@@ -307,6 +356,7 @@ class QuarantineVault:
         self.items_dir = self.root_dir / "items"
         self.manifest_path = self.root_dir / "manifest.json"
         self.items_dir.mkdir(parents=True, exist_ok=True)
+        register_internal_root(self.root_dir)  # v0.5.9: excluir de todos los escaneos
 
     @staticmethod
     def _move_fast(src: Path, dst: Path) -> None:
@@ -390,8 +440,16 @@ class QuarantineVault:
         skip_lock_check: bool = False,
         compute_hashes: bool = True,
         progress_cb: Callable[[int, str], None] | None = None,
-    ) -> dict[str, int]:
-        """Move multiple individual paths in one manifest transaction (O(N) instead of O(N^2))."""
+        hash_max_bytes: int | None = None,
+        controller: Any = None,
+    ) -> dict[str, Any]:
+        """Move multiple individual paths in one manifest transaction (O(N) instead of O(N^2)).
+
+        v0.5.9: ``hash_max_bytes`` limita el SHA-256 de verificacion a archivos pequenos para que
+        "Enviar a Cuarentena" sea instantaneo (mover dentro del mismo disco es renombrar); el
+        resultado incluye ``moved_items`` [(item_id, ruta_original)] para "Deshacer".
+        """
+        moved_items: list[tuple[str, str]] = []
         moved = 0
         skipped = 0
         perm_denied = 0
@@ -400,7 +458,15 @@ class QuarantineVault:
         total = max(1, len(entries))
         now_iso = datetime.now().astimezone().isoformat()
 
+        interrupted = ""
         for idx, (src, category) in enumerate(entries, start=1):
+            # v0.5.9: Cancelar / cerrar la app detiene en el siguiente archivo (antes no se podia
+            # cancelar y la app seguia moviendo archivos sin ventana tras salir).
+            if controller is not None:
+                state = controller.checkpoint()
+                if state in ("cancel", "save_pause"):
+                    interrupted = state
+                    break
             if progress_cb and (idx == 1 or idx % 20 == 0 or idx == total):
                 pct = 10 + int(idx * 85 / total)
                 progress_cb(pct, f"Respaldando en cuarentena ({idx}/{total})...")
@@ -422,10 +488,12 @@ class QuarantineVault:
                     sha256 = "DIRECTORY"
                 else:
                     size_bytes = src.stat().st_size
-                    sha256 = compute_sha256(src) if compute_hashes else "FAST_SKIP"
+                    do_hash = compute_hashes and (hash_max_bytes is None or size_bytes <= hash_max_bytes)
+                    sha256 = compute_sha256(src) if do_hash else "FAST_SKIP"
                 vault_target = self.items_dir / f"{item_id}__{src.name}"
                 orig_resolved = str(src.resolve())
                 self._move_fast(src, vault_target)
+                moved_items.append((item_id, orig_resolved))
             except PermissionError:
                 perm_denied += 1
                 skipped += 1
@@ -450,6 +518,14 @@ class QuarantineVault:
                     )
                 )
             )
+            # v0.5.9 (microprocesos): confirmar cada 50 elementos; si la tarea se interrumpe,
+            # lo ya movido queda registrado y restaurable en vez de quedar "sin registro".
+            if len(new_records) >= QUARANTINE_COMMIT_EVERY:
+                with self._lock:
+                    records = self._load_manifest()
+                    records.extend(new_records)
+                    self._save_manifest(records)
+                new_records = []
 
         if new_records:
             with self._lock:
@@ -461,6 +537,8 @@ class QuarantineVault:
             "skipped": skipped,
             "permission_denied": perm_denied,
             "freed_bytes": freed_bytes,
+            "moved_items": moved_items,
+            "interrupted": interrupted,
         }
 
     def quarantine_batch_bundle(
@@ -545,6 +623,12 @@ class QuarantineVault:
                 bundle_entries.append([rel_str, src_abs])
                 moved += 1
                 freed_bytes += int(est_size)
+                # v0.5.9 (microprocesos): registrar el lote cada 500 archivos. Si la app se cierra a
+                # mitad, lo movido queda en la Boveda con registro y se puede restaurar.
+                if moved % BATCH_CHECKPOINT_EVERY == 0:
+                    self._checkpoint_bundle(
+                        batch_id, base_resolved, bundle_dir, category, moved, freed_bytes, bundle_entries
+                    )
             except PermissionError:
                 perm_denied += 1
                 skipped += 1
@@ -562,23 +646,7 @@ class QuarantineVault:
                 "remaining_sources": remaining_sources,
             }
 
-        bundle_meta = bundle_dir / "_bundle_manifest.json"
-        bundle_meta.write_text(json.dumps(bundle_entries, ensure_ascii=False), encoding="utf-8")
-
-        record = QuarantineRecord(
-            item_id=batch_id,
-            original_path=f"{base_resolved} ({moved} archivos)",
-            vault_path=str(bundle_dir),
-            category=category,
-            size_bytes=int(freed_bytes),
-            sha256=f"BATCH:{moved}",
-            quarantined_at=datetime.now().astimezone().isoformat(),
-            is_dir=True,
-        )
-        with self._lock:
-            records = self._load_manifest()
-            records.append(asdict(record))
-            self._save_manifest(records)
+        self._checkpoint_bundle(batch_id, base_resolved, bundle_dir, category, moved, freed_bytes, bundle_entries)
         return {
             "moved": moved,
             "skipped": skipped,
@@ -587,6 +655,99 @@ class QuarantineVault:
             "interrupted": interrupted,
             "remaining_sources": remaining_sources,
         }
+
+    def _checkpoint_bundle(
+        self,
+        batch_id: str,
+        base_resolved: Path,
+        bundle_dir: Path,
+        category: str,
+        moved: int,
+        freed_bytes: int,
+        bundle_entries: list[list[str]],
+    ) -> None:
+        """Escribir/actualizar el manifiesto del lote y su registro en la Boveda (idempotente)."""
+        try:
+            atomic_write_text(bundle_dir / "_bundle_manifest.json", json.dumps(bundle_entries, ensure_ascii=False))
+        except OSError:
+            return
+        record = asdict(
+            QuarantineRecord(
+                item_id=batch_id,
+                original_path=f"{base_resolved} ({moved} archivos)",
+                vault_path=str(bundle_dir),
+                category=category,
+                size_bytes=int(freed_bytes),
+                sha256=f"BATCH:{moved}",
+                quarantined_at=datetime.now().astimezone().isoformat(),
+                is_dir=True,
+            )
+        )
+        with self._lock:
+            records = [r for r in self._load_manifest() if r.get("item_id") != batch_id]
+            records.append(record)
+            self._save_manifest(records)
+
+    def restore_items_bulk(
+        self,
+        item_ids: list[str] | None = None,
+        predicate: Callable[[dict], bool] | None = None,
+        progress_cb: Callable[[int, str], None] | None = None,
+        checkpoint_every: int = 2000,
+    ) -> dict[str, Any]:
+        """v0.5.9: restaurar muchos elementos sueltos leyendo/escribiendo el manifiesto por lotes.
+
+        ``restore_item`` reescribe el manifiesto completo por cada elemento (inviable con decenas
+        de miles). Aqui: se mueve cada archivo de vuelta a su ruta original y se guarda el manifiesto
+        cada ``checkpoint_every``. Si la ruta original ya existe, el elemento se queda en la Boveda
+        (nunca se sobrescribe nada) y se informa en ``conflicts``. Los lotes (BATCH) usan
+        ``restore_item``.
+        """
+        wanted = set(item_ids or [])
+        with self._lock:
+            records = self._load_manifest()
+        targets = [
+            r
+            for r in records
+            if (not wanted or r.get("item_id") in wanted)
+            and (predicate is None or predicate(r))
+            and not str(r.get("sha256") or "").startswith("BATCH:")
+        ]
+        result: dict[str, Any] = {"restored": 0, "conflicts": 0, "missing": 0, "errors": 0, "conflict_samples": []}
+        done_ids: set[str] = set()
+        total = max(1, len(targets))
+
+        def _commit() -> None:
+            if not done_ids:
+                return
+            with self._lock:
+                cur = self._load_manifest()
+                self._save_manifest([r for r in cur if r.get("item_id") not in done_ids])
+
+        for idx, rec in enumerate(targets, start=1):
+            if progress_cb and (idx == 1 or idx % 500 == 0 or idx == total):
+                progress_cb(5 + int(idx * 90 / total), f"Restaurando ({idx}/{total})...")
+            vault_path = Path(_long_path(rec["vault_path"]))
+            original = Path(_long_path(rec["original_path"]))
+            if not vault_path.exists():
+                result["missing"] += 1
+                done_ids.add(str(rec["item_id"]))  # registro huerfano: ya no hay nada que restaurar
+                continue
+            if original.exists():
+                result["conflicts"] += 1
+                if len(result["conflict_samples"]) < 10:
+                    result["conflict_samples"].append(rec["original_path"])
+                continue
+            try:
+                self._move_fast(vault_path, original)
+                result["restored"] += 1
+                done_ids.add(str(rec["item_id"]))
+            except OSError:
+                result["errors"] += 1
+            if len(done_ids) and len(done_ids) % checkpoint_every == 0:
+                _commit()
+        _commit()
+        return result
 
     def restore_item(self, item_id: str) -> tuple[bool, str]:
         """Restore a quarantined file, directory, or batch bundle back to original locations."""
@@ -860,6 +1021,12 @@ class PreOpBackupManager:
             json.dumps(payload, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        # v0.5.9: lista COMPLETA (una linea JSON por elemento). El resumen de arriba solo guardaba 500
+        # y el 17/11 no alcanzo para reconstruir una autolimpieza de decenas de miles de archivos.
+        if len(items) > 500:
+            with (bdir / "snapshot_full.jsonl").open("w", encoding="utf-8") as fh:
+                for it in items:
+                    fh.write(json.dumps(it, ensure_ascii=False) + "\n")
         return bdir
 
     def restore_latest_power_backup(self) -> tuple[bool, str]:

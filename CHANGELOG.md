@@ -2,6 +2,23 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.9] - 2026-11-17
+
+### Corregido (P0 - incidente 17/11: Autolimpiar duplicados sobre todo el disco)
+- **Duplicados ya no toca programas.** La autolimpieza de la v0.5.7 movio a Cuarentena 164.273 copias identicas que no sobraban (bibliotecas de Python de uv, Anaconda y Python 3.13, DLL de Qt, `C:\Drivers`, datos de Teams, Zoom y navegadores), dejando esas instalaciones rotas. Todo se restauro (164.096 archivos; 176 que el propio programa ya habia recreado quedaron en la Boveda; 1 de Lenovo Vantage requiere administrador). Desde ahora Duplicados no recorre carpetas de programas, entornos, sistema ni configuracion (`AppData`, `Program Files`, `ProgramData`, `C:\Drivers`, `site-packages`, `.venv`, `node_modules`, Anaconda, carpetas ocultas, `_MEI` de PyInstaller) ni carpetas con marcas de instalacion (`.exe` con `.dll`, `pyvenv.cfg`, `conda-meta`).
+- **Carpetas copiadas protegidas:** si dos carpetas tienen la misma estructura (muchos archivos identicos), sus grupos se marcan "PROTEGIDO: carpeta copiada" y nunca se proponen; siempre se conserva al menos una copia del usuario.
+- **Autolimpiar pide confirmacion** con un resumen (copias, tamano, carpetas con mas copias y lo protegido) y ahora se puede **cancelar**.
+- **Cerrar la app cierra todo:** antes se esperaban 3 s y la tarea seguia sin ventana (la autolimpieza siguio 12 minutos tras "Salir"). Ahora se cancelan todas las tareas en un punto seguro (lo hecho queda registrado), se cierran las consolas y procesos que inicio la app (PowerShell, DISM, CHKDSK, TRIM...) y, si algo siguiera activo, el proceso termina por completo. Se respetan el navegador, el Explorador, Configuracion y el actualizador. Si hay una reparacion DISM/SFC/CHKDSK en curso, se pide confirmacion.
+- **Lo enviado a Cuarentena no reaparece:** la Boveda y los datos de la app quedan fuera de todos los escaneos (antes Arbol mostraba archivos de la propia Boveda).
+
+### Agregado
+- **Cuarentena instantanea:** tecla Supr, clic derecho, icono de caneca en cada fila o arrastrar archivos desde el Explorador a la pestana "Boveda Cuarentena". Sin abrir un proceso: suena la Papelera de Windows, la fila se desvanece, la pestana muestra el contador y aparece "Deshacer" durante unos segundos.
+- **Sin reescanear tras cada accion:** lo movido se quita de la lista (Duplicados, Arbol, Huerfanos, Temporales, Hardlink).
+- **Microprocesos:** la Boveda registra por lotes (cada 50 elementos; los lotes masivos de temporales cada 500), Duplicados recuerda las huellas BLAKE3 ya calculadas (`hash_cache.sqlite`) y "Guardar Pausa" funciona tambien en Duplicados y Arbol ("Retomar Sesion" los relanza sin repetir lo calculado).
+- **Restauracion masiva** (`restore_items_bulk`) y copia de seguridad previa COMPLETA de las autolimpiezas (`snapshot_full.jsonl`).
+- Animaciones sobrias (filas, aviso, contador de la Boveda, acercamiento en el mapa) que respetan "Mostrar animaciones en Windows".
+- `SECURITY.md`: politica de seguridad y como reportar vulnerabilidades de forma privada.
+
 ## [0.5.8] - 2026-11-17
 
 ### Agregado

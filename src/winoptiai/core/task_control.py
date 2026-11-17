@@ -32,6 +32,26 @@ class TaskCanceledError(Exception):
         self.detail = detail
 
 
+class TaskSaveRequested(Exception):
+    """v0.5.9: el usuario pidio "Guardar Pausa" en un analisis. El trabajador (AsyncTask) crea la
+    sesion para retomarlo; lo ya calculado (p. ej. huellas BLAKE3 en cache) no se repite."""
+
+    def __init__(self, detail: str = "Analisis detenido en un punto seguro") -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+def stop_point(controller: "TaskController | None", cancel_detail: str = "Operacion cancelada por el usuario") -> None:
+    """Punto seguro de parada para motores de analisis: Cancelar o Guardar Pausa."""
+    if controller is None:
+        return
+    state = controller.checkpoint()
+    if state == "cancel":
+        raise TaskCanceledError(cancel_detail)
+    if state == "save_pause":
+        raise TaskSaveRequested()
+
+
 @dataclass(slots=True)
 class TaskSessionRecord:
     """Serialized checkpoint of a paused long-running task ready for resumption."""
