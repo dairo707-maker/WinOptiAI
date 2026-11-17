@@ -383,7 +383,7 @@ class CrashGuard:
                 ["wevtutil", "qe", "Application", f"/q:{query}", "/c:25", "/rd:true", "/f:text"],
                 capture_output=True,
                 text=True,
-                encoding="oem",
+                encoding="mbcs",  # v0.5.3: wevtutil escribe en ANSI; "oem" danaba los acentos
                 errors="replace",
                 timeout=12,
                 creationflags=flags,
@@ -401,7 +401,7 @@ class CrashGuard:
             date = next((ln for ln in lines if ln.lower().startswith("date:")), "")
             desc_idx = next((i for i, ln in enumerate(lines) if ln.lower().startswith("description:")), -1)
             desc = " ".join(lines[desc_idx + 1 : desc_idx + 4]) if desc_idx >= 0 else ""
-            out.append(f"{date} | {desc}"[:400])
+            out.append(f"{date} | {desc}".replace("\x00", "").strip()[:400])
             if len(out) >= max_events:
                 break
         return out
