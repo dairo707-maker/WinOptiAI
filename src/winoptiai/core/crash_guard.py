@@ -337,8 +337,17 @@ class CrashGuard:
 
         def _loop() -> None:
             dumped_since: float | None = None
+            last_loop = time.monotonic()
             while not self._watchdog_stop.wait(poll_s):
-                gap = time.monotonic() - self._last_ui_tick
+                now = time.monotonic()
+                # v0.5.9: si el propio vigilante estuvo detenido mucho mas que su intervalo, el equipo
+                # estuvo suspendido (el reloj sigue contando el tiempo dormido): no es un bloqueo.
+                if now - last_loop > max(threshold_s, poll_s * 5):
+                    self._last_ui_tick = now
+                    self.breadcrumb(f"Reanudacion tras suspension ({now - last_loop:.0f} s)")
+                    dumped_since = None
+                last_loop = now
+                gap = now - self._last_ui_tick
                 if gap >= threshold_s and dumped_since is None:
                     dumped_since = self._last_ui_tick
                     self.hang_count += 1

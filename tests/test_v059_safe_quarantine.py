@@ -256,6 +256,24 @@ def test_quarantine_many_stops_on_cancel_and_keeps_record(tmp_path: Path) -> Non
     assert len(vault.list_items()) == 10  # lo movido quedo registrado (restaurable)
 
 
+def test_hang_watchdog_ignores_system_sleep(tmp_path: Path, monkeypatch) -> None:
+    import time as _t
+
+    from winoptiai.core import crash_guard as cg
+
+    guard = cg.CrashGuard(app_dir=tmp_path, version="0.5.9")
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(cg.time, "monotonic", lambda: clock["now"])
+    guard.start_hang_watchdog(threshold_s=8.0, poll_s=0.02)
+    try:
+        _t.sleep(0.1)
+        clock["now"] += 7200  # portatil suspendido 2 horas: la interfaz no "se bloqueo"
+        _t.sleep(0.2)
+        assert guard.hang_count == 0
+    finally:
+        guard.stop_hang_watchdog()
+
+
 def test_recycle_sound_never_raises() -> None:
     from winoptiai.core.win32_bridge import play_recycle_sound, recycle_sound_path
 

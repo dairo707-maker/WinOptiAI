@@ -2,6 +2,14 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.10] - 2026-11-17
+
+### Corregido
+- **Falsas alarmas de "interfaz bloqueada" tras suspender el equipo:** el vigilante de bloqueos contaba el tiempo en que el portatil estuvo dormido y escribia en `crash.log` bloqueos de 482 s, 2 h y 5 h que no existieron. Ahora reconoce la suspension y solo registra bloqueos reales.
+
+### Verificado
+- Cierre total en la app instalada (v0.5.9): al salir no queda ningun proceso de WinOptiAI ni consolas iniciadas por la app, y la sesion se marca como cerrada correctamente.
+
 ## [0.5.9] - 2026-11-17
 
 ### Corregido (P0 - incidente 17/11: Autolimpiar duplicados sobre todo el disco)
