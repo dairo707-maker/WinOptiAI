@@ -221,6 +221,13 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         color: {p["text_primary"]};
     }}
 
+    QLabel#MetricValueCompact {{
+        font-family: "{MONO_FONT_FAMILY}", monospace;
+        font-size: 18px;
+        font-weight: 500;
+        color: {p["text_primary"]};
+    }}
+
     QLabel#MonoValue {{
         font-family: "{MONO_FONT_FAMILY}", monospace;
         font-size: 12px;

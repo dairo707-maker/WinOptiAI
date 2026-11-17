@@ -412,12 +412,15 @@ class SharpMetricCell(GlassPanel):
         title: str,
         icon_name: str,
         parent: QWidget | None = None,
+        compact: bool = False,
     ) -> None:
         super().__init__(elevated=False, parent=parent)
         self._icon_name = icon_name
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
+        # v0.5.7: modo compacto (Resumen) para dejar altura al historial grafico.
+        vpad = 10 if compact else 14
+        layout.setContentsMargins(16, vpad, 16, vpad)
+        layout.setSpacing(4 if compact else 8)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -435,7 +438,7 @@ class SharpMetricCell(GlassPanel):
         layout.addLayout(header)
 
         self.value_lbl = QLabel("--")
-        self.value_lbl.setObjectName("MetricValue")
+        self.value_lbl.setObjectName("MetricValueCompact" if compact else "MetricValue")
         layout.addWidget(self.value_lbl)
 
         self.sub_lbl = QLabel("Sincronizando telemetria")

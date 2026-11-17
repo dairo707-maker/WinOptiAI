@@ -8,15 +8,20 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ...core.i18n import tr
+from ...core.metrics_history import MetricsHistory
 from ...core.telemetry import LiveSystemTelemetry
+from ..history_charts import FreedSpacePanel, HistoryPanel
 from ..svg_icons import load_svg_icon
+from ..theme import get_palette
 from ..widgets import GlassPanel, NumericTableItem, SharpMetricCell, StatusTag, configure_sortable_table
 
 
@@ -28,9 +33,29 @@ class OverviewView(QWidget):
     def __init__(self, lang: str = "es", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.lang = lang
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(14)
+        self._theme_mode = "dark"
+        # v0.5.7: contenido desplazable. A 980x650 el historial conserva una altura legible
+        # (el resto de la vista se desplaza en lugar de aplastar los graficos).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("OverviewScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Selectores explicitos: una regla sin selector se heredaria a todos los hijos.
+        self.scroll.setStyleSheet(
+            "QScrollArea#OverviewScroll, QWidget#qt_scrollarea_viewport, QWidget#OverviewContent"
+            " { background: transparent; }"
+        )
+        self.scroll.viewport().setAutoFillBackground(False)
+        content = QWidget()
+        content.setObjectName("OverviewContent")
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
+        root = QVBoxLayout(content)
+        root.setContentsMargins(24, 16, 24, 16)
+        root.setSpacing(10)
 
         # Header row: Title + single primary action
         header = QHBoxLayout()
@@ -57,16 +82,16 @@ class OverviewView(QWidget):
         # 4 non-redundant metric cells
         row1 = QHBoxLayout()
         row1.setSpacing(12)
-        self.ram_cell = SharpMetricCell(tr("metric_ram", lang), "process")
-        self.disk_cell = SharpMetricCell(tr("metric_disk", lang), "storage")
+        self.ram_cell = SharpMetricCell(tr("metric_ram", lang), "process", compact=True)
+        self.disk_cell = SharpMetricCell(tr("metric_disk", lang), "storage", compact=True)
         row1.addWidget(self.ram_cell)
         row1.addWidget(self.disk_cell)
         root.addLayout(row1)
 
         row2 = QHBoxLayout()
         row2.setSpacing(12)
-        self.cpu_cell = SharpMetricCell(tr("metric_cpu_temp", lang), "thermal")
-        self.sre_cell = SharpMetricCell(tr("metric_sre", lang), "shield")
+        self.cpu_cell = SharpMetricCell(tr("metric_cpu_temp", lang), "thermal", compact=True)
+        self.sre_cell = SharpMetricCell(tr("metric_sre", lang), "shield", compact=True)
         row2.addWidget(self.cpu_cell)
         row2.addWidget(self.sre_cell)
         root.addLayout(row2)
@@ -83,14 +108,14 @@ class OverviewView(QWidget):
         tl.addWidget(self.active_tasks_lbl, stretch=1)
         root.addWidget(tasks_panel)
 
-        # Minimalist operational audit feed (sortable)
+        # v0.5.7: monitoreo con historial (24 h / 7 d), espacio liberado y registro, en pestanas.
         audit_panel = GlassPanel()
         audit_layout = QVBoxLayout(audit_panel)
-        audit_layout.setContentsMargins(16, 14, 16, 14)
-        audit_layout.setSpacing(10)
+        audit_layout.setContentsMargins(16, 12, 16, 12)
+        audit_layout.setSpacing(4)
 
         audit_hdr = QHBoxLayout()
-        self.audit_lbl = QLabel(tr("audit_feed", lang))
+        self.audit_lbl = QLabel(tr("monitor_feed", lang))
         self.audit_lbl.setObjectName("SectionLabel")
         audit_hdr.addWidget(self.audit_lbl)
         audit_hdr.addStretch()
@@ -98,6 +123,17 @@ class OverviewView(QWidget):
         audit_hdr.addWidget(self.policy_tag)
         audit_layout.addLayout(audit_hdr)
 
+        palette_fn = lambda: get_palette(self._theme_mode)  # noqa: E731
+        self.monitor_tabs = QTabWidget()
+        self.monitor_tabs.setDocumentMode(True)
+        self.history_panel = HistoryPanel(palette_fn)
+        self.freed_panel = FreedSpacePanel(palette_fn)
+        self.monitor_tabs.addTab(self.history_panel, tr("tab_history", lang))
+        self.monitor_tabs.addTab(self.freed_panel, tr("tab_freed", lang))
+
+        audit_page = QWidget()
+        ap_layout = QVBoxLayout(audit_page)
+        ap_layout.setContentsMargins(0, 8, 0, 0)
         self.audit_table = QTableWidget(0, 4)
         self.audit_table.setHorizontalHeaderLabels(["HORA", "ORIGEN", "ACCION", "RESULTADO"])
         configure_sortable_table(self.audit_table)
@@ -106,11 +142,29 @@ class OverviewView(QWidget):
         self.audit_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.audit_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.audit_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        audit_layout.addWidget(self.audit_table)
+        ap_layout.addWidget(self.audit_table)
+        self.monitor_tabs.addTab(audit_page, tr("tab_audit", lang))
+        self.monitor_tabs.currentChanged.connect(lambda _i: self.schedule_history_refresh(0))
+        audit_layout.addWidget(self.monitor_tabs, stretch=1)
+        audit_panel.setMinimumHeight(300)
         root.addWidget(audit_panel, stretch=1)
+
+    def attach_metrics(self, history: MetricsHistory, threshold_fn) -> None:
+        """Conectar el historial local (lecturas siempre en la hebra de MetricsHistory)."""
+        self.history_panel.attach(history, threshold_fn)
+        self.freed_panel.attach(history, threshold_fn)
+
+    def schedule_history_refresh(self, delay_ms: int = 600) -> None:
+        """Recargar solo la pestana visible (coalescido); las demas se recargan al mostrarse."""
+        current = self.monitor_tabs.currentWidget()
+        if current is self.history_panel:
+            self.history_panel.schedule_refresh(delay_ms)
+        elif current is self.freed_panel:
+            self.freed_panel.schedule_refresh(delay_ms)
 
     def apply_language_and_theme(self, lang: str, theme_mode: str, icon_inverted: str) -> None:
         self.lang = lang
+        self._theme_mode = theme_mode
         self.title_lbl.setText(tr("overview_title", lang))
         self.sub_lbl.setText(tr("overview_sub", lang))
         self.boost_btn.setText(f" {tr('btn_ai_boost', lang)}")
@@ -119,7 +173,12 @@ class OverviewView(QWidget):
         self.disk_cell.set_title(tr("metric_disk", lang))
         self.cpu_cell.set_title(tr("metric_cpu_temp", lang))
         self.sre_cell.set_title(tr("metric_sre", lang))
-        self.audit_lbl.setText(tr("audit_feed", lang))
+        self.audit_lbl.setText(tr("monitor_feed", lang))
+        for i, key in enumerate(("tab_history", "tab_freed", "tab_audit")):
+            self.monitor_tabs.setTabText(i, tr(key, lang))
+        self.history_panel.chart.update()
+        self.freed_panel.chart.update()
+        self.freed_panel.legend.update()
         for cell in (self.ram_cell, self.disk_cell, self.cpu_cell, self.sre_cell):
             cell.refresh_theme(theme_mode)
 
@@ -200,3 +259,5 @@ class OverviewView(QWidget):
             self.audit_table.setItem(r, 2, QTableWidgetItem(str(item.get("action", ""))))
             self.audit_table.setItem(r, 3, QTableWidgetItem(str(item.get("detail", ""))))
         self.audit_table.setSortingEnabled(True)
+        # Nuevos eventos (AI Boost, limpiezas, informes) -> marcadores y acumulados al dia.
+        self.schedule_history_refresh()

@@ -479,7 +479,7 @@ wheels = [
 
 [[package]]
 name = "winoptiai"
-version = "0.3.3"
+version = "0.5.7"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },

@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.6`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.7`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -28,6 +28,8 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
      - **NUNCA** llamar `setRowCount()` ni destruir widgets hijos (`deleteLater()` / `removeCellWidget()`) de forma sincrona dentro de un slot `clicked` (`thermal_bios_view.py`, `notifications_drawer.py`): diferir siempre la reconstruccion con `QTimer.singleShot(0, ...)`.
      - Conectar senales de `AsyncTask` con `Qt.QueuedConnection` explicita, limitar senales de progreso (~10/s o cambio de `%`) y usar carga perezosa (*lazy loading*) en `QTreeWidget` (`storage_view.py`).
      - En llamadas UAC (`ShellExecuteW`) fuera del hilo UI (`win32_bridge.run_elevated_command`), inicializar COM (`CoInitializeEx`) en el hilo trabajador.
+   - **Monitoreo con historial (`v0.5.7`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (monocromo, 1 px) RAM libre + umbral SRE, CPU % y marcadores B/L/D/E de `audit.jsonl`, y el acumulado de espacio liberado por tipo (AI Boost no cuenta: es RAM). Resumen va en `QScrollArea`: nunca poner reglas QSS sin selector en su viewport (se heredan a todos los hijos).
+   - **Instancia unica (`v0.5.7`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina. `--elevated-relaunch` espera 20 s al mutex. Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, monocromo, 2 niveles, clic = entrar, doble clic = Explorador), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
 
 ## Invariantes de Seguridad del Sistema Operativo
@@ -61,7 +63,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.6`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.7`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).
