@@ -2,6 +2,19 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.3] - 2026-11-16
+
+### Corregido (P0 - "No responde" al terminar Arbol y Formatos)
+- **Render del arbol sin limite (`storage_view.py`):** al terminar el analisis se creaban de golpe hasta 40 subcarpetas x 5 niveles (cientos de miles de items en un disco completo) y luego se ordenaban en el hilo GUI; la app llego a ~1,5 GB de RAM y Windows la cerro por bloqueo (Visor de eventos, Application Hang 1002, 16/11 19:03). Ahora la carga es perezosa: raiz + primer nivel, y cada carpeta carga sus hijos al expandirla; orden inicial por PESO.
+- **Memoria del analizador (`tree_analyzer.py`):** solo se conservan las 60 subcarpetas mas pesadas por nivel (los totales siguen siendo completos) y el top-100 de archivos pesados usa un heap acotado.
+- **Progreso congelado (`workers.py`):** el limitador de senales descartaba la ultima etapa ("Analizando DumpStack.log" quedaba fijo); ahora tambien emite cada vez que sube el porcentaje.
+
+### Agregado
+- **Aviso "WinOptiAI se cerro inesperadamente" con envio de informe:** tras cualquier cierre inesperado (fallo nativo, bloqueo terminado por Windows o fin de tarea) aparece al abrir la app un dialogo tipo Windows que pregunta si enviar el informe. Errores de Python no controlados muestran el aviso en el acto (una vez por error, maximo 3 por sesion).
+- **Envio a GitHub Issues revisado por el usuario (`core/crash_reporter.py`):** el informe se anonimiza (usuario de Windows, equipo, organizacion de OneDrive, correos), se muestra completo en "Ver informe" y solo al pulsar "Enviar informe" se abre `github.com/dairo707-maker/WinOptiAI/issues/new` precargado; el texto completo queda en el portapapeles. Nada se envia automaticamente ni hay credenciales en el .exe. Tambien disponible en Diagnostico > "Enviar a GitHub".
+- **Reinicio automatico tipo Office (`RegisterApplicationRestart`):** en el .exe, si Windows termina la app tras al menos 60 s abierta, la reabre con `--crash-restart` y el aviso sale de inmediato (no se reinicia por actualizaciones ni reinicios del sistema).
+- **Vigilante de bloqueos (`crash_guard.py`):** si el hilo GUI no responde durante 8 s, vuelca las pilas de todos los hilos en `crash.log`; la consulta del Visor de eventos incluye ahora los bloqueos (ID 1002).
+
 ## [0.5.2] - 2026-11-16
 
 ### Corregido (P0 - causa raiz real del cierre `0xc0000005`)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 import psutil
-from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtCore import Qt, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -36,7 +36,9 @@ from ..core.win32_bridge import apply_window_theme, is_user_admin, run_elevated_
 from ..storage.junk_scanner import resume_junk_session, scan_junk_targets
 from ..thermal_bios.thermal_controller import THERMAL_PROFILES, apply_thermal_profile
 from .dialogs.about_updater_dialog import AboutUpdaterDialog
+from ..core.crash_reporter import KIND_CRASH, KIND_ERROR
 from .dialogs.crash_report_dialog import CrashReportDialog
+from .dialogs.crash_send_dialog import CrashSendDialog
 from .dialogs.notifications_drawer import NotificationsTasksDialog
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .system_tray import WinOptiTray
@@ -49,6 +51,8 @@ from .widgets import NotebookCanvas, StatusTag
 from .workers import AsyncTask
 
 
+CRASH_RESTART_ARG = "--crash-restart"
+MAX_ERROR_PROMPTS_PER_SESSION = 3
 MAX_CONCURRENT_TASKS = 4
 MIN_RAM_FOR_NEW_TASK_GB = 1.0
 
@@ -56,9 +60,18 @@ MIN_RAM_FOR_NEW_TASK_GB = 1.0
 class MainWindow(QMainWindow):
     """Primary desktop shell with RAM-aware concurrent jobs, Bell drawer, and periodic advisor."""
 
-    def __init__(self, crash_guard: CrashGuard | None = None) -> None:
+    # v0.5.3: excepciones no controladas (cualquier hilo) -> aviso de envio en el hilo GUI.
+    unhandled_error = Signal(str, str, str)
+
+    def __init__(self, crash_guard: CrashGuard | None = None, auto_restarted: bool = False) -> None:
         super().__init__()
         self.crash_guard = crash_guard
+        self.auto_restarted = auto_restarted
+        self._crash_dialog: CrashSendDialog | None = None
+        self._reported_error_keys: set[str] = set()
+        self.unhandled_error.connect(self._on_unhandled_error, Qt.ConnectionType.QueuedConnection)
+        if crash_guard is not None:
+            crash_guard.add_unhandled_listener(lambda origin, et, text: self.unhandled_error.emit(origin, et, text))
         self.setWindowTitle(f"WinOptiAI {__version__}")
         self.resize(1200, 760)
         self.setMinimumSize(980, 650)
@@ -317,6 +330,11 @@ class MainWindow(QMainWindow):
         if self.crash_guard is not None:
             self.heartbeat_timer.timeout.connect(self.crash_guard.heartbeat)
             self.heartbeat_timer.start(60_000)
+            # v0.5.3: pulso de 1 s del hilo GUI para el vigilante de bloqueos.
+            self.ui_tick_timer = QTimer(self)
+            self.ui_tick_timer.timeout.connect(self.crash_guard.ui_tick)
+            self.ui_tick_timer.start(1000)
+            self.crash_guard.start_hang_watchdog()
 
         QTimer.singleShot(80, self._phase2_warmup)
 
@@ -529,9 +547,59 @@ class MainWindow(QMainWindow):
                     "crash_guard", "Visor de eventos APPCRASH", " || ".join(entries)[:600]
                 )
                 self.overview_view.set_audit_rows(self.policy.read_recent_audit())
-                guard.write_log_block("EVENTOS APPCRASH (Application, ID 1000)", "\n".join(entries))
+                guard.write_log_block("EVENTOS APPCRASH/HANG (Application, ID 1000/1002)", "\n".join(entries))
+            self._prompt_crash_report(KIND_CRASH)
 
-        self._run_async(_query_events, _on_events, "Consulta Visor de eventos", notify_on_complete=False)
+        # v0.5.3: el aviso de envio sale siempre tras un cierre inesperado, aunque falle la consulta.
+        self._run_async(
+            _query_events,
+            _on_events,
+            "Consulta Visor de eventos",
+            notify_on_complete=False,
+            on_error=lambda _e: self._prompt_crash_report(KIND_CRASH),
+        )
+
+    def _prompt_crash_report(self, kind: str, error_type: str = "", error_text: str = "") -> None:
+        """Aviso tipo Windows: preguntar si enviar el informe anonimizado a GitHub."""
+        guard = self.crash_guard
+        if guard is None or self._crash_dialog is not None:
+            return
+
+        def _decided(sent: bool) -> None:
+            what = "Cierre inesperado" if kind == KIND_CRASH else f"Error {error_type}"
+            self.policy.record_audit_event(
+                "crash_guard",
+                "Informe de error",
+                f"{what}: {'abierto en GitHub para enviar' if sent else 'el usuario decidio no enviarlo'}",
+            )
+            self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+
+        dlg = CrashSendDialog(
+            guard,
+            kind=kind,
+            error_type=error_type,
+            error_text=error_text,
+            auto_restarted=self.auto_restarted,
+            on_decision=_decided,
+            parent=self,
+        )
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._crash_dialog = dlg
+        dlg.finished.connect(lambda _r: setattr(self, "_crash_dialog", None))
+        if self.isHidden():
+            self.showNormal()
+        dlg.open()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _on_unhandled_error(self, origin: str, error_type: str, text: str) -> None:
+        # Una sola vez por error distinto y como maximo 3 avisos por sesion (sin cascadas).
+        last_frame = next((ln.strip() for ln in reversed(text.splitlines()) if ln.strip().startswith("File ")), "")
+        key = f"{error_type}|{last_frame}"
+        if key in self._reported_error_keys or len(self._reported_error_keys) >= MAX_ERROR_PROMPTS_PER_SESSION:
+            return
+        self._reported_error_keys.add(key)
+        self._prompt_crash_report(KIND_ERROR, error_type=error_type, error_text=f"[{origin}]\n{text}")
 
     def _on_elevated_temps(self, cpu_c: float | None, nvme_c: float | None) -> None:
         self.telemetry_reader.set_elevated_temps(cpu_c, nvme_c)

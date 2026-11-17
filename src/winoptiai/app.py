@@ -9,7 +9,8 @@ from PySide6.QtWidgets import QApplication
 
 from .core.crash_guard import CrashGuard
 from .core.sre_policy import SREPolicyEngine
-from .ui.main_window import MainWindow
+from .core.win32_bridge import register_application_restart
+from .ui.main_window import CRASH_RESTART_ARG, MainWindow
 from .ui.svg_icons import load_svg_icon
 from .ui.theme import build_obsidian_qss, register_embedded_fonts
 
@@ -19,6 +20,11 @@ def main() -> int:
     crash_guard = CrashGuard()
     crash_guard.install()
     crash_guard.begin_session()
+    # v0.5.3: si Windows termina la app (fallo nativo o "No responde"), WER la reabre con este
+    # argumento y el aviso de envio de informe aparece de inmediato. Solo en el .exe: en modo
+    # desarrollo reabriria python.exe sin el modulo.
+    if getattr(sys, "frozen", False):
+        register_application_restart(CRASH_RESTART_ARG)
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -34,7 +40,7 @@ def main() -> int:
     app.setStyleSheet(build_obsidian_qss(policy.config.theme_mode))
     app.setWindowIcon(load_svg_icon("brand", color="#E2E7ED", size=24))
 
-    window = MainWindow(crash_guard=crash_guard)
+    window = MainWindow(crash_guard=crash_guard, auto_restarted=CRASH_RESTART_ARG in sys.argv)
     if "--minimized" not in sys.argv:
         window.show()
 

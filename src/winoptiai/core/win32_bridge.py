@@ -378,6 +378,25 @@ def is_user_admin() -> bool:
         return False
 
 
+RESTART_NO_PATCH = 0x4
+RESTART_NO_REBOOT = 0x8
+
+
+def register_application_restart(arguments: str) -> bool:
+    """v0.5.3: pedir a Windows (WER) que reabra la app tras un cierre inesperado o un bloqueo,
+    como hacen Office y otros programas tipicos. No se reinicia por actualizaciones ni reinicios
+    del sistema. Windows solo lo hace si la app llevaba al menos 60 s abierta."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        fn = ctypes.windll.kernel32.RegisterApplicationRestart
+        fn.argtypes = [wintypes.LPCWSTR, wintypes.DWORD]
+        fn.restype = ctypes.c_long
+        return fn(arguments, RESTART_NO_PATCH | RESTART_NO_REBOOT) == 0
+    except (OSError, AttributeError):
+        return False
+
+
 def run_elevated_command(executable: str, arguments: str) -> bool:
     """Trigger native Windows UAC prompt cleanly without inheriting PyInstaller _MEI vars."""
     if not IS_WINDOWS:

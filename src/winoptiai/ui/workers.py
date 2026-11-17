@@ -73,7 +73,14 @@ class AsyncTask(QRunnable):
         # redibuja indicadores y el panel de tareas). Maximo ~10 senales/s por tarea; el % real
         # sigue disponible en self.percent para el temporizador de ETA de 1 s.
         now = time.monotonic()
-        if self._last_emit_pct < 0 or clamped >= 100 or (now - self._last_emit_ts) >= 0.10:
+        # v0.5.3: tambien emitir cuando el % sube (como mucho ~100 veces): antes el texto
+        # quedaba congelado en una etapa vieja ("Analizando DumpStack.log") aunque avanzara.
+        if (
+            self._last_emit_pct < 0
+            or clamped >= 100
+            or clamped > self._last_emit_pct
+            or (now - self._last_emit_ts) >= 0.10
+        ):
             self._last_emit_pct = clamped
             self._last_emit_ts = now
         else:

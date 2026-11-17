@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.crash_guard import CrashGuard
+from ...core.crash_reporter import KIND_CRASH, KIND_ERROR
 from ...core.win32_bridge import reveal_in_explorer
 from ..widgets import StatusTag
 
@@ -60,6 +61,11 @@ class CrashReportDialog(QDialog):
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.clicked.connect(self._open_log)
         actions.addWidget(open_btn)
+        send_btn = QPushButton("Enviar a GitHub")
+        send_btn.setObjectName("GhostAction")
+        send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        send_btn.clicked.connect(self._send_report)
+        actions.addWidget(send_btn)
         actions.addStretch()
 
         copy_btn = QPushButton("Copiar Diagnostico")
@@ -78,6 +84,15 @@ class CrashReportDialog(QDialog):
         if clip is not None:
             clip.setText(self.text_box.toPlainText())
             self.status_lbl.setText("Diagnostico copiado al portapapeles.")
+
+    def _send_report(self) -> None:
+        # v0.5.3: mismo flujo que el aviso automatico (texto anonimizado, revision previa).
+        from .crash_send_dialog import CrashSendDialog
+
+        prev = self.guard.previous_session
+        kind = KIND_CRASH if (prev and prev.dirty) else KIND_ERROR
+        dlg = CrashSendDialog(self.guard, kind=kind, error_type="reporte manual", parent=self)
+        dlg.exec()
 
     def _open_log(self) -> None:
         path = self.guard.crash_log_path

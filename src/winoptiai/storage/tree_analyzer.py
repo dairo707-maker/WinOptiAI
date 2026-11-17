@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+import heapq
 import os
 from pathlib import Path
 from typing import Callable
@@ -99,6 +100,7 @@ def analyze_storage_hierarchy(
     root: Path,
     max_depth: int = 4,
     top_formats: int = 40,
+    max_children: int = 60,
     progress_cb: Callable[[int, str], None] | None = None,
     controller: TaskController | None = None,
 ) -> StorageHierarchyReport:
@@ -107,7 +109,7 @@ def analyze_storage_hierarchy(
     ext_totals: dict[str, int] = defaultdict(int)
     ext_counts: dict[str, int] = defaultdict(int)
     ext_heaviest: dict[str, tuple[Path, int]] = {}
-    all_heavy: list[tuple[Path, str, int]] = []
+    heavy_heap: list[tuple[int, str, str]] = []
     top_entries: list[str] = []
     try:
         top_entries = [e.name for e in os.scandir(resolved)]
@@ -160,11 +162,20 @@ def analyze_storage_hierarchy(
                     if prev is None or sz > prev[1]:
                         ext_heaviest[ext] = (ep, sz)
                     if sz >= 5 * 1024 * 1024:
-                        all_heavy.append((ep, ext, sz))
+                        # v0.5.3: top-100 acotado (heap) en vez de una lista sin limite.
+                        item = (sz, str(ep), ext)
+                        if len(heavy_heap) < 100:
+                            heapq.heappush(heavy_heap, item)
+                        elif sz > heavy_heap[0][0]:
+                            heapq.heapreplace(heavy_heap, item)
             except OSError:
                 continue
 
         node.children.sort(key=lambda c: c.size_bytes, reverse=True)
+        # v0.5.3: conservar solo las subcarpetas mas pesadas (los totales ya estan sumados).
+        # Un disco completo generaba cientos de miles de nodos retenidos en memoria.
+        if len(node.children) > max_children:
+            del node.children[max_children:]
         return node
 
     root_node = _walk_dir(resolved, 0)
@@ -183,7 +194,7 @@ def analyze_storage_hierarchy(
             )
         )
     formats.sort(key=lambda f: f.total_bytes, reverse=True)
-    all_heavy.sort(key=lambda x: x[2], reverse=True)
+    all_heavy = [(Path(p), ext, sz) for sz, p, ext in sorted(heavy_heap, reverse=True)]
 
     return StorageHierarchyReport(
         root_node=root_node,

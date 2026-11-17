@@ -7,7 +7,10 @@
 - ``session_lock.json`` marca la sesion en curso; si al arrancar no indica ``clean_exit``,
   la sesion previa termino abruptamente (``dirty exit``).
 
-Todo es local: no se envia telemetria a ningun servicio externo.
+- v0.5.3: vigilante de bloqueos del hilo GUI (vuelca pilas si no responde > 8 s).
+
+Todo es local: nada se envia automaticamente. El usuario decide si abre un informe
+anonimizado en GitHub (``crash_reporter``).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from types import TracebackType
 from typing import Any, TextIO
@@ -33,6 +37,7 @@ CRASH_LOG_NAME = "crash.log"
 SESSION_LOCK_NAME = "session_lock.json"
 MAX_CRASH_LOG_BYTES = 1_000_000
 MAX_BREADCRUMBS = 40
+HANG_THRESHOLD_S = 8.0
 
 
 def _now_iso() -> str:
@@ -96,6 +101,22 @@ class CrashGuard:
         self._prev_sys_hook: Any = None
         self._prev_thread_hook: Any = None
         self._session_started_at = ""
+        self._last_ui_tick = time.monotonic()
+        self._watchdog_stop = threading.Event()
+        self._watchdog_thread: threading.Thread | None = None
+        self.hang_count = 0
+        self._unhandled_listeners: list[Any] = []
+
+    def add_unhandled_listener(self, fn: Any) -> None:
+        """Registrar callback(origin, exc_type, text) para excepciones no controladas."""
+        self._unhandled_listeners.append(fn)
+
+    def _notify_unhandled(self, origin: str, exc_type: Any, text: str) -> None:
+        for fn in list(self._unhandled_listeners):
+            try:
+                fn(origin, getattr(exc_type, "__name__", str(exc_type)), text)
+            except Exception:  # noqa: BLE001
+                pass
 
     # ------------------------------------------------------------------ breadcrumbs
     def breadcrumb(self, message: str) -> None:
@@ -145,6 +166,9 @@ class CrashGuard:
     ) -> None:
         text = "".join(traceback.format_exception(exc_type, exc, tb)) if exc_type else "Excepcion sin tipo"
         self.write_log_block(f"EXCEPCION NO CONTROLADA ({origin})", text)
+        if exc_type is not None and issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+            return
+        self._notify_unhandled(origin, exc_type, text)
 
     def read_crash_log_tail(self, max_chars: int = 6000) -> str:
         try:
@@ -221,6 +245,7 @@ class CrashGuard:
 
     def uninstall(self) -> None:
         """Restaurar hooks originales (uso en pruebas)."""
+        self.stop_hang_watchdog()
         if not self._installed:
             return
         if self._prev_sys_hook is not None:
@@ -296,12 +321,62 @@ class CrashGuard:
         self.breadcrumb("Cierre controlado")
         self._write_lock_state(clean_exit=True)
 
+    # ------------------------------------------------------------------ hang watchdog
+    def ui_tick(self) -> None:
+        """Llamado por un QTimer del hilo GUI (~1 s): prueba de que la interfaz responde."""
+        self._last_ui_tick = time.monotonic()
+
+    def start_hang_watchdog(self, threshold_s: float = HANG_THRESHOLD_S, poll_s: float = 1.0) -> None:
+        """v0.5.3: si el hilo GUI no responde durante ``threshold_s``, volcar las pilas de todos los
+        hilos en crash.log. faulthandler solo cubre fallos nativos; un bloqueo ("No responde")
+        que Windows termina no dejaba rastro de que estaba haciendo la app."""
+        if self._watchdog_thread is not None:
+            return
+        self._last_ui_tick = time.monotonic()
+        self._watchdog_stop.clear()
+
+        def _loop() -> None:
+            dumped_since: float | None = None
+            while not self._watchdog_stop.wait(poll_s):
+                gap = time.monotonic() - self._last_ui_tick
+                if gap >= threshold_s and dumped_since is None:
+                    dumped_since = self._last_ui_tick
+                    self.hang_count += 1
+                    self.dump_all_threads(f"BLOQUEO DE INTERFAZ (sin responder {gap:.0f} s)")
+                elif gap < threshold_s and dumped_since is not None:
+                    self.breadcrumb(f"Interfaz recuperada tras {time.monotonic() - dumped_since:.0f} s")
+                    dumped_since = None
+
+        self._watchdog_thread = threading.Thread(target=_loop, name="WinOptiAI-HangWatchdog", daemon=True)
+        self._watchdog_thread.start()
+
+    def stop_hang_watchdog(self) -> None:
+        self._watchdog_stop.set()
+        self._watchdog_thread = None
+
+    def dump_all_threads(self, title: str) -> None:
+        self.write_log_block(title, "Pilas de todos los hilos (el hilo GUI es MainThread):")
+        with self._write_lock:
+            try:
+                if self._fh_stream is not None and not self._fh_stream.closed:
+                    faulthandler.dump_traceback(file=self._fh_stream, all_threads=True)
+                    self._fh_stream.flush()
+                else:
+                    with self.crash_log_path.open("a", encoding="utf-8") as fh:
+                        faulthandler.dump_traceback(file=fh, all_threads=True)
+            except (OSError, ValueError, RuntimeError):
+                pass
+
     # ------------------------------------------------------------------ Event Log
     def query_recent_appcrash_events(self, max_events: int = 3, exe_name: str = "WinOptiAI.exe") -> list[str]:
         """Leer los ultimos eventos APPCRASH (ID 1000) del registro Application (solo lectura)."""
         if not IS_WINDOWS:
             return []
-        query = "*[System[Provider[@Name='Application Error'] and (EventID=1000)]]"
+        # v0.5.3: incluir bloqueos ("dejo de interactuar con Windows", Application Hang 1002).
+        query = (
+            "*[System[(Provider[@Name='Application Error'] and EventID=1000) or "
+            "(Provider[@Name='Application Hang'] and EventID=1002)]]"
+        )
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             res = subprocess.run(

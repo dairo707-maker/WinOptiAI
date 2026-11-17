@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +74,7 @@ from ..widgets import (
 SELECTABLE_TABLE_MODES: frozenset[str] = frozenset({"junk", "duplicates", "orphans", "quarantine", "onedrive"})
 
 MAX_STORAGE_TASKS = 2  # v0.5.2: escaneos/limpiezas de almacenamiento simultaneos
+TREE_CHILDREN_PER_LEVEL = 40  # v0.5.3: subcarpetas creadas por nivel al expandir (carga perezosa)
 PREVIEW_TEXT_MAX_BYTES = 3500
 PREVIEW_IMAGE_MAX_BYTES = 25 * 1024 * 1024
 
@@ -349,6 +351,8 @@ class StorageView(QWidget):
         self.folder_tree.setHeaderLabels(["CARPETA", "PESO", "ARCHIVOS", "%"])
         self.folder_tree.setAlternatingRowColors(True)
         self.folder_tree.setSortingEnabled(True)
+        self._tree_nodes: dict[int, FolderNode] = {}
+        self.folder_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.folder_tree.itemDoubleClicked.connect(lambda _it, _col: self._reveal_selected_item())
         self.folder_tree.itemSelectionChanged.connect(self._update_explorer_tooltip)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -861,6 +865,41 @@ class StorageView(QWidget):
         self.tree_report = report
         self._render_tree()
 
+    def _make_tree_item(self, node: FolderNode) -> NumericTreeItem:
+        total = max(1, self.tree_report.root_node.size_bytes) if self.tree_report else 1
+        pct = (node.size_bytes / total) * 100.0
+        item = NumericTreeItem([node.name, format_bytes(node.size_bytes), str(node.file_count), f"{pct:.1f}%"])
+        item.setData(0, Qt.ItemDataRole.UserRole + 1, str(node.path))
+        item.setData(1, Qt.ItemDataRole.UserRole, float(node.size_bytes))
+        item.setData(2, Qt.ItemDataRole.UserRole, float(node.file_count))
+        item.setData(3, Qt.ItemDataRole.UserRole, float(pct))
+        key = len(self._tree_nodes)
+        self._tree_nodes[key] = node
+        item.setData(0, Qt.ItemDataRole.UserRole + 2, key)
+        item.setData(0, Qt.ItemDataRole.UserRole + 3, False)  # hijos aun no cargados
+        if node.children:
+            item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+        return item
+
+    def _populate_tree_children(self, item: QTreeWidgetItem) -> None:
+        if item.data(0, Qt.ItemDataRole.UserRole + 3):
+            return
+        item.setData(0, Qt.ItemDataRole.UserRole + 3, True)
+        node = self._tree_nodes.get(item.data(0, Qt.ItemDataRole.UserRole + 2))
+        if node is None:
+            return
+        children = [self._make_tree_item(c) for c in node.children[:TREE_CHILDREN_PER_LEVEL]]
+        if children:
+            item.addChildren(children)
+        else:
+            item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicatorWhenChildless)
+
+    def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        sorting = self.folder_tree.isSortingEnabled()
+        self.folder_tree.setSortingEnabled(False)
+        self._populate_tree_children(item)
+        self.folder_tree.setSortingEnabled(sorting)
+
     def _render_tree(self) -> None:
         # v0.5.2: un escaneo que termina mientras el usuario esta en otro sub-modo solo guarda
         # sus datos; dibujarlos en la tabla compartida mezclaria indices de otra lista.
@@ -872,28 +911,18 @@ class StorageView(QWidget):
             self.summary_lbl.setText("Elija una carpeta o unidad para analizar la jerarquia y formatos.")
             return
 
-        total = max(1, self.tree_report.root_node.size_bytes)
-
-        def _add_node(node: FolderNode, parent_item: NumericTreeItem | None) -> None:
-            pct = (node.size_bytes / total) * 100.0
-            item = NumericTreeItem(
-                [node.name, format_bytes(node.size_bytes), str(node.file_count), f"{pct:.1f}%"]
-            )
-            item.setData(0, Qt.ItemDataRole.UserRole + 1, str(node.path))
-            item.setData(1, Qt.ItemDataRole.UserRole, float(node.size_bytes))
-            item.setData(2, Qt.ItemDataRole.UserRole, float(node.file_count))
-            item.setData(3, Qt.ItemDataRole.UserRole, float(pct))
-            if parent_item is None:
-                self.folder_tree.addTopLevelItem(item)
-                item.setExpanded(True)
-            else:
-                parent_item.addChild(item)
-            for child in node.children[:40]:
-                _add_node(child, item)
-
+        # v0.5.3: carga perezosa. Antes se creaban de golpe hasta 40 hijos x 5 niveles (cientos
+        # de miles de items en un disco completo) y luego se ordenaban en el hilo GUI: la app
+        # pasaba a "No responde" con ~1,5 GB de RAM. Ahora solo se crean la raiz y su primer
+        # nivel; cada carpeta carga sus hijos al expandirla.
+        self._tree_nodes = {}
         self.folder_tree.setSortingEnabled(False)
-        _add_node(self.tree_report.root_node, None)
+        root_item = self._make_tree_item(self.tree_report.root_node)
+        self.folder_tree.addTopLevelItem(root_item)
+        self._populate_tree_children(root_item)
+        root_item.setExpanded(True)
         self.folder_tree.setSortingEnabled(True)
+        self.folder_tree.sortByColumn(1, Qt.SortOrder.DescendingOrder)
 
         fmts = self.tree_report.formats
         self.format_table.setSortingEnabled(False)
