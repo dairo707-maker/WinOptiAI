@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 87 passed. Auditoria visual offscreen (oscuro/claro, 1200x760 y 980x650, 6 modos de Almacenamiento, barra superior con tareas, dialogos Acerca de/Notificaciones/Informe): 184 recortes en 14 botones antes, 0 despues; capturas revisadas.
