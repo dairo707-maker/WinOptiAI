@@ -18,6 +18,8 @@ import time
 from .i18n import detect_default_language
 from .safety_guard import atomic_write_text, default_app_data_dir
 
+DUPLICATE_WINDOW_SECONDS = 2.0
+
 
 def recommended_ram_threshold_gb() -> float:
     """Calibrate RAM pressure threshold dynamically based on total physical RAM."""
@@ -121,9 +123,17 @@ class SREPolicyEngine:
         detail: str,
         freed_mb: float = 0.0,
     ) -> None:
-        """Append an immutable audit record to audit.jsonl using local system time."""
+        """Append an immutable audit record to audit.jsonl using local system time.
+
+        v0.5.8: se omite un registro identico (actor, accion, detalle) al ultimo escrito hace
+        menos de ``DUPLICATE_WINDOW_SECONDS`` (defensa extra contra procesos duplicados; la
+        causa raiz, dos instancias abiertas, se corrige con ``single_instance``).
+        """
+        now = datetime.now().astimezone()
+        if self._is_recent_duplicate(actor, action, detail, now):
+            return
         entry = {
-            "timestamp": datetime.now().astimezone().isoformat(),
+            "timestamp": now.isoformat(),
             "actor": actor,
             "action": action,
             "detail": detail,
@@ -131,6 +141,23 @@ class SREPolicyEngine:
         }
         with self.audit_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _is_recent_duplicate(self, actor: str, action: str, detail: str, now: datetime) -> bool:
+        try:
+            with self.audit_path.open("rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 8192))
+                tail = fh.read().decode("utf-8", errors="replace").strip().splitlines()
+            if not tail:
+                return False
+            last = json.loads(tail[-1])
+            if (last.get("actor"), last.get("action"), last.get("detail")) != (actor, action, detail):
+                return False
+            prev = datetime.fromisoformat(str(last.get("timestamp", "")))
+            return abs((now - prev).total_seconds()) < DUPLICATE_WINDOW_SECONDS
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
 
     def mark_audit_completed(self, action_id: str) -> None:
         if action_id and action_id not in self.config.completed_audit_actions:

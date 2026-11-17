@@ -27,6 +27,7 @@ from ..ai_optimizer.process_manager import (
 )
 from ..core.crash_guard import CrashGuard
 from ..core.i18n import tr
+from ..core.metrics_history import MetricsHistory, MinuteAggregator
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
@@ -65,6 +66,7 @@ def _task_pill_variants(title: str, percent: int, eta_part: str, extra: str) -> 
 
 
 CRASH_RESTART_ARG = "--crash-restart"
+ELEVATED_RELAUNCH_ARG = "--elevated-relaunch"
 MAX_ERROR_PROMPTS_PER_SESSION = 3
 MAX_CONCURRENT_TASKS = 4
 MIN_RAM_FOR_NEW_TASK_GB = 1.0
@@ -105,6 +107,9 @@ class MainWindow(QMainWindow):
         self.session_mgr = SessionManager()
         self.advisor = PeriodicAdvisor(cooldown_seconds=7200)
         self.telemetry_reader = PdhTelemetryReader()
+        # v0.5.8: historial local acotado (1 punto/min, 7 dias) en metrics.sqlite.
+        self.metrics_history = MetricsHistory(self.policy.app_dir)
+        self._minute_agg = MinuteAggregator()
         self._disk_free_gb = 0.0
         self._disk_total_gb = 0.0
         self._force_quit = False
@@ -280,6 +285,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.overview_view = OverviewView(lang=lang)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
+        self.overview_view.attach_metrics(self.metrics_history, lambda: self.policy.config.ram_threshold_gb)
         self.storage_view = StorageView(
             self.vault, self.backup_mgr, self.policy, self._run_async, self._set_status, lang=lang
         )
@@ -368,12 +374,17 @@ class MainWindow(QMainWindow):
         self.heartbeat_timer.stop()
         self.tray.hide()
         self.pool.waitForDone(3000)
+        self.metrics_history.shutdown()
         self._mark_clean_exit()
         event.accept()
 
     def _mark_clean_exit(self) -> None:
         if self.crash_guard is not None:
             self.crash_guard.mark_clean_exit()
+
+    def restore_from_tray(self) -> None:
+        """v0.5.8: tambien la usa la segunda instancia (instancia unica) para traer la ventana."""
+        self._restore_from_tray()
 
     def _restore_from_tray(self) -> None:
         self.telemetry_timer.setInterval(2000)
@@ -456,9 +467,9 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         if getattr(sys, "frozen", False):
-            ok = run_elevated_command(sys.executable, "")
+            ok = run_elevated_command(sys.executable, ELEVATED_RELAUNCH_ARG)
         else:
-            ok = run_elevated_command(sys.executable, "-m winoptiai.app")
+            ok = run_elevated_command(sys.executable, f"-m winoptiai.app {ELEVATED_RELAUNCH_ARG}")
         if ok:
             self._quit_app()
 
@@ -865,6 +876,14 @@ class MainWindow(QMainWindow):
             thermal_label=thermal_label,
         )
         self.thermal_view.update_live_telemetry(live)
+
+        # v0.5.8: un punto por minuto (promedio de las lecturas de 2 s) escrito fuera del hilo GUI.
+        minute = self._minute_agg.add(ram["free_gb"], ram["total_gb"], live.cpu_utility_pct, live.cpu_temp_c)
+        if minute is not None:
+            self.metrics_history.record_async(minute)
+            # La hebra de metricas es FIFO: la recarga se ejecuta despues de la escritura.
+            if self.isVisible():
+                self.overview_view.schedule_history_refresh(200)
 
         if self.policy.evaluate_ram_pressure(ram["free_gb"]):
             self._execute_ai_boost("sre_auto")

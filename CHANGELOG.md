@@ -2,6 +2,22 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.8] - 2026-11-17
+
+### Agregado
+- **Monitoreo grafico con historial en Resumen:** nuevo panel "Monitoreo e historial" con tres pestanas.
+  - *Historial RAM y CPU:* graficos de las ultimas 24 h o 7 dias con la RAM libre (y la linea del umbral SRE calibrado) y el uso de CPU. Sobre la misma linea de tiempo se marcan los eventos del registro: **B** AI Boost, **L** limpiezas, **D** depuraciones de Cuarentena y **E** informes de error. Al pasar el cursor se ven los valores de ese minuto (RAM, CPU, temperatura, disco libre y RAM de la propia app) o el detalle del evento. Un resumen indica la RAM libre minima, la CPU promedio, el porcentaje del tiempo bajo el umbral y cuantos AI Boost hubo.
+  - *Espacio liberado:* area acumulada del espacio en disco que reporto liberar cada limpieza, por tipo (temporales, duplicados, Cuarentena y OneDrive), con totales historicos y de los ultimos 7 dias. AI Boost no se suma aqui porque libera RAM, no disco.
+  - *Registro de operaciones:* la tabla de siempre.
+- **Historial local y acotado (`metrics.sqlite`):** un punto por minuto (promedio de las lecturas de 2 s) mientras la app esta abierta, tambien minimizada en la bandeja. Se guardan como maximo 7 dias (~10 000 filas) y todas las lecturas y escrituras ocurren fuera del hilo grafico. Graficos dibujados con QPainter propio: monocromo, lineas de 1 px, esquinas rectas.
+
+### Corregido
+- **Boveda: archivo suelto "bloqueado" que no se borraba.** Los elementos de un solo archivo (por ejemplo, un `.rar` enviado a Cuarentena desde Arbol) se trataban como carpeta al depurar: nunca se eliminaban, se informaban como "abiertos por otro programa" y su tamano quedaba en 0. Ahora se eliminan normalmente.
+- **Eventos duplicados en el registro (AI Boost repetido el 16/11 a las 22:45:35):** habia dos copias de WinOptiAI abiertas a la vez; cada una detecto la presion de RAM y ejecuto y registro su propio AI Boost (y ambas se pisaban el archivo de notificaciones). Ahora la app es de **instancia unica**: si se abre de nuevo, la ventana ya abierta pasa al frente. El relanzamiento como Administrador espera a que la copia anterior cierre. Ademas, el registro descarta una linea identica a la anterior escrita hace menos de 2 s, y los graficos cuentan una sola vez los duplicados ya guardados.
+
+### Cambiado (interfaz)
+- Tarjetas de metricas de Resumen mas compactas y vista desplazable, para que los graficos conserven una altura legible en la ventana minima (980x650).
+
 ## [0.5.7] - 2026-11-17
 
 ### Corregido

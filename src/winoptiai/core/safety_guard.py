@@ -257,6 +257,12 @@ def force_remove_tree(path: Path, progress_cb: Callable[[int, str], None] | None
 
 
 def _tree_size(path: Path) -> int:
+    lp = _long_path(path)
+    if os.path.isfile(lp):  # v0.5.8: elemento de un solo archivo
+        try:
+            return os.lstat(lp).st_size
+        except OSError:
+            return 0
     total = 0
     for dirpath, _dirs, files in os.walk(_long_path(path)):
         for name in files:
@@ -721,7 +727,13 @@ class QuarantineVault:
             if vault_path.exists() and use_recycle_bin and send_to_recycle_bin(vault_path):
                 pass
             elif vault_path.exists():
-                blocked = force_remove_tree(vault_path, progress_cb=progress_cb)
+                # v0.5.8: los elementos de un solo archivo (p. ej. "Enviar a Cuarentena" desde Arbol)
+                # se trataban como carpeta: os.walk no los recorre y os.rmdir falla, asi que nunca
+                # se borraban y se informaban como "bloqueados" con tamano 0.
+                if vault_path.is_dir():
+                    blocked = force_remove_tree(vault_path, progress_cb=progress_cb)
+                else:
+                    blocked = _force_unlink(vault_path)
                 if blocked:
                     remaining = _tree_size(vault_path)
                     updated_sizes[str(match["item_id"])] = remaining

@@ -196,6 +196,18 @@ def test_purge_only_removes_user_confirmed_orphans(tmp_path: Path) -> None:
     assert out["orphans_removed"] == 1 and not a.exists() and b.exists()
 
 
+def test_purge_single_file_item_is_deleted(tmp_path: Path) -> None:
+    # v0.5.8: caso real del usuario -> .rar enviado a Cuarentena desde Arbol quedaba "bloqueado".
+    vault = QuarantineVault(root_dir=tmp_path / "app")
+    src = tmp_path / "2025.001.20577-PVP.rar"
+    src.write_bytes(b"r" * 4096)
+    ok, _msg, rec = vault.quarantine_path(src, category="Arbol/Formato", skip_lock_check=True)
+    assert ok and rec is not None and Path(rec.vault_path).is_file()
+    out = vault.purge_items([rec.item_id])
+    assert out["purged"] == 1 and out["failed"] == 0 and out["blocked_files"] == 0
+    assert not Path(rec.vault_path).exists() and vault.list_items() == []
+
+
 def test_purge_reports_blocked_files_and_keeps_record(tmp_path: Path, monkeypatch) -> None:
     from winoptiai.core import safety_guard as sg
 
