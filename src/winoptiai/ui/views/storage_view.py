@@ -64,11 +64,16 @@ from ..svg_icons import load_svg_icon
 from ..theme import format_bytes, get_palette
 from ..treemap import TreemapWidget
 from ..widgets import (
+    ROLE_MOVE,
+    ROLE_RESTORE,
+    ROLE_RISK,
+    FlowLayout,
     GlassPanel,
     NumericTableItem,
     NumericTreeItem,
     StatusTag,
     configure_sortable_table,
+    set_button_role,
 )
 
 
@@ -133,10 +138,10 @@ class StorageView(QWidget):
         self.title_lbl.setObjectName("PageTitle")
         self.sub_lbl = QLabel(tr("storage_sub", lang))
         self.sub_lbl.setObjectName("PageSubtitle")
+        self.sub_lbl.setWordWrap(True)  # v0.5.6: nunca recortado en ventanas angostas
         tbox.addWidget(self.title_lbl)
         tbox.addWidget(self.sub_lbl)
-        header.addLayout(tbox)
-        header.addStretch()
+        header.addLayout(tbox, 1)  # v0.5.6: el titulo usa el espacio libre
 
         self.primary_btn = QPushButton(" Analizar Temporales")
         self.primary_btn.setObjectName("PrimaryAction")
@@ -146,9 +151,8 @@ class StorageView(QWidget):
         header.addWidget(self.primary_btn)
         root.addLayout(header)
 
-        # Row 1: Clean 5 Mode Tabs (never clipped)
-        tabs_bar = QHBoxLayout()
-        tabs_bar.setSpacing(6)
+        # Row 1: pestanas de modo. v0.5.6: FlowLayout -> pasan a una segunda fila si no caben.
+        tabs_bar = FlowLayout(spacing=6)
         self.mode_buttons: dict[str, QPushButton] = {}
         modes = [
             ("junk", tr("mode_junk", lang)),
@@ -160,12 +164,11 @@ class StorageView(QWidget):
         ]
         for key, label in modes:
             btn = QPushButton(label)
-            btn.setObjectName("GhostAction")
+            btn.setObjectName("ModeTab")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, m=key: self._switch_mode(m))
             self.mode_buttons[key] = btn
             tabs_bar.addWidget(btn)
-        tabs_bar.addStretch()
         root.addLayout(tabs_bar)
 
         # Row 2: Contextual Actions + Icon-only Explorer button (distinct color, hover tooltip)
@@ -222,7 +225,7 @@ class StorageView(QWidget):
         dal.addWidget(self.rule_combo)
 
         self.autoclean_btn = QPushButton("Autolimpiar Todos los Grupos -> Cuarentena")
-        self.autoclean_btn.setObjectName("PrimaryAction")
+        self.autoclean_btn.setObjectName(ROLE_MOVE)  # v0.5.6: una sola accion primaria por vista
         self.autoclean_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.autoclean_btn.clicked.connect(self._on_autoclean_all_duplicates)
         dal.addWidget(self.autoclean_btn)
@@ -240,6 +243,7 @@ class StorageView(QWidget):
         od_top.setSpacing(8)
         self.od_status_lbl = QLabel("OneDrive local detectado | Nube sin vincular")
         self.od_status_lbl.setObjectName("MonoValue")
+        self.od_status_lbl.setWordWrap(True)  # v0.5.6
         od_top.addWidget(self.od_status_lbl, stretch=1)
 
         self.od_quota_tag = StatusTag("MODO LOCAL LISTO", "neutral")
@@ -567,10 +571,16 @@ class StorageView(QWidget):
         self.dup_autoclean_panel.setVisible(mode == "duplicates")
         self.onedrive_panel.setVisible(mode == "onedrive")
         self.tertiary_btn.setVisible(mode in ("duplicates", "quarantine"))
+        # v0.5.6: color segun el efecto -> salvia = restaurar, ambar = mover (reversible),
+        # oxido = eliminar definitivo. Las pestanas de modo usan otro estilo (ModeTab).
         if mode == "quarantine":
             self.tertiary_btn.setText("Depurar / Vaciar Boveda")
+            set_button_role(self.tertiary_btn, ROLE_RISK)
+            set_button_role(self.secondary_btn, ROLE_RESTORE)
         else:
             self.tertiary_btn.setText("Hardlink NTFS")
+            set_button_role(self.tertiary_btn, ROLE_MOVE)
+            set_button_role(self.secondary_btn, ROLE_MOVE)
 
         if mode == "junk":
             self.primary_btn.setText(" Analizar Temporales")
@@ -1585,7 +1595,7 @@ class StorageView(QWidget):
         cur = self.onedrive_store.load()
         dlg = QDialog(self)
         dlg.setWindowTitle("Configurar OAuth OneDrive (Microsoft Graph + DPAPI)")
-        dlg.setFixedSize(540, 320)
+        dlg.setMinimumSize(560, 340)  # v0.5.6: no fijo
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(10)

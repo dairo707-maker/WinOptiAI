@@ -112,6 +112,15 @@ def format_bytes(num_bytes: int | float) -> str:
     return f"{val:.2f} TB"
 
 
+def _rgba(hex_color: str, alpha: int) -> str:
+    """'#RRGGBB' -> 'rgba(r, g, b, a)' para tintes suaves de los roles de accion."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r}, {g}, {b}, {max(0, min(255, alpha))})"
+
+
 def build_obsidian_qss(mode: str = "dark") -> str:
     """Return global QSS stylesheet enforcing 0px corners, 1px hairline borders, and glass surfaces."""
     p = get_palette(mode)
@@ -277,6 +286,85 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QPushButton#GhostAction[selected="true"] {{
         background-color: {p["bg_active"]};
         border-color: {p["tag_ice"]};
+    }}
+
+    /* v0.5.6: pestanas de modo (navegacion dentro de una vista): planas, subrayado al activarse. */
+    QPushButton#ModeTab {{
+        background-color: transparent;
+        color: {p["text_secondary"]};
+        border: 1px solid {p["border_hairline"]};
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 500;
+    }}
+
+    QPushButton#ModeTab:hover {{
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
+    }}
+
+    QPushButton#ModeTab[selected="true"] {{
+        background-color: {p["bg_active"]};
+        color: {p["text_primary"]};
+        border-color: {p["border_strong"]};
+        border-bottom: 2px solid {p["tag_ice"]};
+        font-weight: 600;
+    }}
+
+    /* v0.5.6: acciones especificas de cada pestana segun su efecto (tonos apagados, sin neon). */
+    QPushButton#RestoreAction, QPushButton#MoveAction, QPushButton#RiskAction {{
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        border-left-width: 3px;
+    }}
+
+    QPushButton#RestoreAction {{
+        background-color: {_rgba(p["tag_ok"], 22)};
+        color: {p["tag_ok"]};
+        border: 1px solid {_rgba(p["tag_ok"], 120)};
+        border-left: 3px solid {p["tag_ok"]};
+    }}
+
+    QPushButton#RestoreAction:hover {{
+        background-color: {_rgba(p["tag_ok"], 44)};
+    }}
+
+    QPushButton#MoveAction {{
+        background-color: {_rgba(p["tag_warn"], 20)};
+        color: {p["tag_warn"]};
+        border: 1px solid {_rgba(p["tag_warn"], 120)};
+        border-left: 3px solid {p["tag_warn"]};
+    }}
+
+    QPushButton#MoveAction:hover {{
+        background-color: {_rgba(p["tag_warn"], 42)};
+    }}
+
+    QPushButton#RiskAction {{
+        background-color: {_rgba(p["tag_risk"], 22)};
+        color: {p["tag_risk"]};
+        border: 1px solid {_rgba(p["tag_risk"], 130)};
+        border-left: 3px solid {p["tag_risk"]};
+    }}
+
+    QPushButton#RiskAction:hover {{
+        background-color: {_rgba(p["tag_risk"], 46)};
+    }}
+
+    QPushButton#RestoreAction:disabled, QPushButton#MoveAction:disabled, QPushButton#RiskAction:disabled {{
+        background-color: transparent;
+        color: {p["text_muted"]};
+        border-color: {p["border_hairline"]};
+    }}
+
+    /* v0.5.6 (decision del propietario): panel superior con bordes semirredondos. */
+    QWidget#TopBar QPushButton {{
+        border-radius: 6px;
+    }}
+
+    QWidget#TopBar QLabel {{
+        border-radius: 5px;
     }}
 
     QComboBox {{

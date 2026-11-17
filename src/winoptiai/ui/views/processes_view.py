@@ -62,10 +62,10 @@ class ProcessesView(QWidget):
         self.title_lbl.setObjectName("PageTitle")
         self.sub_lbl = QLabel(tr("proc_sub", lang))
         self.sub_lbl.setObjectName("PageSubtitle")
+        self.sub_lbl.setWordWrap(True)  # v0.5.6: nunca recortado en ventanas angostas
         tbox.addWidget(self.title_lbl)
         tbox.addWidget(self.sub_lbl)
-        header.addLayout(tbox)
-        header.addStretch()
+        header.addLayout(tbox, 1)  # v0.5.6: el titulo usa el espacio libre
 
         self.boost_btn = QPushButton(" Compactar RAM y EcoQoS")
         self.boost_btn.setObjectName("PrimaryAction")
@@ -133,7 +133,7 @@ class ProcessesView(QWidget):
         self.zombie_tag = StatusTag("0 DETECTADOS", "neutral")
         z_hdr.addWidget(self.zombie_tag)
         self.kill_zombie_btn = QPushButton("Cerrar Zombi Seleccionado")
-        self.kill_zombie_btn.setObjectName("GhostAction")
+        self.kill_zombie_btn.setObjectName("RiskAction")  # v0.5.6: cierra procesos
         self.kill_zombie_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.kill_zombie_btn.clicked.connect(self._kill_selected_zombie)
         z_hdr.addWidget(self.kill_zombie_btn)
@@ -158,7 +158,8 @@ class ProcessesView(QWidget):
 
     def set_active_tasks(self, task_names: list[str]) -> None:
         if task_names:
-            self.active_task_tag.set_tone(f"{len(task_names)} ACTIVAS: {task_names[0][:18]}", "active")
+            self.active_task_tag.set_tone(f"{len(task_names)} ACTIVAS", "active")  # v0.5.6: sin texto cortado
+            self.active_task_tag.setToolTip("\n".join(task_names))
         else:
             self.active_task_tag.set_tone("0 TAREAS APP", "neutral")
 

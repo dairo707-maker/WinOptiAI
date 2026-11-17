@@ -40,6 +40,7 @@ class OverviewView(QWidget):
         self.title_lbl.setObjectName("PageTitle")
         self.sub_lbl = QLabel(tr("overview_sub", lang))
         self.sub_lbl.setObjectName("PageSubtitle")
+        self.sub_lbl.setWordWrap(True)  # v0.5.6: nunca recortado en ventanas angostas
         title_box.addWidget(self.title_lbl)
         title_box.addWidget(self.sub_lbl)
         header.addLayout(title_box)

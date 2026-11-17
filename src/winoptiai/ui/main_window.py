@@ -47,8 +47,21 @@ from .views.overview_view import OverviewView
 from .views.processes_view import ProcessesView
 from .views.storage_view import StorageView
 from .views.thermal_bios_view import ThermalBiosView
-from .widgets import NotebookCanvas, StatusTag
+from .widgets import AdaptiveButton, NotebookCanvas, StatusTag
 from .workers import AsyncTask
+
+
+def _task_pill_variants(title: str, percent: int, eta_part: str, extra: str) -> list[str]:
+    """v0.5.6: textos del indicador de tareas de mas largo a mas corto (nunca se recorta)."""
+    short_title = title.split("(")[0].strip() or title
+    first_word = short_title.split()[0] if short_title.split() else short_title
+    return [
+        f"{title}: {percent}%{eta_part}{extra}",
+        f"{short_title} {percent}%{eta_part}{extra}",
+        f"{short_title} {percent}%{extra}",
+        f"{first_word} {percent}%{extra}",
+        f"{percent}%{extra}",
+    ]
 
 
 CRASH_RESTART_ARG = "--crash-restart"
@@ -110,7 +123,7 @@ class MainWindow(QMainWindow):
         # Sidebar
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(232)
+        sidebar.setFixedWidth(248)  # v0.5.6: "Acerca de y Actualizaciones" completo
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(0, 0, 0, 0)
         sb_layout.setSpacing(0)
@@ -203,34 +216,35 @@ class MainWindow(QMainWindow):
         tb_layout.setContentsMargins(24, 6, 24, 6)
         tb_layout.setSpacing(10)
 
-        self.task_pill_btn = QPushButton("Sin procesos en segundo plano")
+        self.task_pill_btn = AdaptiveButton("Sin procesos en segundo plano")
         self.task_pill_btn.setObjectName("GhostAction")
         self.task_pill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.task_pill_btn.clicked.connect(self._open_notifications_drawer)
         tb_layout.addWidget(self.task_pill_btn)
 
-        self.pause_top_btn = QPushButton("Pausar")
+        self.pause_top_btn = AdaptiveButton("Pausar")
         self.pause_top_btn.setObjectName("GhostAction")
         self.pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pause_top_btn.clicked.connect(self._toggle_lead_pause)
         self.pause_top_btn.setVisible(False)
         tb_layout.addWidget(self.pause_top_btn)
 
-        self.save_pause_top_btn = QPushButton("Guardar Pausa")
+        self.save_pause_top_btn = AdaptiveButton("Guardar Pausa")
+        self.save_pause_top_btn.set_variants(["Guardar Pausa", "Guardar"])
         self.save_pause_top_btn.setObjectName("GhostAction")
         self.save_pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_pause_top_btn.clicked.connect(self._save_and_pause_lead)
         self.save_pause_top_btn.setVisible(False)
         tb_layout.addWidget(self.save_pause_top_btn)
 
-        self.cancel_top_btn = QPushButton("Cancelar")
+        self.cancel_top_btn = AdaptiveButton("Cancelar")
         self.cancel_top_btn.setObjectName("GhostAction")
         self.cancel_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_top_btn.clicked.connect(self._cancel_lead_task)
         self.cancel_top_btn.setVisible(False)
         tb_layout.addWidget(self.cancel_top_btn)
 
-        self.resume_session_btn = QPushButton("Retomar Sesion")
+        self.resume_session_btn = AdaptiveButton("Retomar Sesion")
         self.resume_session_btn.setObjectName("PrimaryAction")
         self.resume_session_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.resume_session_btn.clicked.connect(self._open_notifications_drawer)
@@ -243,7 +257,8 @@ class MainWindow(QMainWindow):
         tb_layout.addWidget(self.admin_tag)
 
         if not is_admin:
-            self.uac_btn = QPushButton("Elevar Admin (UAC)")
+            self.uac_btn = AdaptiveButton("Elevar Admin (UAC)")
+            self.uac_btn.set_variants(["Elevar Admin (UAC)", "Elevar Admin", "Admin"])
             self.uac_btn.setObjectName("GhostAction")
             self.uac_btn.setToolTip(
                 "Relanzar como Administrador para limpiar residuos de Windows (Temp/WER/Minidump) sin tocar archivos del SO"
@@ -679,7 +694,7 @@ class MainWindow(QMainWindow):
         saved_sessions = self.session_mgr.list_sessions()
         self.resume_session_btn.setVisible(bool(saved_sessions))
         if saved_sessions:
-            self.resume_session_btn.setText(f"Retomar Sesion ({len(saved_sessions)})")
+            self.resume_session_btn.set_variants([f"Retomar Sesion ({len(saved_sessions)})", f"Retomar ({len(saved_sessions)})", "Retomar"])
 
         if has_active:
             if not self.task_eta_timer.isActive():
@@ -689,11 +704,11 @@ class MainWindow(QMainWindow):
             eta = lead.eta_label()
             eta_part = f" · {eta}" if eta else ""
             extra = f" (+{len(self._active_workers) - 1})" if len(self._active_workers) > 1 else ""
-            self.task_pill_btn.setText(f"{lead.title}: {lead.percent}%{eta_part}{extra}")
+            self.task_pill_btn.set_variants(_task_pill_variants(lead.title, lead.percent, eta_part, extra))
         else:
             if self.task_eta_timer.isActive():
                 self.task_eta_timer.stop()
-            self.task_pill_btn.setText("Sin procesos en segundo plano")
+            self.task_pill_btn.set_variants(["Sin procesos en segundo plano", "Sin tareas"])
         if self._notif_dialog is not None and self._notif_dialog.isVisible():
             self._notif_dialog._render_tasks()
             self._notif_dialog._render_sessions()

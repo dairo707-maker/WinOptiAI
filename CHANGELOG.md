@@ -2,6 +2,14 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.6] - 2026-11-17
+
+### Cambiado (interfaz)
+- **Botones nunca recortados:** auditoria automatica de todas las vistas y dialogos en modo oscuro y claro (1200x760 y ventana minima 980x650) encontro 184 casos en 14 botones. Corregidos con filas que pasan a una segunda linea (pestanas de Almacenamiento, acciones de Acerca de y de Termica), botones adaptativos en la barra superior (texto largo o corto segun el espacio, con el texto completo en el tooltip), dialogos redimensionables en lugar de tamano fijo y subtitulos con ajuste de linea. Una prueba de regresion recorre todas las vistas en ambos temas.
+- **Acciones de cada pestana con color propio:** restaurar/restablecer en salvia, mover a Cuarentena/Papelera/hardlink en ambar y eliminar definitivo/cerrar procesos en oxido (tonos apagados de la paleta). Las pestanas de modo tienen un estilo de pestana distinto (subrayado al activarse).
+- **Panel superior con bordes semirredondos** (resto de la interfaz sigue con esquinas rectas).
+- Barra lateral algo mas ancha para "Acerca de y Actualizaciones"; tarjetas de perfil termico con titulo y etiqueta apilados; "Autolimpiar" de Duplicados deja de competir con la accion principal.
+
 ## [0.5.5] - 2026-11-16
 
 ### Corregido

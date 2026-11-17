@@ -29,7 +29,7 @@ from ...core.updater import (
 )
 from ..svg_icons import load_svg_pixmap
 from ..theme import get_palette
-from ..widgets import GlassPanel, StatusTag
+from ..widgets import FlowLayout, GlassPanel, StatusTag
 from ..workers import AsyncTask
 
 
@@ -54,7 +54,8 @@ class AboutUpdaterDialog(QDialog):
         self.latest_release: ReleaseInfo | None = None
 
         self.setWindowTitle(tr("about_title", lang))
-        self.setFixedSize(570, 470)
+        # v0.5.6: tamano minimo (no fijo) para que los botones nunca se recorten con escalado de Windows
+        self.setMinimumSize(570, 470)
 
         p = get_palette(theme_mode)
         root = QVBoxLayout(self)
@@ -115,8 +116,8 @@ class AboutUpdaterDialog(QDialog):
         self.notes_box.setPlaceholderText("Notas de la ultima version disponible en GitHub...")
         root.addWidget(self.notes_box, stretch=1)
 
-        # Actions row
-        actions = QHBoxLayout()
+        # Actions row (v0.5.6: FlowLayout -> pasan a otra fila en vez de recortarse)
+        actions = FlowLayout(spacing=8)
         repo_btn = QPushButton("Abrir GitHub")
         repo_btn.setObjectName("GhostAction")
         repo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -131,7 +132,6 @@ class AboutUpdaterDialog(QDialog):
             diag_btn.clicked.connect(on_open_diagnostics)
             actions.addWidget(diag_btn)
 
-        actions.addStretch()
         self.check_btn = QPushButton(tr("about_check_updates", lang))
         self.check_btn.setObjectName("GhostAction")
         self.check_btn.setCursor(Qt.CursorShape.PointingHandCursor)

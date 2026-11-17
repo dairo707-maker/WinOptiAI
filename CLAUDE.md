@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.6`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -10,7 +10,9 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
 ## Reglas Inviolables de Diseno UI/UX
 
 1. **Estetica "Obsidian Acrylic" / Dual Tema (`Alabaster Frost`):**
-   - Bordes estrictamente rectos (`border-radius: 0px` en QSS y `DWMWCP_DONOTROUND` en `dwmapi.dll`).
+   - Bordes estrictamente rectos (`border-radius: 0px` en QSS y `DWMWCP_DONOTROUND` en `dwmapi.dll`). **Unica excepcion (decision del propietario, `v0.5.6`):** botones y etiquetas del panel superior (`QWidget#TopBar`) con `border-radius: 6px`.
+   - **Roles de botones (`v0.5.6`):** `PrimaryAction` (1 por vista), `GhostAction` (neutro), `ModeTab` (pestanas de modo, subrayado al activarse) y acciones especificas de cada pestana por efecto: `RestoreAction` (salvia, restaurar/restablecer), `MoveAction` (ambar, mover a Cuarentena/Papelera/hardlink), `RiskAction` (oxido, eliminar definitivo o cerrar procesos). Asignar con `widgets.set_button_role()`; tonos apagados de la paleta (`tag_ok/warn/risk`), nunca neon.
+   - **Texto nunca recortado (`v0.5.6`):** filas de botones con `widgets.FlowLayout` (pasan a otra fila), textos dinamicos con `widgets.AdaptiveButton.set_variants([largo, ..., corto])`, dialogos con `setMinimumSize` (nunca `setFixedSize`) y subtitulos con `setWordWrap(True)`. `tests/test_v056_ui_polish.py` recorre todas las vistas a 980x650 en oscuro y claro con `find_clipped_buttons`.
    - Lineas divisorias `1px` hairline, fondo translucido DWM Acrylic (`DWMWA_SYSTEMBACKDROP_TYPE = 3`).
    - Jerarquia monocromo / acero-hielo (`#E2E7ED`, `#9BA3AE`, `#0B0D10`). **Prohibidos los brillos neon, gradientes llamativos o colores saturados de "estetica IA".**
 2. **Cero Emojis — 100% SVG Minimalistas:**
@@ -59,7 +61,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.5`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.6`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

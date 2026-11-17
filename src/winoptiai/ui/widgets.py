@@ -2,19 +2,191 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QMargins, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QProgressBar,
+    QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+
+class FlowLayout(QLayout):
+    """v0.5.6: fila que pasa los botones a la linea siguiente cuando no caben (nunca los recorta)."""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m: QMargins = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_h = eff.x(), eff.y(), 0
+        for item in self._items:
+            w = item.widget()
+            if w is not None and w.isHidden():
+                continue
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._spacing
+            if next_x - self._spacing > eff.right() + 1 and line_h > 0:
+                x = eff.x()
+                y += line_h + self._spacing
+                next_x = x + hint.width() + self._spacing
+                line_h = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y() + m.bottom()
+
+
+class AdaptiveButton(QPushButton):
+    """v0.5.6: boton que muestra la variante de texto mas larga que cabe (nunca texto cortado).
+
+    ``set_variants(["Elevar Admin (UAC)", "Admin"])``: con poco espacio usa la version corta y
+    deja la completa en el tooltip. ``minimumSizeHint`` corresponde a la variante mas corta.
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._variants: list[str] = [text] if text else []
+        self._base_tip = ""
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def set_variants(self, variants: list[str]) -> None:
+        clean = [v for v in variants if v]
+        if not clean:
+            return
+        if clean != self._variants:
+            self._variants = clean
+            self.updateGeometry()
+        self._pick()
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        """Un texto fijo equivale a una sola variante (mantiene el comportamiento de QPushButton)."""
+        self.set_variants([text])
+
+    def setToolTip(self, tip: str) -> None:  # noqa: N802
+        self._base_tip = tip
+        super().setToolTip(tip)
+
+    def variants(self) -> list[str]:
+        return list(self._variants)
+
+    def _padding(self) -> int:
+        cur = super().text()
+        return max(0, super().sizeHint().width() - self.fontMetrics().horizontalAdvance(cur))
+
+    def hint_for(self, text: str) -> int:
+        return self.fontMetrics().horizontalAdvance(text) + self._padding()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        base = super().sizeHint()
+        if self._variants:
+            base.setWidth(self.hint_for(self._variants[0]))
+        return base
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        base = super().sizeHint()
+        if self._variants:
+            base.setWidth(self.hint_for(self._variants[-1]))
+        return base
+
+    def _pick(self) -> None:
+        if not self._variants:
+            return
+        avail = self.width()
+        chosen = self._variants[-1]
+        for v in self._variants:
+            if self.hint_for(v) <= avail + 1:
+                chosen = v
+                break
+        if super().text() != chosen:
+            super().setText(chosen)
+        full = self._variants[0]
+        tip = self._base_tip or (full if chosen != full else "")
+        if chosen != full and full not in tip:
+            tip = f"{full}\n{tip}" if tip else full
+        QPushButton.setToolTip(self, tip)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._pick()
+
+
+# v0.5.6: roles visuales de las acciones especificas de cada pestana (ver theme.py).
+ROLE_RESTORE = "RestoreAction"  # devolver / restablecer (reversible, tono salvia)
+ROLE_MOVE = "MoveAction"  # mover a Cuarentena / Papelera / liberar espacio (reversible, tono ambar)
+ROLE_RISK = "RiskAction"  # eliminar definitivo / cerrar procesos (tono oxido)
+
+
+def set_button_role(btn: QPushButton, role: str) -> None:
+    """Asignar un rol visual (objectName del QSS) y repintar el boton."""
+    if btn.objectName() == role:
+        return
+    btn.setObjectName(role)
+    btn.style().unpolish(btn)
+    btn.style().polish(btn)
+    btn.updateGeometry()
+
+
+def find_clipped_buttons(root: QWidget) -> list[tuple[str, int, int]]:
+    """Botones visibles cuyo texto actual no cabe en su ancho (auditoria visual y pruebas)."""
+    out: list[tuple[str, int, int]] = []
+    for b in root.findChildren(QPushButton):
+        if not b.isVisibleTo(root) or not b.text().strip():
+            continue
+        need = b.hint_for(b.text()) if isinstance(b, AdaptiveButton) else b.sizeHint().width()
+        if b.width() + 1 < need:
+            out.append((b.text().strip(), b.width(), need))
+    return out
 
 
 class NotebookCanvas(QWidget):

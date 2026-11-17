@@ -35,7 +35,7 @@ from ...thermal_bios.thermal_controller import (
     restore_default_power_scheme,
 )
 from ..svg_icons import load_svg_icon
-from ..widgets import GlassPanel, StatusTag, configure_sortable_table
+from ..widgets import FlowLayout, GlassPanel, StatusTag, configure_sortable_table
 
 
 # Acciones que lanzan una consola PowerShell elevada desacoplada (seguimiento informativo).
@@ -84,10 +84,10 @@ class ThermalBiosView(QWidget):
         self.title_lbl.setObjectName("PageTitle")
         self.sub_lbl = QLabel(tr("thermal_sub", lang))
         self.sub_lbl.setObjectName("PageSubtitle")
+        self.sub_lbl.setWordWrap(True)  # v0.5.6: nunca recortado en ventanas angostas
         tbox.addWidget(self.title_lbl)
         tbox.addWidget(self.sub_lbl)
-        header.addLayout(tbox)
-        header.addStretch()
+        header.addLayout(tbox, 1)  # v0.5.6: el titulo usa el espacio libre
 
         self.audit_btn = QPushButton(" Escanear Hardware y BIOS")
         self.audit_btn.setObjectName("PrimaryAction")
@@ -105,6 +105,7 @@ class ThermalBiosView(QWidget):
 
         self.rt_cpu_lbl = QLabel("CPU: --% | Frecuencia: -- GHz | Turbo: --%")
         self.rt_cpu_lbl.setObjectName("MonoValue")
+        self.rt_cpu_lbl.setWordWrap(True)  # v0.5.6
         rt_layout.addWidget(self.rt_cpu_lbl, stretch=1)
 
         self.rt_temp_tag = StatusTag("SENSOR TERMICO", "neutral")
@@ -126,13 +127,15 @@ class ThermalBiosView(QWidget):
             cl.setContentsMargins(14, 12, 14, 12)
             cl.setSpacing(8)
 
-            top = QHBoxLayout()
+            # v0.5.6: titulo y etiqueta apilados (antes se recortaban en ventanas angostas)
             name_lbl = QLabel(prof.title)
             name_lbl.setStyleSheet("font-size: 13px; font-weight: 600;")
-            top.addWidget(name_lbl)
-            top.addStretch()
-            top.addWidget(StatusTag(f"EPP {prof.epp_ac}% | SIN REINICIO", "neutral"))
-            cl.addLayout(top)
+            name_lbl.setWordWrap(True)
+            cl.addWidget(name_lbl)
+            tag_row = QHBoxLayout()
+            tag_row.addWidget(StatusTag(f"EPP {prof.epp_ac}% | SIN REINICIO", "neutral"))
+            tag_row.addStretch()
+            cl.addLayout(tag_row)
 
             desc = QLabel(prof.subtitle)
             desc.setObjectName("PageSubtitle")
@@ -150,14 +153,17 @@ class ThermalBiosView(QWidget):
 
         # Hardware inventory summary + backup/restore/pending controls
         hw_panel = GlassPanel()
-        hw_layout = QHBoxLayout(hw_panel)
-        hw_layout.setContentsMargins(14, 10, 14, 10)
-        hw_layout.setSpacing(8)
+        hw_outer = QVBoxLayout(hw_panel)
+        hw_outer.setContentsMargins(14, 10, 14, 10)
+        hw_outer.setSpacing(8)
 
         self.hw_lbl = QLabel("Escaneando perfil completo de hardware...")
         self.hw_lbl.setObjectName("MonoValue")
         self.hw_lbl.setWordWrap(True)
-        hw_layout.addWidget(self.hw_lbl, stretch=1)
+        hw_outer.addWidget(self.hw_lbl)
+        # v0.5.6: acciones en su propia fila (antes comprimian el inventario en ventanas angostas)
+        hw_layout = FlowLayout(spacing=8)
+        hw_outer.addLayout(hw_layout)
 
         self.backups_btn = QPushButton("Copias Seguridad")
         self.backups_btn.setObjectName("GhostAction")
@@ -166,13 +172,13 @@ class ThermalBiosView(QWidget):
         hw_layout.addWidget(self.backups_btn)
 
         self.reset_pending_btn = QPushButton("Restablecer Pendientes")
-        self.reset_pending_btn.setObjectName("GhostAction")
+        self.reset_pending_btn.setObjectName("RestoreAction")  # v0.5.6
         self.reset_pending_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pending_btn.clicked.connect(self._on_reset_pending)
         hw_layout.addWidget(self.reset_pending_btn)
 
         self.reset_pwr_btn = QPushButton("Restaurar Respaldo Energia")
-        self.reset_pwr_btn.setObjectName("GhostAction")
+        self.reset_pwr_btn.setObjectName("RestoreAction")  # v0.5.6
         self.reset_pwr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pwr_btn.clicked.connect(self._on_restore_power)
         hw_layout.addWidget(self.reset_pwr_btn)
@@ -181,7 +187,7 @@ class ThermalBiosView(QWidget):
         # Sortable Audit Recommendations Table with REBOOT indicator & auto-removal on execution
         self.rec_table = QTableWidget(0, 5)
         self.rec_table.setHorizontalHeaderLabels(
-            ["SUBSISTEMA", "ESTADO", "REINICIO", "DIAGNOSTICO Y RECOMENDACION", "ACCION AUTOMATICA"]
+            ["SUBSISTEMA", "ESTADO", "REINICIO", "DIAGNOSTICO", "ACCION AUTOMATICA"]
         )
         configure_sortable_table(self.rec_table)
         self.rec_table.setWordWrap(True)

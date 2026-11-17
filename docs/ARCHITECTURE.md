@@ -2,7 +2,7 @@
 
 ## Vision General
 
-WinOptiAI (`v0.5.4`) esta estructurado en cuatro capas desacopladas para garantizar bajo consumo en reposo (~40–50 MB RAM), arranque fluido en dos fases (`< 300 ms`), control cooperativo de tareas largas, recuperacion ante cierres inesperados y cero bloqueos en el hilo grafico:
+WinOptiAI (`v0.5.6`) esta estructurado en cuatro capas desacopladas para garantizar bajo consumo en reposo (~40–50 MB RAM), arranque fluido en dos fases (`< 300 ms`), control cooperativo de tareas largas, recuperacion ante cierres inesperados y cero bloqueos en el hilo grafico:
 
 1. **Capa de Puente Win32 (`src/winoptiai/core/win32_bridge.py`):**
    - `dwmapi.dll`: aplica `DWMWA_SYSTEMBACKDROP_TYPE = 3` (Acrylic oscuro / claro) y `DWMWA_WINDOW_CORNER_PREFERENCE = 1` (`DWMWCP_DONOTROUND`, bordes rectos `0px`).
