@@ -1,0 +1,6 @@
+Verificacion v0.5.3: uv run --no-sync pytest -> 69 passed (incluye cero emojis).
+Evidencia: Visor de eventos 19:03:30 Application Hang 1002 WinOptiAI.exe; session_lock
+last_heartbeat 18:58:28 (GUI congelado ~5 min); WS ~1,5 GB, Responding=False durante Arbol.
+Diagnostico por codigo (no se pudo volcar la pila del proceso colgado): _render_tree creaba
+hasta 40 hijos x 5 niveles y ordenaba en el hilo GUI. Test sintetico 40^4 nodos: render < 3 s.
+Decisiones del usuario: destino GitHub Issues, aviso inmediato + al reabrir, anonimizar y mostrar.
