@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 120 passed (segunda corrida completa). Una corrida previa tuvo 1 fallo intermitente en test_ui_smoke que paso 3/3 al repetir. Cierre total comprobado en la app instalada v0.5.9: sin procesos de WinOptiAI ni consolas hijas, session_lock clean_exit=true.
