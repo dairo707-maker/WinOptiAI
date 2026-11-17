@@ -1,0 +1,1 @@
+Verificado: uv run --no-sync pytest -> 81 passed. Evidencia: captura del usuario AADSTS50011 con redirect http://localhost:62162/callback vs registro http://localhost; crash.log 16/11 22:45 FileNotFoundError notifications.tmp -> notifications.json (dos AI Boost simultaneos).
