@@ -1,0 +1,1 @@
+Feat v0.5.13: Silent background update check (+5s startup & 12h QTimer) against GitHub Releases, once-per-version deduplication via last_notified_version, tray balloon + Bell notice + 'Actualizar a vX.Y.Z disponible' tray shortcut + preloaded AboutUpdaterDialog. Verified: uv run --no-sync pytest -v -> 128 passed + SmokeAlive=True PID=36884.
