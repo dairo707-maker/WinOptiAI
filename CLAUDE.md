@@ -1,54 +1,62 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno de **WinOptiAI** (`v0.2.0`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI** (`v0.5.3`, commit base `422adcf`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
 - **Propietario / Creditos:** Dairo (`dairo707-maker`, `https://github.com/dairo707-maker/WinOptiAI`). Economista; comunicarse en espanol claro en UI y documentacion.
-- **Perfilado Multi-Equipo:** aunque validado inicialmente en Lenovo `82FE` (`FKCN51WW(V3.14)`, i5-1135G7, Iris Xe `30.0.101.1960`, 16 GB RAM, Kingston NVMe, Windows 11 Build 26200), `bios_auditor.py` perfila dinamicamente cualquier hardware (Intel/AMD/ARM64, NVIDIA/AMD/Intel, SSD/HDD, RAM 8–128 GB) y calibra los umbrales SRE automaticamente.
+- **Perfilado Multi-Equipo:** validado inicialmente en Lenovo `82FE` (`FKCN51WW(V3.14)`, i5-1135G7, Iris Xe `30.0.101.1960`, 16 GB RAM, Kingston NVMe, Windows 11 Build 26200), pero `bios_auditor.py` perfila dinamicamente cualquier hardware (Intel/AMD/ARM64, NVIDIA/AMD/Intel, SSD/HDD, RAM 8–128 GB) y calibra los umbrales SRE automaticamente.
 
 ## Reglas Inviolables de Diseno UI/UX
 
-1. **Estetica "Obsidian Acrylic" (Liquid Glass arquitectonico):**
+1. **Estetica "Obsidian Acrylic" / Dual Tema (`Alabaster Frost`):**
    - Bordes estrictamente rectos (`border-radius: 0px` en QSS y `DWMWCP_DONOTROUND` en `dwmapi.dll`).
    - Lineas divisorias `1px` hairline, fondo translucido DWM Acrylic (`DWMWA_SYSTEMBACKDROP_TYPE = 3`).
    - Jerarquia monocromo / acero-hielo (`#E2E7ED`, `#9BA3AE`, `#0B0D10`). **Prohibidos los brillos neon, gradientes llamativos o colores saturados de "estetica IA".**
 2. **Cero Emojis — 100% SVG Minimalistas:**
-   - Prohibido usar emojis Unicode en codigo UI, etiquetas, notificaciones Tray o botones.
+   - Prohibido usar emojis Unicode en `src/winoptiai/` (verificado por `tests/test_sre_and_hardware.py`), UI, etiquetas, notificaciones Tray o botones.
    - Usar exclusivamente iconos SVG geometricos de `assets/icons/*.svg` via `winoptiai.ui.svg_icons.load_svg_icon()`.
 3. **Tipografia Embebida OFL:**
    - `Instrument Sans` (UI) + `IBM Plex Mono` (metricas, rutas, hashes, tags), cargadas desde `assets/fonts/`.
-4. **Limpieza y Arranque Fluido:**
-   - Maximo 1 accion primaria por vista; sin acumulacion de botones ni metricas redundantes.
-   - Arranque en 2 fases: pintar ventana principal antes de lanzar escaneos WMI/disco en `QThreadPool`.
+4. **Limpieza, Arranque Fluido y Concurrencia Segura:**
+   - Arranque en 2 fases: pintar ventana principal antes de lanzar escaneos WMI/disco/retencion en `QThreadPool`.
+   - Limite de concurrencia: maximo **2 tareas de almacenamiento simultaneas** (`MAX_CONCURRENT_TASKS = 2`) y proteccion por RAM libre minima; control cooperativo global (`Pausar`, `Guardar Pausa`, `Cancelar`, `Retomar Sesion`) en barra superior y cajon de tareas.
+   - **Reglas criticas de PySide6 / Shiboken6 (lecciones P0 de `v0.5.1`–`v0.5.3`):**
+     - **NUNCA** llamar a `super().__lt__()` dentro de `NumericTableItem.__lt__` o `NumericTreeItem.__lt__` (`ui/widgets.py`): en PySide6 vuelve a despachar al override de Python hasta desbordar la pila (`0xc0000005` en `shiboken6.abi3.dll`). Usar comparacion de texto propia en Python.
+     - **NUNCA** llamar `setRowCount()` ni destruir widgets hijos (`deleteLater()` / `removeCellWidget()`) de forma sincrona dentro de un slot `clicked` (`thermal_bios_view.py`, `notifications_drawer.py`): diferir siempre la reconstruccion con `QTimer.singleShot(0, ...)`.
+     - Conectar senales de `AsyncTask` con `Qt.QueuedConnection` explicita, limitar senales de progreso (~10/s o cambio de `%`) y usar carga perezosa (*lazy loading*) en `QTreeWidget` (`storage_view.py`).
+     - En llamadas UAC (`ShellExecuteW`) fuera del hilo UI (`win32_bridge.run_elevated_command`), inicializar COM (`CoInitializeEx`) en el hilo trabajador.
 
 ## Invariantes de Seguridad del Sistema Operativo
 
-- **NUNCA** leer contenido ni hidratar archivos con atributos `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`, `FILE_ATTRIBUTE_OFFLINE` o `FILE_ATTRIBUTE_UNPINNED` (proteccion OneDrive Cloud-Only en `win32_bridge.is_cloud_only_file`).
-- **SIEMPRE** consultar `win32_bridge.get_locking_processes()` (`Rstrtmgr.dll`) y `safety_guard.is_safe_to_touch_file()` antes de mover o limpiar archivos.
-- **NUNCA** tocar `PROTECTED_PATH_PREFIXES` (`Windows`, `System32`, `WinSxS`, `Program Files`, etc.) ni `PROTECTED_PROCESS_NAMES` (incluyendo `bdservicehost.exe` de Bitdefender y procesos de OneDrive).
-- **NUNCA** modificar NVRAM/SPI de la BIOS directamente. Toda optimizacion termica se realiza con GUIDs oficiales de `powercfg` (`thermal_controller.py`) y auditoria read-only (`bios_auditor.py`).
-- **Politica Hibrida SRE (`sre_policy.py`):** la automatizacion en segundo plano solo aplica EcoQoS/Working Set Trim si RAM libre `< 1.8 GB` por 3 muestras seguidas con histeresis de `300 s`. **En disco nunca se borra automaticamente.**
+- **NUNCA** leer contenido, previsualizar ni hidratar archivos con atributos `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`, `FILE_ATTRIBUTE_OFFLINE`, `FILE_ATTRIBUTE_RECALL_ON_OPEN` o `FILE_ATTRIBUTE_UNPINNED` (`win32_bridge.is_cloud_only_file`).
+- **OneDrive Hibrido (`onedrive_optimizer.py`):** en local usa unicamente atributos Win32 Files On-Demand (`SetFileAttributesW` `+U -P`) protegiendo `.git`/`.venv`/`node_modules`; en nube usa Microsoft Graph OAuth 2.0 PKCE + cifrado local DPAPI (`CryptProtectData`), excluyendo elementos compartidos de terceros por defecto y moviendo solo a Papelera de OneDrive.
+- **Proteccion de Archivos y Bloqueos:** en directorios pequeños se verifica `Rstrtmgr.dll` (`get_locking_processes`); para temporales masivos (`> 400` archivos) `junk_scanner.py` evita sesiones RPC lentas delegando la proteccion al kernel NTFS (`os.replace` / `WinError 32`). Re-verificar tamano + hash BLAKE3 justo antes de crear hardlinks NTFS.
+- **NUNCA** tocar `PROTECTED_PATH_PREFIXES` ni procesos criticos (`PROTECTED_PROCESS_NAMES`, `get_foreground_pid()`, `os.getpid()` y `AI_FOREGROUND_AGENTS`).
+- **Cuarentena y Rollback (`safety_guard.py`):** toda depuracion usa `QuarantineVault` transaccional (`manifest.json` escrito con `atomic_write_text`), `PreOpBackupManager`, y auto-purga al arranque solo de lotes `Basura:*` mayores a 30 dias.
+- **Auditorias Hardware, S.M.A.R.T. y CBS (`bios_auditor.py`, `thermal_controller.py`):** nunca modificar NVRAM/SPI directamente; verificar cambios `powercfg` por lectura (`/q`); detectar procesos activos `Dism.exe`/`sfc.exe` para no encimar sesiones CBS concurrentes.
+- **Crash Guard y Reporte Anonimizado (`crash_guard.py`, `crash_reporter.py`):** `faulthandler` (todos los hilos) + `excepthooks` + vigilante de bloqueos GUI (8 s) hacia `%LOCALAPPDATA%\WinOptiAI\crash.log`, `session_lock.json`, `RegisterApplicationRestart` y consulta `wevtutil` decodificada en ANSI (`mbcs`). Todo envio a GitHub Issues es opcional y anonimizado bajo revision del usuario.
 
-## Comandos Clave (siempre con `uv`)
+## Comandos Clave (siempre con `uv` — en carpeta OneDrive usar `--no-sync`)
 
 ```powershell
-# Instalar / sincronizar entorno
-uv sync --extra dev
-
 # Ejecutar pruebas automatizadas (NUNCA declarar validado sin correr esto)
-uv run pytest -v
+uv run --no-sync pytest -v
+
+# Sincronizar entorno solo si se cambiaron dependencias en pyproject.toml
+uv sync --extra dev --link-mode=copy
 
 # Ejecutar la aplicacion en modo desarrollo
-uv run python -m winoptiai.app
+uv run --no-sync python -m winoptiai.app
 
-# Compilar WinOptiAI-Portable.exe y WinOptiAI-Setup.exe
-uv run python scripts/build_exe.py
+# Compilar WinOptiAI-Portable.exe y WinOptiAI-Setup.exe (esperar exit code 0 antes de leer dist\)
+uv run --no-sync python scripts/build_exe.py
 ```
 
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (`0.1.0`), sincronizada con `pyproject.toml` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.5.3`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
-- Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`).
+- Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).
