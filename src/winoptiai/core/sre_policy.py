@@ -47,6 +47,8 @@ class SREPolicyConfig:
     theme_mode: str = "dark"       # "dark" | "light"
     language: str = "es"           # "es" | "en" | "pt"
     completed_audit_actions: list[str] = field(default_factory=list)
+    onboarding_completed: bool = False
+    last_quick_check_at: str = ""
 
 
 class SREPolicyEngine:

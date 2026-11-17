@@ -23,8 +23,10 @@ Creado por **Dairo (`dairo707-maker`)** · Repositorio oficial: `https://github.
 
 ### Opcion A — Instalador de Windows (Recomendado)
 1. Ubica el instalador generado en [`dist/WinOptiAI-Setup.exe`](dist/WinOptiAI-Setup.exe) (o descargalo desde GitHub Releases).
-2. Ejecuta `WinOptiAI-Setup.exe`: podras elegir el modo (**Solo para mi** o **Todos los usuarios**), **seleccionar el directorio de instalacion** con `Examinar...`, elegir accesos directos y habilitar el arranque minimizado opcional.
-3. Consulta la guia detallada paso a paso (incluyendo verificacion SHA-256 y SmartScreen) en [Guia de Instalacion](docs/INSTALL_GUIDE.md).
+2. **SmartScreen en PCs nuevos ("Editor desconocido"):** si aparece *"Windows protegio su PC"*, haz clic en **Mas informacion** -> **Ejecutar de todas formas** (o `Unblock-File .\WinOptiAI-Setup.exe` tras validar `SHA256SUMS.txt`).
+3. Ejecuta `WinOptiAI-Setup.exe`: podras elegir el modo (**Solo para mi** o **Todos los usuarios**), **seleccionar el directorio de instalacion** con `Examinar...`, elegir accesos directos y habilitar el arranque minimizado opcional.
+4. Al abrir WinOptiAI por primera vez en un equipo nuevo, el **Tour guiado** ejecuta una prueba rapida segura (~3-5 s) para verificar CPU/RAM, S.M.A.R.T., sensores PDH, BIOS/OEM y calibrar el umbral SRE automaticamente.
+5. Consulta la guia detallada paso a paso (incluyendo verificacion SHA-256 y soporte opcional de firma Authenticode) en [Guia de Instalacion](docs/INSTALL_GUIDE.md).
 
 ### Opcion B — Compilacion desde Codigo Fuente
 Requiere Python 3.11+, [uv](https://docs.astral.sh/uv/) e Inno Setup 6 (`winget install JRSoftware.InnoSetup`):

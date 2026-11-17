@@ -40,32 +40,47 @@ def find_iscc() -> Path | None:
     return None
 
 
+def _draw_brand_emblem(
+    draw: ImageDraw.ImageDraw,
+    x0: int,
+    y0: int,
+    size: int,
+    *,
+    bg: tuple[int, int, int, int] = (15, 20, 27, 255),
+    rim: tuple[int, int, int, int] = (118, 146, 176, 255),
+    ink: tuple[int, int, int, int] = (244, 247, 250, 255),
+    accent: tuple[int, int, int, int] = (142, 179, 214, 255),
+) -> None:
+    """Draw the sharp 0px WinOptiAI architectural emblem at (x0, y0, size)."""
+    draw.rectangle([x0, y0, x0 + size - 1, y0 + size - 1], fill=bg, outline=rim, width=max(1, size // 16))
+    pad = max(2, round(size * 0.19))
+    stroke = max(1, round(size * 0.085))
+    bx0, by0 = x0 + pad, y0 + pad
+    bx1, by1 = x0 + size - pad - 1, y0 + size - pad - 1
+    draw.rectangle([bx0, by0, bx1, by1], outline=ink, width=stroke)
+
+    split_x = x0 + round(size * 0.44)
+    split_y = y0 + round(size * 0.44)
+    draw.line([(bx0, split_y), (bx1, split_y)], fill=ink, width=stroke)
+    draw.line([(split_x, split_y), (split_x, by1)], fill=ink, width=stroke)
+
+    inner_off = max(2, round(size * 0.09))
+    ax0, ay0 = split_x + inner_off, split_y + inner_off
+    ax1, ay1 = bx1 - inner_off, by1 - inner_off
+    if ax1 > ax0 and ay1 > ay0:
+        draw.rectangle([ax0, ay0, ax1, ay1], fill=accent)
+
+
 def generate_app_icon() -> Path:
-    """Generate multi-resolution geometric 0px Windows .ico matching brand.svg."""
+    """Generate high-contrast multi-resolution geometric 0px Windows .ico matching brand.svg."""
     ico_path = ASSETS / "icons" / "winoptiai.ico"
     sizes = [256, 128, 64, 48, 32, 16]
     images: list[Image.Image] = []
 
     for sz in sizes:
-        img = Image.new("RGBA", (sz, sz), (11, 13, 16, 255))
+        img = Image.new("RGBA", (sz, sz), (15, 20, 27, 255))
         draw = ImageDraw.Draw(img)
-        pad = max(2, sz // 8)
-        stroke = max(1, sz // 16)
-        draw.rectangle([pad, pad, sz - pad - 1, sz - pad - 1], outline=(226, 231, 237, 255), width=stroke)
-        split_y = int(sz * 0.42)
-        split_x = int(sz * 0.42)
-        draw.line([(pad, split_y), (sz - pad - 1, split_y)], fill=(226, 231, 237, 255), width=stroke)
-        draw.line([(split_x, split_y), (split_x, sz - pad - 1)], fill=(226, 231, 237, 255), width=stroke)
-        inner_pad = max(1, sz // 10)
-        draw.rectangle(
-            [
-                split_x + inner_pad,
-                split_y + inner_pad,
-                sz - pad - inner_pad - 1,
-                sz - pad - inner_pad - 1,
-            ],
-            fill=(203, 213, 225, 255),
-        )
+        _draw_brand_emblem(draw, 0, 0, sz)
         images.append(img)
 
     images[0].save(
@@ -75,6 +90,88 @@ def generate_app_icon() -> Path:
         append_images=images[1:],
     )
     return ico_path
+
+
+def generate_installer_wizard_images() -> tuple[Path, Path]:
+    """Generate custom 0px Obsidian Acrylic BMP banners for Inno Setup WizardImageFile & WizardSmallImageFile."""
+    large_path = ASSETS / "icons" / "wizard_large.bmp"
+    small_path = ASSETS / "icons" / "wizard_small.bmp"
+
+    # Left sidebar graphic (164x314)
+    large = Image.new("RGB", (164, 314), (12, 16, 22))
+    ld = ImageDraw.Draw(large)
+    for gy in range(28, 314, 28):
+        ld.line([(0, gy), (163, gy)], fill=(23, 29, 39), width=1)
+    for gx in range(28, 164, 28):
+        ld.line([(gx, 0), (gx, 313)], fill=(20, 26, 35), width=1)
+    ld.rectangle([0, 0, 163, 313], outline=(48, 60, 76), width=1)
+
+    emblem_rgba = Image.new("RGBA", (84, 84), (15, 20, 27, 255))
+    _draw_brand_emblem(ImageDraw.Draw(emblem_rgba), 0, 0, 84)
+    large.paste(emblem_rgba.convert("RGB"), (40, 72))
+
+    # Minimalist geometric accent bar below emblem
+    ld.rectangle([40, 174, 123, 177], fill=(142, 179, 214))
+    ld.rectangle([40, 184, 96, 186], fill=(95, 114, 138))
+    large.save(large_path, format="BMP")
+
+    # Header badge graphic (55x58) replacing default optical-disc icon
+    small = Image.new("RGB", (55, 58), (15, 20, 27))
+    sd = ImageDraw.Draw(small)
+    emblem_sm = Image.new("RGBA", (42, 42), (15, 20, 27, 255))
+    _draw_brand_emblem(ImageDraw.Draw(emblem_sm), 0, 0, 42)
+    small.paste(emblem_sm.convert("RGB"), (6, 8))
+    sd.rectangle([0, 0, 54, 57], outline=(62, 78, 98), width=1)
+    small.save(small_path, format="BMP")
+
+    return large_path, small_path
+
+
+def find_signtool() -> Path | None:
+    """Locate Windows SDK signtool.exe if Authenticode signing is configured."""
+    found = shutil.which("signtool") or shutil.which("signtool.exe")
+    if found:
+        return Path(found)
+    kits_root = Path(r"C:\Program Files (x86)\Windows Kits\10\bin")
+    if kits_root.exists():
+        for exe in sorted(kits_root.rglob("x64/signtool.exe"), reverse=True):
+            return exe
+    return None
+
+
+def maybe_sign_binary(binary: Path) -> None:
+    """Sign executable with Authenticode when WINOPTIAI_SIGN_PFX or WINOPTIAI_SIGN_SHA1 is set."""
+    pfx = os.environ.get("WINOPTIAI_SIGN_PFX", "").strip()
+    sha1 = os.environ.get("WINOPTIAI_SIGN_SHA1", "").strip()
+    if not pfx and not sha1:
+        return
+    signtool = find_signtool()
+    if signtool is None:
+        print(f"Advertencia: firma configurada pero signtool.exe no encontrado; {binary.name} queda sin firmar.")
+        return
+
+    cmd = [
+        str(signtool),
+        "sign",
+        "/fd",
+        "SHA256",
+        "/tr",
+        os.environ.get("WINOPTIAI_SIGN_TSA", "http://timestamp.digicert.com"),
+        "/td",
+        "SHA256",
+    ]
+    if pfx:
+        cmd.extend(["/f", pfx])
+        pwd = os.environ.get("WINOPTIAI_SIGN_PASS", "").strip()
+        if pwd:
+            cmd.extend(["/p", pwd])
+    else:
+        cmd.extend(["/sha1", sha1])
+    cmd.append(str(binary))
+    res = subprocess.run(cmd, cwd=str(ROOT))
+    if res.returncode != 0:
+        raise RuntimeError(f"signtool failed for {binary.name} (exit {res.returncode})")
+    print(f"Firmado Authenticode OK: {binary.name}")
 
 
 def run_pyinstaller(args: list[str]) -> None:
@@ -110,6 +207,7 @@ def main() -> int:
     BUILD.mkdir(parents=True, exist_ok=True)
     version = read_version()
     ico_path = generate_app_icon()
+    generate_installer_wizard_images()
 
     qt_excludes = [
         "--exclude-module", "PySide6.QtWebEngineCore",
@@ -152,6 +250,7 @@ def main() -> int:
 
     portable_exe = DIST / "WinOptiAI-Portable.exe"
     setup_exe = DIST / "WinOptiAI-Setup.exe"
+    maybe_sign_binary(portable_exe)
 
     # 2. Build WinOptiAI-Setup.exe (prefer native Inno Setup 6 wizard)
     iscc = find_iscc()
@@ -181,6 +280,7 @@ def main() -> int:
             ]
         )
 
+    maybe_sign_binary(setup_exe)
     write_sha256_manifest([portable_exe, setup_exe])
     print(f"Build complete (v{version}):\n  {portable_exe}\n  {setup_exe}")
     return 0

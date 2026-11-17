@@ -1,6 +1,6 @@
 ; Inno Setup 6 script for WinOptiAI — Multilingual Dual-Mode Windows Installer Wizard
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.5.11"
 #endif
 
 #define MyAppName "WinOptiAI"
@@ -27,6 +27,8 @@ DisableProgramGroupPage=no
 DefaultGroupName={#MyAppName}
 LicenseFile=..\LICENSE
 SetupIconFile=..\assets\icons\winoptiai.ico
+WizardImageFile=..\assets\icons\wizard_large.bmp
+WizardSmallImageFile=..\assets\icons\wizard_small.bmp
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 OutputDir=..\dist

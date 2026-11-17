@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 import sys
 import time
 
@@ -31,6 +32,7 @@ from ..core.crash_guard import CrashGuard
 from ..core.i18n import tr
 from ..core.metrics_history import MetricsHistory, MinuteAggregator
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
+from ..core.onboarding_check import QuickCheckReport
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
 from ..core.task_control import SessionManager, TaskSessionRecord, new_session_id
@@ -49,6 +51,7 @@ from ..core.crash_reporter import KIND_CRASH, KIND_ERROR
 from .dialogs.crash_report_dialog import CrashReportDialog
 from .dialogs.crash_send_dialog import CrashSendDialog
 from .dialogs.notifications_drawer import NotificationsTasksDialog
+from .dialogs.tour_dialog import QuickTourDialog
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .system_tray import WinOptiTray
 from .theme import build_obsidian_qss, get_palette
@@ -92,6 +95,7 @@ class MainWindow(QMainWindow):
         self.crash_guard = crash_guard
         self.auto_restarted = auto_restarted
         self._crash_dialog: CrashSendDialog | None = None
+        self._tour_dialog: QuickTourDialog | None = None
         self._reported_error_keys: set[str] = set()
         self.unhandled_error.connect(self._on_unhandled_error, Qt.ConnectionType.QueuedConnection)
         if crash_guard is not None:
@@ -201,6 +205,13 @@ class MainWindow(QMainWindow):
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
         ctl_row.addWidget(self.lang_combo, stretch=1)
         f_layout.addLayout(ctl_row)
+
+        self.tour_btn = QPushButton(f" {tr('btn_tour', lang)}")
+        self.tour_btn.setObjectName("GhostAction")
+        self.tour_btn.setIcon(load_svg_icon("overview", color=pal["icon_color"], size=13))
+        self.tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tour_btn.clicked.connect(self._open_tour_dialog)
+        f_layout.addWidget(self.tour_btn)
 
         self.about_btn = QPushButton(f" {tr('btn_about', lang)}")
         self.about_btn.setObjectName("GhostAction")
@@ -313,9 +324,7 @@ class MainWindow(QMainWindow):
             self._on_elevated_temps,
             lang=lang,
         )
-        self.thermal_view.audit_log_updated.connect(
-            lambda: self.overview_view.set_audit_rows(self.policy.read_recent_audit())
-        )
+        self.thermal_view.audit_log_updated.connect(self._on_thermal_audit_updated)
 
         self.stack.addWidget(self.overview_view)
         self.stack.addWidget(self.storage_view)
@@ -324,18 +333,23 @@ class MainWindow(QMainWindow):
         rc_layout.addWidget(self.stack, stretch=1)
         main_layout.addWidget(right_col, stretch=1)
 
-        # Apply active palette icons across all views immediately on first frame
-        self._apply_ui_appearance()
-
-        # System Tray
+        # System Tray (must exist before _apply_ui_appearance syncs tray state)
         self.tray = WinOptiTray(
             self,
             on_show=self._restore_from_tray,
             on_boost=lambda: self._execute_ai_boost("usuario"),
             on_thermal=self._tray_thermal,
             on_quit=self._quit_app,
+            on_toggle_sre=self._tray_toggle_sre,
+            on_toggle_theme=self._toggle_theme,
+            initial_thermal=self.policy.config.active_thermal_profile,
+            initial_sre=self.policy.config.auto_ram_relief_enabled,
+            initial_theme=self.policy.config.theme_mode,
         )
         self.tray.show()
+
+        # Apply active palette icons across all views immediately on first frame
+        self._apply_ui_appearance()
 
         self._switch_tab(0)
         self._refresh_bell_badge()
@@ -563,6 +577,8 @@ class MainWindow(QMainWindow):
 
         self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["icon_color"], size=18))
         self.bell_btn.setIcon(load_svg_icon("bell", color=pal["icon_color"], size=15))
+        self.tour_btn.setText(f" {tr('btn_tour', lang)}")
+        self.tour_btn.setIcon(load_svg_icon("overview", color=pal["icon_color"], size=13))
         self.about_btn.setText(f" {tr('btn_about', lang)}")
         self.about_btn.setIcon(load_svg_icon("shield", color=pal["icon_color"], size=13))
         self._refresh_theme_button_icon(mode, pal["icon_color"])
@@ -575,6 +591,7 @@ class MainWindow(QMainWindow):
         self.storage_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
         self.processes_view.apply_language_and_theme(lang, pal["icon_inverted"])
         self.thermal_view.apply_language_and_theme(lang, pal["icon_inverted"])
+        self._sync_tray_state()
 
     def _open_about_dialog(self) -> None:
         rep = self.thermal_view.last_report
@@ -594,8 +611,40 @@ class MainWindow(QMainWindow):
             active_tasks_fn=lambda: list(self._active_workers),
             parent=self,
             on_open_diagnostics=self._open_crash_diagnostics if self.crash_guard is not None else None,
+            on_open_tour=self._open_tour_dialog,
         )
         dlg.exec()
+
+    def _open_tour_dialog(self) -> None:
+        if self._tour_dialog is not None and self._tour_dialog.isVisible():
+            self._tour_dialog.raise_()
+            self._tour_dialog.activateWindow()
+            return
+
+        def _on_done(report: QuickCheckReport | None) -> None:
+            if report is not None:
+                self.policy.record_audit_event(
+                    "usuario",
+                    "Tour y Prueba Rapida",
+                    f"Verificacion completada ({len(report.items)} chequeos) | Umbral SRE {report.recommended_threshold_gb:.1f} GB",
+                )
+                self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+                self._sample_telemetry()
+                self._set_status("Tour y prueba rapida del sistema completados.")
+
+        self._tour_dialog = QuickTourDialog(
+            policy=self.policy,
+            vault=self.vault,
+            run_async=self._run_async,
+            on_switch_tab=self._switch_tab,
+            on_completed=_on_done,
+            parent=self,
+        )
+        self._tour_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._tour_dialog.destroyed.connect(lambda _=None: setattr(self, "_tour_dialog", None))
+        self._tour_dialog.show()
+        self._tour_dialog.raise_()
+        self._tour_dialog.activateWindow()
 
     def _open_crash_diagnostics(self) -> None:
         if self.crash_guard is None:
@@ -789,6 +838,7 @@ class MainWindow(QMainWindow):
         if self._notif_dialog is not None and self._notif_dialog.isVisible():
             self._notif_dialog._render_tasks()
             self._notif_dialog._render_sessions()
+        self._sync_tray_state()
 
     def _run_async(
         self,
@@ -933,6 +983,14 @@ class MainWindow(QMainWindow):
                 self.overview_view.set_audit_rows(self.policy.read_recent_audit())
 
         self._run_async(_retain_quarantine, _on_retained, "Retencion Cuarentena 30d", notify_on_complete=False)
+        self._sync_tray_state()
+        if (
+            not self.policy.config.onboarding_completed
+            and self.isVisible()
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+            and not self.auto_restarted
+        ):
+            QTimer.singleShot(450, self._open_tour_dialog)
 
     def _refresh_disk_stats(self) -> None:
         try:
@@ -1034,6 +1092,34 @@ class MainWindow(QMainWindow):
 
         self._run_async(_work, _done, "AI Boost (RAM + EcoQoS)", notify_on_complete=False, on_error=_re_enable)
 
+    def _on_thermal_audit_updated(self) -> None:
+        self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+        self._sync_tray_state()
+
+    def _sync_tray_state(self) -> None:
+        if not hasattr(self, "tray"):
+            return
+        task_txt = ""
+        if self._active_workers:
+            lead = self._active_workers[0]
+            task_txt = f"{lead.title} ({lead.percent}%)"
+        self.tray.sync_state(
+            thermal_key=self.policy.config.active_thermal_profile,
+            sre_enabled=self.policy.config.auto_ram_relief_enabled,
+            theme_mode=self.policy.config.theme_mode,
+            task_summary=task_txt,
+        )
+
+    def _tray_toggle_sre(self, enabled: bool) -> None:
+        self.policy.config.auto_ram_relief_enabled = bool(enabled)
+        self.policy.save_config()
+        state_lbl = "activado" if enabled else "pausado"
+        self.policy.record_audit_event("tray", "Guardia SRE", f"Guardia SRE automatico {state_lbl}")
+        self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+        self._sample_telemetry()
+        self._sync_tray_state()
+        self._set_status(f"Guardia SRE automatico {state_lbl}.")
+
     def _tray_thermal(self, key: str) -> None:
         self.backup_mgr.backup_power_scheme(f"tray_{key}")
         ok, msg = apply_thermal_profile(key)
@@ -1043,5 +1129,6 @@ class MainWindow(QMainWindow):
             self.thermal_view._highlight_profile_button(key)
             self.policy.record_audit_event("tray", "Perfil termico", msg)
             self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+            self._sync_tray_state()
         self._set_status(msg)
         self._notify_user("COMPLETADO", "Perfil termico", msg, action_tab=3, tray_toast=True)

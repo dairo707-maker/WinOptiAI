@@ -746,3 +746,50 @@ def get_foreground_pid() -> int | None:
         return int(pid.value) if pid.value > 4 else None
     except OSError:
         return None
+
+
+def is_windows_taskbar_light_theme() -> bool:
+    """Return True when the Windows taskbar/tray uses light mode (SystemUsesLightTheme == 1)."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+
+    subkey = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+            for val_name in ("SystemUsesLightTheme", "AppsUseLightTheme"):
+                try:
+                    val, _ = winreg.QueryValueEx(key, val_name)
+                    return int(val) == 1
+                except FileNotFoundError:
+                    continue
+    except OSError:
+        pass
+    return False
+
+
+def has_windows_reboot_pending() -> bool:
+    """Return True if CBS, Windows Update, or Session Manager reports a pending reboot."""
+    if not IS_WINDOWS:
+        return False
+    import winreg
+
+    checks = (
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired",
+    )
+    for subkey in checks:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey):
+                return True
+        except OSError:
+            pass
+    try:
+        sm = r"SYSTEM\CurrentControlSet\Control\Session Manager"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, sm) as key:
+            val, _ = winreg.QueryValueEx(key, "PendingFileRenameOperations")
+            if val:
+                return True
+    except OSError:
+        pass
+    return False

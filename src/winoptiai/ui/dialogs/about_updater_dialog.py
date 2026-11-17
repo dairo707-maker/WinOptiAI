@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -45,6 +45,7 @@ class AboutUpdaterDialog(QDialog):
         active_tasks_fn: Callable[[], list[AsyncTask]] | None = None,
         parent: QWidget | None = None,
         on_open_diagnostics: Callable[[], None] | None = None,
+        on_open_tour: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.lang = lang
@@ -131,6 +132,19 @@ class AboutUpdaterDialog(QDialog):
             diag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             diag_btn.clicked.connect(on_open_diagnostics)
             actions.addWidget(diag_btn)
+
+        if on_open_tour is not None:
+            tour_btn = QPushButton("Tour y Prueba")
+            tour_btn.setObjectName("GhostAction")
+            tour_btn.setToolTip("Abrir el tour guiado y ejecutar prueba rapida del sistema")
+            tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            def _launch_tour() -> None:
+                self.accept()
+                QTimer.singleShot(0, on_open_tour)
+
+            tour_btn.clicked.connect(_launch_tour)
+            actions.addWidget(tour_btn)
 
         self.check_btn = QPushButton(tr("about_check_updates", lang))
         self.check_btn.setObjectName("GhostAction")

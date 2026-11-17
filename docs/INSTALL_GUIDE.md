@@ -23,8 +23,12 @@ Get-FileHash .\dist\WinOptiAI-Setup.exe -Algorithm SHA256
 Get-Content .\dist\SHA256SUMS.txt
 ```
 
-> **Nota sobre Windows SmartScreen y Bitdefender:**
-> Al ser un proyecto de codigo abierto compilado localmente o desde GitHub Actions sin un certificado comercial EV de pago, Windows Defender SmartScreen puede mostrar el aviso *"Windows protegio su PC"*. Para continuar tras comprobar el hash SHA-256: haga clic en **Mas informacion** y luego en **Ejecutar de todas formas**.
+> **Aviso de Windows SmartScreen ("Windows protegio su PC — Editor desconocido"):**
+> Al descargar el instalador en un equipo nuevo, Windows SmartScreen muestra este aviso mientras el binario open source no cuente con certificado comercial Authenticode (Azure Trusted Signing / EV). Para verificar y ejecutar con total seguridad en 1 clic:
+> 1. Haz clic en **Mas informacion** -> **Ejecutar de todas formas** (o en PowerShell: `Unblock-File .\WinOptiAI-Setup.exe`).
+> 2. Opcional: comprueba el hash SHA-256 arriba indicado con `SHA256SUMS.txt`.
+>
+> *(Nota para compiladores: si cuentas con certificado Authenticode `.pfx` o token en almacen de Windows, define `WINOPTIAI_SIGN_PFX` + `WINOPTIAI_SIGN_PASS` o `WINOPTIAI_SIGN_SHA1` antes de correr `scripts/build_exe.py` y los binarios saldran firmados automaticamente con `signtool.exe`.)*
 
 ---
 

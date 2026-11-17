@@ -2,6 +2,19 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.11] - 2026-11-17
+
+### Agregado y Mejorado
+- **Bandeja del Sistema Visible y Modos Sincronizados (`ui/system_tray.py`, `win32_bridge.py`, `main_window.py`):**
+  - Icono geometrico multi-resolucion (`16/20/24/32 px`) con placa de alto contraste adaptable automaticamente a barra de tareas clara u oscura (`SystemUsesLightTheme`), evitando que se vea lavado o casi transparente.
+  - Menu contextual muestra el estado/proceso en curso, checks exclusivos (`QActionGroup`) en el modo termico activo (`Perfil Termico: Frio/Equilibrado/IA Maxima`) e interruptores sincronizados para **`Guardia SRE Automatico`** y **`Tema Claro (Alabaster)`**.
+- **Tour Rapido Guiado y Prueba Rapida de Equipo Nuevo (`core/onboarding_check.py`, `ui/dialogs/tour_dialog.py`, `sre_policy.py`):**
+  - Tour interactivo de 5 pasos en tarjeta `0px` que recorre en vivo las pestanas principales en el primer arranque y se puede reabrir desde la barra lateral o `Acerca de` (`Tour y Prueba Rapida`).
+  - El Paso 5 ejecuta una prueba rapida segura de solo lectura (~3-5 s en `QThreadPool`) que verifica CPU/RAM + calibracion SRE, disco/S.M.A.R.T./eventos 14d, sensores `pdh.dll` + plan de energia, BIOS/OEM/seguridad/reinicio pendiente (`has_windows_reboot_pending`), OneDrive local y Boveda.
+- **Branding Propio del Instalador y Soporte SmartScreen (`scripts/build_exe.py`, `packaging/installer.iss`, `docs/INSTALL_GUIDE.md`):**
+  - Nuevo icono geometrico `winoptiai.ico` con mayor contraste + generacion automatica de banners `wizard_large.bmp` (`164x314`) y `wizard_small.bmp` (`55x58`) en estilo `0px` Obsidian Acrylic para reemplazar la caja/disco azul generica de Inno Setup 6.
+  - Soporte opcional de firma Authenticode (`WINOPTIAI_SIGN_PFX` / `WINOPTIAI_SIGN_SHA1` + `signtool.exe`) y guia clara en 1 clic frente al aviso *"Editor desconocido"* de SmartScreen.
+
 ## [0.5.10] - 2026-11-17
 
 ### Corregido
