@@ -83,7 +83,11 @@ def test_background_update_notification_dedupes_and_syncs_badges(
             parent=win,
         )
         try:
+            dlg.show()
+            for _ in range(4):
+                qapp.processEvents()
             assert dlg.install_btn.isVisible()
+            assert find_clipped_buttons(dlg) == []
             assert "v0.9.9" in dlg.notes_box.toPlainText()
             assert "v0.9.9" in dlg.status_lbl.text()
         finally:
