@@ -1,0 +1,1 @@
+v0.5.14: Catalogo centralizado help_catalog.py (TOOLTIPS, SECTION_BENEFITS, MANUAL_SECTIONS), QToolTip 0px en Obsidian/Alabaster, franja colapsable SectionBenefitStrip en todas las vistas (dinamica en los 6 modos de Almacenamiento) y Manual de Uso de 7 capitulos en AboutUpdaterDialog. Verificado: 133/133 pytest, build Portable + Setup y smoke test.
