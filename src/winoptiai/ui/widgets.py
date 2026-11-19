@@ -470,3 +470,73 @@ class SharpMetricCell(GlassPanel):
         self.sub_lbl.setText(subtitle)
         self.bar.setValue(max(0, min(100, percent)))
         self.tag.set_tone(tag_text, tone)
+
+
+class SectionBenefitStrip(GlassPanel):
+    """Collapsible 0px architectural guide explaining what each section improves and its safety level."""
+
+    def __init__(self, section_key: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._section_key = section_key
+        self._expanded = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 7, 12, 7)
+        outer.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+        self.badge = StatusTag("GUIA", "neutral")
+        hdr.addWidget(self.badge)
+
+        self.title_lbl = QLabel("")
+        self.title_lbl.setObjectName("MonoValue")
+        self.title_lbl.setWordWrap(True)
+        hdr.addWidget(self.title_lbl, stretch=1)
+
+        self.toggle_btn = QPushButton("Ver que mejora")
+        self.toggle_btn.setObjectName("GhostAction")
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.clicked.connect(self._toggle)
+        hdr.addWidget(self.toggle_btn)
+        outer.addLayout(hdr)
+
+        self.body_widget = QWidget()
+        bl = QVBoxLayout(self.body_widget)
+        bl.setContentsMargins(0, 2, 0, 2)
+        bl.setSpacing(4)
+
+        self.improves_lbl = QLabel("")
+        self.improves_lbl.setObjectName("PageSubtitle")
+        self.improves_lbl.setWordWrap(True)
+        bl.addWidget(self.improves_lbl)
+
+        self.safety_lbl = QLabel("")
+        self.safety_lbl.setObjectName("MonoValue")
+        self.safety_lbl.setWordWrap(True)
+        bl.addWidget(self.safety_lbl)
+
+        self.body_widget.setVisible(False)
+        outer.addWidget(self.body_widget)
+        self.set_section(section_key)
+
+    def set_section(self, section_key: str) -> None:
+        from ..core.help_catalog import SECTION_BENEFITS
+
+        self._section_key = section_key
+        data = SECTION_BENEFITS.get(section_key)
+        if not data:
+            self.setVisible(False)
+            return
+        self.setVisible(True)
+        self.title_lbl.setText(data["title"])
+        self.improves_lbl.setText(f"Que mejora: {data['improves']}")
+        self.safety_lbl.setText(f"Seguridad: {data['safety']}")
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = bool(expanded)
+        self.body_widget.setVisible(self._expanded)
+        self.toggle_btn.setText("Ocultar" if self._expanded else "Ver que mejora")
+
+    def _toggle(self) -> None:
+        self.set_expanded(not self._expanded)

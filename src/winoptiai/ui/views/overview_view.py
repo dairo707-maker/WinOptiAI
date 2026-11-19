@@ -22,7 +22,15 @@ from ...core.telemetry import LiveSystemTelemetry
 from ..history_charts import FreedSpacePanel, HistoryPanel
 from ..svg_icons import load_svg_icon
 from ..theme import get_palette
-from ..widgets import GlassPanel, NumericTableItem, SharpMetricCell, StatusTag, configure_sortable_table
+from ...core.help_catalog import TOOLTIPS
+from ..widgets import (
+    GlassPanel,
+    NumericTableItem,
+    SectionBenefitStrip,
+    SharpMetricCell,
+    StatusTag,
+    configure_sortable_table,
+)
 
 
 class OverviewView(QWidget):
@@ -74,16 +82,22 @@ class OverviewView(QWidget):
         self.boost_btn = QPushButton(f" {tr('btn_ai_boost', lang)}")
         self.boost_btn.setObjectName("PrimaryAction")
         self.boost_btn.setIcon(load_svg_icon("process", color="#0B0D10", size=15))
+        self.boost_btn.setToolTip(TOOLTIPS["overview_boost"])
         self.boost_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.boost_btn.clicked.connect(self.trigger_ai_boost.emit)
         header.addWidget(self.boost_btn)
         root.addLayout(header)
 
+        self.benefit_strip = SectionBenefitStrip("overview")
+        root.addWidget(self.benefit_strip)
+
         # 4 non-redundant metric cells
         row1 = QHBoxLayout()
         row1.setSpacing(12)
         self.ram_cell = SharpMetricCell(tr("metric_ram", lang), "process", compact=True)
+        self.ram_cell.setToolTip(TOOLTIPS["metric_ram"])
         self.disk_cell = SharpMetricCell(tr("metric_disk", lang), "storage", compact=True)
+        self.disk_cell.setToolTip(TOOLTIPS["metric_disk"])
         row1.addWidget(self.ram_cell)
         row1.addWidget(self.disk_cell)
         root.addLayout(row1)
@@ -91,7 +105,9 @@ class OverviewView(QWidget):
         row2 = QHBoxLayout()
         row2.setSpacing(12)
         self.cpu_cell = SharpMetricCell(tr("metric_cpu_temp", lang), "thermal", compact=True)
+        self.cpu_cell.setToolTip(TOOLTIPS["metric_cpu_temp"])
         self.sre_cell = SharpMetricCell(tr("metric_sre", lang), "shield", compact=True)
+        self.sre_cell.setToolTip(TOOLTIPS["metric_sre"])
         row2.addWidget(self.cpu_cell)
         row2.addWidget(self.sre_cell)
         root.addLayout(row2)

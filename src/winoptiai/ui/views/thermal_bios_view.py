@@ -35,7 +35,8 @@ from ...thermal_bios.thermal_controller import (
     restore_default_power_scheme,
 )
 from ..svg_icons import load_svg_icon
-from ..widgets import FlowLayout, GlassPanel, StatusTag, configure_sortable_table
+from ...core.help_catalog import TOOLTIPS
+from ..widgets import FlowLayout, GlassPanel, SectionBenefitStrip, StatusTag, configure_sortable_table
 
 
 # Acciones que lanzan una consola PowerShell elevada desacoplada (seguimiento informativo).
@@ -92,10 +93,14 @@ class ThermalBiosView(QWidget):
         self.audit_btn = QPushButton(" Escanear Hardware y BIOS")
         self.audit_btn.setObjectName("PrimaryAction")
         self.audit_btn.setIcon(load_svg_icon("shield", color="#0B0D10", size=14))
+        self.audit_btn.setToolTip(TOOLTIPS["thermal_audit"])
         self.audit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.audit_btn.clicked.connect(self.refresh_audit)
         header.addWidget(self.audit_btn)
         root.addLayout(header)
+
+        self.benefit_strip = SectionBenefitStrip("thermal")
+        root.addWidget(self.benefit_strip)
 
         # Real-Time CPU Frequency / Turbo / Per-Core / Temperature strip
         rt_panel = GlassPanel(elevated=True)
@@ -113,6 +118,7 @@ class ThermalBiosView(QWidget):
 
         self.uac_temp_btn = QPushButton("Leer Sensores (UAC)")
         self.uac_temp_btn.setObjectName("GhostAction")
+        self.uac_temp_btn.setToolTip(TOOLTIPS["thermal_uac_temp"])
         self.uac_temp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.uac_temp_btn.clicked.connect(self._on_probe_temps)
         rt_layout.addWidget(self.uac_temp_btn)
@@ -144,6 +150,7 @@ class ThermalBiosView(QWidget):
 
             btn = QPushButton("Activar Perfil")
             btn.setObjectName("GhostAction")
+            btn.setToolTip(TOOLTIPS.get(f"thermal_profile_{key}", prof.subtitle))
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, k=key: self._select_profile(k))
             self.profile_buttons[key] = btn
@@ -167,18 +174,21 @@ class ThermalBiosView(QWidget):
 
         self.backups_btn = QPushButton("Copias Seguridad")
         self.backups_btn.setObjectName("GhostAction")
+        self.backups_btn.setToolTip(TOOLTIPS["thermal_backups"])
         self.backups_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.backups_btn.clicked.connect(lambda: reveal_in_explorer(self.backup_mgr.backups_dir))
         hw_layout.addWidget(self.backups_btn)
 
         self.reset_pending_btn = QPushButton("Restablecer Pendientes")
         self.reset_pending_btn.setObjectName("RestoreAction")  # v0.5.6
+        self.reset_pending_btn.setToolTip(TOOLTIPS["thermal_reset_pending"])
         self.reset_pending_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pending_btn.clicked.connect(self._on_reset_pending)
         hw_layout.addWidget(self.reset_pending_btn)
 
         self.reset_pwr_btn = QPushButton("Restaurar Respaldo Energia")
         self.reset_pwr_btn.setObjectName("RestoreAction")  # v0.5.6
+        self.reset_pwr_btn.setToolTip(TOOLTIPS["thermal_restore_power"])
         self.reset_pwr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_pwr_btn.clicked.connect(self._on_restore_power)
         hw_layout.addWidget(self.reset_pwr_btn)

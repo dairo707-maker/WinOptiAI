@@ -2,6 +2,17 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.5.14] - 2026-11-19
+
+### Agregado
+- **Tooltips Explicativos `0px` en Toda la Interfaz (`core/help_catalog.py`, `ui/theme.py`, `ui/main_window.py` y vistas):**
+  - Catalogo centralizado (`TOOLTIPS`) con explicaciones claras de 2-3 lineas (`Que hace`, `Mejora` y `Seguridad`) al pasar el puntero sobre pestanas de navegacion, barra superior, tarjetas de metricas, acciones de Almacenamiento (los 6 modos y botones contextuales), Procesos IA, Termica/BIOS y `Acerca de`.
+  - Estilo `QToolTip` dedicado en `0px` acorde a Obsidian Acrylic (oscuro) y Alabaster Frost (claro).
+- **Franja Desplegable "¿Que mejora esta seccion?" (`ui/widgets.py`, todas las vistas):**
+  - Nuevo componente reutilizable `SectionBenefitStrip` (colapsado por defecto para no recargar el diseno en `980x650`) con boton `"Ver que mejora"` / `"Ocultar"` que explica que se consigue y que protecciones aplican en Resumen, Procesos, Termica/BIOS y dinamicamente en cada uno de los 6 modos de Almacenamiento.
+- **Manual de Uso Interno en `Acerca de` (`ui/dialogs/about_updater_dialog.py`):**
+  - `AboutUpdaterDialog` reorganizado en 2 pestanas (`Acerca de y Actualizaciones` + `Manual de Uso`) con 7 capitulos navegables (`Inicio y Resumen`, `Almacenamiento`, `Cuarentena`, `Procesos IA`, `Termica y BIOS`, `Bandeja y Tareas`, `Actualizaciones y Seguridad`).
+
 ## [0.5.13] - 2026-11-17
 
 ### Agregado

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
 from ...core.safety_guard import QUICK_HASH_MAX_BYTES, PreOpBackupManager, QuarantineVault, is_internal_app_path
 from ...core.sre_policy import SREPolicyEngine
@@ -82,6 +83,7 @@ from ..widgets import (
     GlassPanel,
     NumericTableItem,
     NumericTreeItem,
+    SectionBenefitStrip,
     StatusTag,
     configure_sortable_table,
     set_button_role,
@@ -194,6 +196,7 @@ class StorageView(QWidget):
 
         self.primary_btn = QPushButton(" Analizar Temporales")
         self.primary_btn.setObjectName("PrimaryAction")
+        self.primary_btn.setToolTip(TOOLTIPS["storage_primary"])
         self.primary_btn.setIcon(load_svg_icon("refresh", color="#0B0D10", size=14))
         self.primary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.primary_btn.clicked.connect(self._on_primary_action)
@@ -211,26 +214,40 @@ class StorageView(QWidget):
             ("quarantine", tr("mode_quarantine", lang)),
             ("onedrive", tr("mode_onedrive", lang)),
         ]
+        _mode_tip_keys = {
+            "junk": "mode_junk",
+            "duplicates": "mode_dups",
+            "tree": "mode_tree",
+            "orphans": "mode_orphans",
+            "quarantine": "mode_quarantine",
+            "onedrive": "mode_onedrive",
+        }
         for key, label in modes:
             btn = QPushButton(label)
             btn.setObjectName("ModeTab")
+            btn.setToolTip(TOOLTIPS[_mode_tip_keys[key]])
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, m=key: self._switch_mode(m))
             self.mode_buttons[key] = btn
             tabs_bar.addWidget(btn)
         root.addLayout(tabs_bar)
 
+        self.benefit_strip = SectionBenefitStrip("storage_junk")
+        root.addWidget(self.benefit_strip)
+
         # Row 2: Contextual Actions + Icon-only Explorer button (distinct color, hover tooltip)
         actions_bar = QHBoxLayout()
         actions_bar.setSpacing(8)
         self.secondary_btn = QPushButton("Ejecutar Limpieza Segura")
         self.secondary_btn.setObjectName("GhostAction")
+        self.secondary_btn.setToolTip(TOOLTIPS["storage_secondary"])
         self.secondary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.secondary_btn.clicked.connect(self._on_secondary_action)
         actions_bar.addWidget(self.secondary_btn)
 
         self.tertiary_btn = QPushButton("Hardlink NTFS")
         self.tertiary_btn.setObjectName("GhostAction")
+        self.tertiary_btn.setToolTip(TOOLTIPS["storage_tertiary"])
         self.tertiary_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tertiary_btn.clicked.connect(self._on_tertiary_action)
         self.tertiary_btn.setVisible(False)
@@ -240,7 +257,7 @@ class StorageView(QWidget):
         self.select_all_chk = QCheckBox(tr("select_all", lang))
         self.select_all_chk.setObjectName("SelectAllCheck")
         self.select_all_chk.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.select_all_chk.setToolTip("Seleccionar o deseleccionar todas las filas visibles de la tabla")
+        self.select_all_chk.setToolTip(TOOLTIPS["storage_select_all"])
         self.select_all_chk.clicked.connect(self._on_select_all_clicked)
         actions_bar.addWidget(self.select_all_chk)
 
@@ -253,7 +270,7 @@ class StorageView(QWidget):
         self.reveal_btn = QPushButton()
         self.reveal_btn.setObjectName("ExplorerBtn")
         self.reveal_btn.setIcon(load_svg_icon("folder", color=get_palette("dark")["explorer_icon"], size=16))
-        self.reveal_btn.setToolTip("Ver en el Explorador de Windows (seleccione un archivo o carpeta)")
+        self.reveal_btn.setToolTip(TOOLTIPS["storage_reveal"])
         self.reveal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reveal_btn.clicked.connect(self._reveal_selected_item)
         actions_bar.addWidget(self.reveal_btn)
@@ -266,6 +283,7 @@ class StorageView(QWidget):
         dal.setSpacing(10)
         dal.addWidget(QLabel("Regla de autolimpieza:"))
         self.rule_combo = QComboBox()
+        self.rule_combo.setToolTip(TOOLTIPS["storage_rule"])
         self.rule_combo.addItem("Conservar el mas antiguo", "keep_oldest")
         self.rule_combo.addItem("Conservar el mas reciente", "keep_newest")
         self.rule_combo.addItem("Conservar ruta mas corta", "keep_shortest_path")
@@ -275,6 +293,7 @@ class StorageView(QWidget):
 
         self.autoclean_btn = QPushButton("Autolimpiar Todos los Grupos -> Cuarentena")
         self.autoclean_btn.setObjectName(ROLE_MOVE)  # v0.5.6: una sola accion primaria por vista
+        self.autoclean_btn.setToolTip(TOOLTIPS["storage_autoclean"])
         self.autoclean_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.autoclean_btn.clicked.connect(self._on_autoclean_all_duplicates)
         dal.addWidget(self.autoclean_btn)
@@ -300,18 +319,21 @@ class StorageView(QWidget):
 
         self.od_cfg_btn = QPushButton("Configurar Client ID")
         self.od_cfg_btn.setObjectName("GhostAction")
+        self.od_cfg_btn.setToolTip(TOOLTIPS["storage_od_config"])
         self.od_cfg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.od_cfg_btn.clicked.connect(self._configure_onedrive_oauth)
         od_top.addWidget(self.od_cfg_btn)
 
         self.od_connect_btn = QPushButton("Conectar Cuenta (OAuth)")
         self.od_connect_btn.setObjectName("GhostAction")
+        self.od_connect_btn.setToolTip(TOOLTIPS["storage_od_connect"])
         self.od_connect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.od_connect_btn.clicked.connect(self._connect_onedrive)
         od_top.addWidget(self.od_connect_btn)
 
         self.od_disconnect_btn = QPushButton("Desconectar")
         self.od_disconnect_btn.setObjectName("GhostAction")
+        self.od_disconnect_btn.setToolTip(TOOLTIPS["storage_od_disconnect"])
         self.od_disconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.od_disconnect_btn.clicked.connect(self._disconnect_onedrive)
         self.od_disconnect_btn.setVisible(False)
@@ -635,6 +657,7 @@ class StorageView(QWidget):
 
     def _switch_mode(self, mode: str) -> None:
         self.mode = mode
+        self.benefit_strip.set_section(f"storage_{mode}")
         for key, btn in self.mode_buttons.items():
             btn.setProperty("selected", key == mode)
             btn.style().unpolish(btn)
@@ -650,10 +673,12 @@ class StorageView(QWidget):
         # oxido = eliminar definitivo. Las pestanas de modo usan otro estilo (ModeTab).
         if mode == "quarantine":
             self.tertiary_btn.setText("Depurar / Vaciar Boveda")
+            self.tertiary_btn.setToolTip(TOOLTIPS["storage_empty_vault"])
             set_button_role(self.tertiary_btn, ROLE_RISK)
             set_button_role(self.secondary_btn, ROLE_RESTORE)
         else:
             self.tertiary_btn.setText("Hardlink NTFS")
+            self.tertiary_btn.setToolTip(TOOLTIPS["storage_tertiary"])
             set_button_role(self.tertiary_btn, ROLE_MOVE)
             set_button_role(self.secondary_btn, ROLE_MOVE)
 

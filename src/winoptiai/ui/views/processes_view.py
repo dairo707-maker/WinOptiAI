@@ -27,7 +27,14 @@ from ...ai_optimizer.process_manager import (
 from ...core.i18n import tr
 from ...core.sre_policy import SREPolicyEngine
 from ..svg_icons import load_svg_icon
-from ..widgets import GlassPanel, NumericTableItem, StatusTag, configure_sortable_table
+from ...core.help_catalog import TOOLTIPS
+from ..widgets import (
+    GlassPanel,
+    NumericTableItem,
+    SectionBenefitStrip,
+    StatusTag,
+    configure_sortable_table,
+)
 
 
 class ProcessesView(QWidget):
@@ -70,10 +77,14 @@ class ProcessesView(QWidget):
         self.boost_btn = QPushButton(" Compactar RAM y EcoQoS")
         self.boost_btn.setObjectName("PrimaryAction")
         self.boost_btn.setIcon(load_svg_icon("process", color="#0B0D10", size=14))
+        self.boost_btn.setToolTip(TOOLTIPS["proc_boost"])
         self.boost_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.boost_btn.clicked.connect(self.boost_cb)
         header.addWidget(self.boost_btn)
         root.addLayout(header)
+
+        self.benefit_strip = SectionBenefitStrip("processes")
+        root.addWidget(self.benefit_strip)
 
         # Active WinOptiAI Tasks + SRE Toggles bar
         sre_panel = GlassPanel()
@@ -85,11 +96,13 @@ class ProcessesView(QWidget):
             f"Alivio SRE si RAM libre < {self.policy.config.ram_threshold_gb:.1f} GB (5m)"
         )
         self.auto_ram_chk.setChecked(self.policy.config.auto_ram_relief_enabled)
+        self.auto_ram_chk.setToolTip(TOOLTIPS["proc_auto_ram"])
         self.auto_ram_chk.toggled.connect(self._save_policy_toggles)
         sre_layout.addWidget(self.auto_ram_chk)
 
         self.ecoqos_chk = QCheckBox("EcoQoS en segundo plano")
         self.ecoqos_chk.setChecked(self.policy.config.auto_ecoqos_background_browsers)
+        self.ecoqos_chk.setToolTip(TOOLTIPS["proc_ecoqos"])
         self.ecoqos_chk.toggled.connect(self._save_policy_toggles)
         sre_layout.addWidget(self.ecoqos_chk)
 
@@ -99,6 +112,7 @@ class ProcessesView(QWidget):
 
         self.refresh_btn = QPushButton("Actualizar")
         self.refresh_btn.setObjectName("GhostAction")
+        self.refresh_btn.setToolTip(TOOLTIPS["proc_refresh"])
         self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_btn.clicked.connect(self.refresh_all)
         sre_layout.addWidget(self.refresh_btn)
@@ -134,6 +148,7 @@ class ProcessesView(QWidget):
         z_hdr.addWidget(self.zombie_tag)
         self.kill_zombie_btn = QPushButton("Cerrar Zombi Seleccionado")
         self.kill_zombie_btn.setObjectName("RiskAction")  # v0.5.6: cierra procesos
+        self.kill_zombie_btn.setToolTip(TOOLTIPS["proc_kill_zombie"])
         self.kill_zombie_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.kill_zombie_btn.clicked.connect(self._kill_selected_zombie)
         z_hdr.addWidget(self.kill_zombie_btn)

@@ -17,11 +17,13 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ... import __version__
+from ...core.help_catalog import MANUAL_SECTIONS, TOOLTIPS
 from ...core.i18n import tr
 from ...core.updater import (
     REPO_WEB_URL,
@@ -58,8 +60,8 @@ class AboutUpdaterDialog(QDialog):
         self.latest_release: ReleaseInfo | None = None
 
         self.setWindowTitle(tr("about_title", lang))
-        # v0.5.6: tamano minimo (no fijo) para que los botones nunca se recorten con escalado de Windows
-        self.setMinimumSize(570, 470)
+        # v0.5.6/v0.5.14: tamano minimo amplio para tabs Acerca de + Manual de Uso sin recortes
+        self.setMinimumSize(640, 520)
 
         p = get_palette(theme_mode)
         root = QVBoxLayout(self)
@@ -87,6 +89,15 @@ class AboutUpdaterDialog(QDialog):
         hdr.addWidget(self.version_tag)
         root.addLayout(hdr)
 
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs, stretch=1)
+
+        # --- Tab 1: Acerca de y Actualizaciones ---
+        about_tab = QWidget()
+        about_layout = QVBoxLayout(about_tab)
+        about_layout.setContentsMargins(10, 12, 10, 10)
+        about_layout.setSpacing(10)
+
         # Info & Credits Card
         info_panel = GlassPanel()
         il = QVBoxLayout(info_panel)
@@ -101,29 +112,31 @@ class AboutUpdaterDialog(QDialog):
         meta.setObjectName("MonoValue")
         meta.setWordWrap(True)
         il.addWidget(meta)
-        root.addWidget(info_panel)
+        about_layout.addWidget(info_panel)
 
         # Release notes / Update status + Progress bar
         self.status_lbl = QLabel("Pulse 'Buscar Actualizaciones' para consultar GitHub Releases.")
         self.status_lbl.setObjectName("PageSubtitle")
-        root.addWidget(self.status_lbl)
+        self.status_lbl.setWordWrap(True)
+        about_layout.addWidget(self.status_lbl)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setVisible(False)
-        root.addWidget(self.progress_bar)
+        about_layout.addWidget(self.progress_bar)
 
         self.notes_box = QPlainTextEdit()
         self.notes_box.setReadOnly(True)
         self.notes_box.setPlaceholderText("Notas de la ultima version disponible en GitHub...")
-        root.addWidget(self.notes_box, stretch=1)
+        about_layout.addWidget(self.notes_box, stretch=1)
 
         # Actions row (v0.5.6: FlowLayout -> pasan a otra fila en vez de recortarse)
         actions = FlowLayout(spacing=8)
         repo_btn = QPushButton("Abrir GitHub")
         repo_btn.setObjectName("GhostAction")
+        repo_btn.setToolTip("Abre el repositorio oficial de WinOptiAI y los Releases en el navegador.")
         repo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         repo_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_WEB_URL)))
         actions.addWidget(repo_btn)
@@ -131,7 +144,7 @@ class AboutUpdaterDialog(QDialog):
         if on_open_diagnostics is not None:
             diag_btn = QPushButton("Diagnostico")
             diag_btn.setObjectName("GhostAction")
-            diag_btn.setToolTip("Ver o copiar crash.log y cierres inesperados detectados")
+            diag_btn.setToolTip("Ver o copiar crash.log y cierres inesperados detectados.")
             diag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             diag_btn.clicked.connect(on_open_diagnostics)
             actions.addWidget(diag_btn)
@@ -139,7 +152,7 @@ class AboutUpdaterDialog(QDialog):
         if on_open_tour is not None:
             tour_btn = QPushButton("Tour y Prueba")
             tour_btn.setObjectName("GhostAction")
-            tour_btn.setToolTip("Abrir el tour guiado y ejecutar prueba rapida del sistema")
+            tour_btn.setToolTip(TOOLTIPS["btn_tour"])
             tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
             def _launch_tour() -> None:
@@ -151,22 +164,71 @@ class AboutUpdaterDialog(QDialog):
 
         self.check_btn = QPushButton(tr("about_check_updates", lang))
         self.check_btn.setObjectName("GhostAction")
+        self.check_btn.setToolTip("Consulta GitHub Releases para comprobar si existe una version mas reciente.")
         self.check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.check_btn.clicked.connect(self._on_check)
         actions.addWidget(self.check_btn)
 
         self.install_btn = QPushButton(tr("about_install_update", lang))
         self.install_btn.setObjectName("PrimaryAction")
+        self.install_btn.setToolTip("Descarga el instalador oficial, verifica su firma SHA-256 e instala la actualizacion.")
         self.install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.install_btn.setVisible(False)
         self.install_btn.clicked.connect(self._on_install_update)
         actions.addWidget(self.install_btn)
-        root.addLayout(actions)
+        about_layout.addLayout(actions)
+        self.tabs.addTab(about_tab, "Acerca de y Actualizaciones")
+
+        # --- Tab 2: Manual de Uso Interno ---
+        manual_tab = QWidget()
+        manual_layout = QVBoxLayout(manual_tab)
+        manual_layout.setContentsMargins(10, 12, 10, 10)
+        manual_layout.setSpacing(10)
+
+        manual_intro = QLabel(
+            "Guia rapida interna: elige una seccion para ver que hace cada herramienta, que mejora y su nivel de seguridad."
+        )
+        manual_intro.setObjectName("PageSubtitle")
+        manual_intro.setWordWrap(True)
+        manual_layout.addWidget(manual_intro)
+
+        nav_flow = FlowLayout(spacing=6)
+        self.manual_buttons: dict[str, QPushButton] = {}
+        for sec in MANUAL_SECTIONS:
+            sid = sec["id"]
+            b = QPushButton(sec["title"])
+            b.setObjectName("ModeTab")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, key=sid: self._select_manual_section(key))
+            self.manual_buttons[sid] = b
+            nav_flow.addWidget(b)
+        manual_layout.addLayout(nav_flow)
+
+        self.manual_title_lbl = QLabel("")
+        self.manual_title_lbl.setObjectName("CardTitle")
+        manual_layout.addWidget(self.manual_title_lbl)
+
+        self.manual_box = QPlainTextEdit()
+        self.manual_box.setReadOnly(True)
+        manual_layout.addWidget(self.manual_box, stretch=1)
+
+        self.tabs.addTab(manual_tab, "Manual de Uso")
+        if MANUAL_SECTIONS:
+            self._select_manual_section(MANUAL_SECTIONS[0]["id"])
 
         if preloaded_release is not None and preloaded_release.update_available:
             self._on_check_done(
                 (True, preloaded_release, f"Nueva actualizacion disponible: {preloaded_release.tag}")
             )
+
+    def _select_manual_section(self, section_id: str) -> None:
+        selected = next((s for s in MANUAL_SECTIONS if s["id"] == section_id), MANUAL_SECTIONS[0])
+        self.manual_title_lbl.setText(selected["title"])
+        self.manual_box.setPlainText(selected["body"])
+        for sid, btn in self.manual_buttons.items():
+            btn.setProperty("selected", sid == selected["id"])
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
     def _on_check(self) -> None:
         self.check_btn.setEnabled(False)

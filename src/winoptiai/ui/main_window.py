@@ -29,6 +29,7 @@ from ..ai_optimizer.process_manager import (
     run_ai_boost,
 )
 from ..core.crash_guard import CrashGuard
+from ..core.help_catalog import TOOLTIPS
 from ..core.i18n import tr
 from ..core.metrics_history import MetricsHistory, MinuteAggregator
 from ..core.notifications import NotificationCenter, PeriodicAdvisor
@@ -206,12 +207,14 @@ class MainWindow(QMainWindow):
         if idx_lang >= 0:
             self.lang_combo.setCurrentIndex(idx_lang)
         self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.lang_combo.setToolTip(TOOLTIPS["lang_combo"])
         ctl_row.addWidget(self.lang_combo, stretch=1)
         f_layout.addLayout(ctl_row)
 
         self.tour_btn = QPushButton(f" {tr('btn_tour', lang)}")
         self.tour_btn.setObjectName("GhostAction")
         self.tour_btn.setIcon(load_svg_icon("overview", color=pal["icon_color"], size=13))
+        self.tour_btn.setToolTip(TOOLTIPS["btn_tour"])
         self.tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tour_btn.clicked.connect(self._open_tour_dialog)
         f_layout.addWidget(self.tour_btn)
@@ -219,6 +222,7 @@ class MainWindow(QMainWindow):
         self.about_btn = QPushButton(f" {tr('btn_about', lang)}")
         self.about_btn.setObjectName("GhostAction")
         self.about_btn.setIcon(load_svg_icon("shield", color=pal["icon_color"], size=13))
+        self.about_btn.setToolTip(TOOLTIPS["btn_about"])
         self.about_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.about_btn.clicked.connect(self._open_about_dialog)
         f_layout.addWidget(self.about_btn)
@@ -246,12 +250,14 @@ class MainWindow(QMainWindow):
 
         self.task_pill_btn = AdaptiveButton("Sin procesos en segundo plano")
         self.task_pill_btn.setObjectName("GhostAction")
+        self.task_pill_btn.setToolTip(TOOLTIPS["task_pill"])
         self.task_pill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.task_pill_btn.clicked.connect(self._open_notifications_drawer)
         tb_layout.addWidget(self.task_pill_btn)
 
         self.pause_top_btn = AdaptiveButton("Pausar")
         self.pause_top_btn.setObjectName("GhostAction")
+        self.pause_top_btn.setToolTip(TOOLTIPS["pause_top"])
         self.pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.pause_top_btn.clicked.connect(self._toggle_lead_pause)
         self.pause_top_btn.setVisible(False)
@@ -260,6 +266,7 @@ class MainWindow(QMainWindow):
         self.save_pause_top_btn = AdaptiveButton("Guardar Pausa")
         self.save_pause_top_btn.set_variants(["Guardar Pausa", "Guardar"])
         self.save_pause_top_btn.setObjectName("GhostAction")
+        self.save_pause_top_btn.setToolTip(TOOLTIPS["save_pause_top"])
         self.save_pause_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_pause_top_btn.clicked.connect(self._save_and_pause_lead)
         self.save_pause_top_btn.setVisible(False)
@@ -267,6 +274,7 @@ class MainWindow(QMainWindow):
 
         self.cancel_top_btn = AdaptiveButton("Cancelar")
         self.cancel_top_btn.setObjectName("GhostAction")
+        self.cancel_top_btn.setToolTip(TOOLTIPS["cancel_top"])
         self.cancel_top_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_top_btn.clicked.connect(self._cancel_lead_task)
         self.cancel_top_btn.setVisible(False)
@@ -274,6 +282,7 @@ class MainWindow(QMainWindow):
 
         self.resume_session_btn = AdaptiveButton("Retomar Sesion")
         self.resume_session_btn.setObjectName("PrimaryAction")
+        self.resume_session_btn.setToolTip(TOOLTIPS["resume_session"])
         self.resume_session_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.resume_session_btn.clicked.connect(self._open_notifications_drawer)
         self.resume_session_btn.setVisible(False)
@@ -288,9 +297,7 @@ class MainWindow(QMainWindow):
             self.uac_btn = AdaptiveButton("Elevar Admin (UAC)")
             self.uac_btn.set_variants(["Elevar Admin (UAC)", "Elevar Admin", "Admin"])
             self.uac_btn.setObjectName("GhostAction")
-            self.uac_btn.setToolTip(
-                "Relanzar como Administrador para limpiar residuos de Windows (Temp/WER/Minidump) sin tocar archivos del SO"
-            )
+            self.uac_btn.setToolTip(TOOLTIPS["uac_btn"])
             self.uac_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self.uac_btn.clicked.connect(self._request_admin_relaunch)
             tb_layout.addWidget(self.uac_btn)
@@ -298,7 +305,7 @@ class MainWindow(QMainWindow):
         self.bell_btn = QPushButton(" 0")
         self.bell_btn.setObjectName("BellBtn")
         self.bell_btn.setIcon(load_svg_icon("bell", color=pal["icon_color"], size=15))
-        self.bell_btn.setToolTip("Abrir centro de notificaciones y progreso de tareas")
+        self.bell_btn.setToolTip(TOOLTIPS["bell_btn"])
         self.bell_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.bell_btn.clicked.connect(self._open_notifications_drawer)
         tb_layout.addWidget(self.bell_btn)
@@ -601,6 +608,8 @@ class MainWindow(QMainWindow):
         for btn, (icon_name, tr_key) in zip(self.nav_buttons, self._nav_spec):
             btn.setText(f"  {tr(tr_key, lang)}")
             btn.setIcon(load_svg_icon(icon_name, color=pal["icon_color"], size=15))
+            if tr_key in TOOLTIPS:
+                btn.setToolTip(TOOLTIPS[tr_key])
 
         self.overview_view.apply_language_and_theme(lang, mode, pal["icon_inverted"])
         self.storage_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
@@ -644,7 +653,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self.about_btn.setText(f" {tr('btn_about', lang)}")
-            self.about_btn.setToolTip("")
+            self.about_btn.setToolTip(TOOLTIPS["btn_about"])
 
     def _open_tour_dialog(self) -> None:
         if self._tour_dialog is not None and self._tour_dialog.isVisible():

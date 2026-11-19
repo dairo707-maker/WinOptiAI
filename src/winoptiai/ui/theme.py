@@ -485,4 +485,14 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QMenu::item:selected {{
         background-color: {p["bg_active"]};
     }}
+
+    QToolTip {{
+        background-color: {p["bg_menu"]};
+        color: {p["text_primary"]};
+        border: 1px solid {p["border_strong"]};
+        border-radius: 0px;
+        padding: 8px 10px;
+        font-family: "Instrument Sans", "Segoe UI", sans-serif;
+        font-size: 12px;
+    }}
     """
