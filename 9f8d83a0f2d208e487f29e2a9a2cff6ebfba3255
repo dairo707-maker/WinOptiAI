@@ -1,0 +1,1 @@
+Fix test_v0514_features.py para runners elevados de GitHub Actions donde uac_btn no se instancia.
