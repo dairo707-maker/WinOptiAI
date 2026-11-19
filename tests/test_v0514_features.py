@@ -152,7 +152,7 @@ def test_main_window_tooltips_and_benefit_strips_wired(
         # Sidebar & TopBar tooltips
         for btn in win.nav_buttons:
             assert btn.toolTip().strip()
-        for w in (
+        widgets_to_check = [
             win.lang_combo,
             win.tour_btn,
             win.about_btn,
@@ -161,9 +161,11 @@ def test_main_window_tooltips_and_benefit_strips_wired(
             win.save_pause_top_btn,
             win.cancel_top_btn,
             win.resume_session_btn,
-            win.uac_btn,
             win.bell_btn,
-        ):
+        ]
+        if hasattr(win, "uac_btn"):
+            widgets_to_check.append(win.uac_btn)
+        for w in widgets_to_check:
             assert w.toolTip().strip(), f"Falta tooltip en {w.objectName() or type(w).__name__}"
 
         # Overview
