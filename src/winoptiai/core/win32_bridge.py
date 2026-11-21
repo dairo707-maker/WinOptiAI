@@ -582,9 +582,29 @@ def terminate_app_child_processes() -> dict[str, int]:
                 keep.update(c.pid for c in psutil.Process(pid).children(recursive=True))
             except psutil.Error:
                 continue
+
+        def _is_protected(proc: psutil.Process) -> bool:
+            if proc.pid in keep:
+                return True
+            try:
+                for anc in proc.parents():
+                    if anc.pid == me.pid:
+                        break
+                    if anc.pid in keep:
+                        keep.add(proc.pid)
+                        return True
+            except psutil.Error:
+                pass
+            return False
+
         for child in me.children(recursive=True):
             try:
-                if child.pid in keep or child.name().lower() in EXTERNAL_APP_NAMES:
+                cname = child.name().lower()
+                if (
+                    _is_protected(child)
+                    or cname in EXTERNAL_APP_NAMES
+                    or (cname in {"conhost.exe", "openconsole.exe"} and child.ppid() == me.pid)
+                ):
                     continue
                 child.kill()
                 closed += 1

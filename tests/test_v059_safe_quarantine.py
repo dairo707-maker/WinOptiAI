@@ -226,6 +226,8 @@ def test_shutdown_kills_app_children_but_keeps_protected() -> None:
     keeper = subprocess.Popen(["ping", "-n", "30", "127.0.0.1"], stdout=subprocess.DEVNULL, creationflags=flags)
     wb.protect_child_pid(keeper.pid)
     try:
+        _t.sleep(0.25)
+        assert worker.poll() is None and keeper.poll() is None
         res = wb.terminate_app_child_processes()
         _t.sleep(0.5)
         assert worker.poll() is not None  # proceso derivado de la app: cerrado
