@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -34,6 +33,8 @@ from ..widgets import (
     NumericTableItem,
     SectionBenefitStrip,
     StatusTag,
+    apply_table_tooltips,
+    configure_interactive_columns,
     configure_sortable_table,
 )
 
@@ -125,14 +126,12 @@ class ProcessesView(QWidget):
             ["PID", "PROCESO", "CLASIFICACION", "CPU (%)", "RAM (MB)", "ECOQOS", "ULTIMO USO"]
         )
         configure_sortable_table(self.proc_table)
-        hdr = self.proc_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        configure_interactive_columns(
+            self.proc_table,
+            [78, 250, 175, 92, 102, 98, 128],
+            policy=self.policy,
+            storage_key="proc_table",
+        )
         root.addWidget(self.proc_table, stretch=3)
 
         # Orphan AI / MCP workers panel
@@ -159,11 +158,12 @@ class ProcessesView(QWidget):
         self.zombie_table = QTableWidget(0, 4)
         self.zombie_table.setHorizontalHeaderLabels(["PID", "PROCESO", "RAM (MB)", "COMANDO"])
         configure_sortable_table(self.zombie_table)
-        zhdr = self.zombie_table.horizontalHeader()
-        zhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        zhdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        zhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        zhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.zombie_table,
+            [78, 180, 105, 500],
+            policy=self.policy,
+            storage_key="zombie_table",
+        )
         z_layout.addWidget(self.zombie_table)
         root.addWidget(z_panel, stretch=2)
 
@@ -203,6 +203,7 @@ class ProcessesView(QWidget):
                 r, 5, QTableWidgetItem("ELEGIBLE" if item.ecoqos_eligible else "PROTEGIDO")
             )
             self.proc_table.setItem(r, 6, NumericTableItem(format_last_used_time(ts), ts))
+        apply_table_tooltips(self.proc_table)
         self.proc_table.setSortingEnabled(True)
 
     def _render_zombies(self, items: list[ZombieWorker]) -> None:
@@ -217,6 +218,7 @@ class ProcessesView(QWidget):
             self.zombie_table.setItem(r, 1, QTableWidgetItem(z.name))
             self.zombie_table.setItem(r, 2, NumericTableItem(f"{z.ram_mb:.1f}", z.ram_mb))
             self.zombie_table.setItem(r, 3, QTableWidgetItem(z.cmdline))
+        apply_table_tooltips(self.zombie_table)
         self.zombie_table.setSortingEnabled(True)
 
     def _kill_selected_zombie(self) -> None:

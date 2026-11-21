@@ -2,6 +2,22 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.2] - 2026-11-21
+
+### Corregido y Mejorado (Columnas Redimensionables, UserAssist sin UAC, winget Automatico y Elevacion UAC)
+- **Tablas y Arboles Redimensionables + Scroll Horizontal (`widgets.py`, `theme.py`, `sre_policy.py`, todas las vistas):**
+  - Las 10 tablas y arboles (`Aplicaciones`, `Inicio Windows`, 5 sub-modos + 3 vistas de `Almacenamiento`, `Procesos` + MCP, `Termica/BIOS` y `Resumen`) ahora usan `QHeaderView.ResizeMode.Interactive` con `stretchLastSection(False)` y anchos minimos calculados dinamicamente con `QFontMetrics` para no recortar encabezados ni nombres de apps.
+  - Scroll horizontal suave (`ScrollPerPixel`) estilo TRODAI `0px`, ajuste automatico al hacer doble clic en cualquier separador de columna, tooltips completos al pasar el cursor (`apply_table_tooltips`/`apply_tree_tooltips`), persistencia automatica por tabla/modo en `config.json` y `setSortIndicator(-1, AscendingOrder)` para preservar el orden por prioridad (`ACTUALIZAR` y `DESACTIVAR` arriba).
+- **Telemetria Real de `ULTIMO USO` sin UAC (`usage_telemetry.py`, `app_manager.py`):**
+  - Lectura de `HKCU\...\Explorer\UserAssist` (decodificacion ROT13, expansion de KNOWNFOLDERIDs y AUMIDs/accesos directos) en Modo Estandar sin requerir UAC.
+  - Eliminado el respaldo por `st_atime` que marcaba falsamente `"Hoy"` tras escaneos de antivirus/indexador; normalizacion `"++"` (`Notepad++` vs `Notepad`), limpieza de comillas en `InstallLocation`, bloqueo de falsos positivos por palabras genericas y respaldo honesto `Inst. YYYY-MM-DD` o `Sin registro`.
+- **Actualizaciones `winget` Encadenadas (`apps_view.py`):**
+  - `Escanear Aplicaciones` encadena automaticamente `check_app_updates_winget` mostrando `REVISANDO` / `Consultando...` mientras consulta y `SIN REVISAR` (nunca `AL DIA` falso) si `winget` no esta disponible.
+- **Correccion Critica de "Elevar Admin" (`win32_bridge.py`, `main_window.py`, `app.py`, `single_instance.py`):**
+  - `run_elevated_command(..., track=False, directory=...)` protege el PID de la instancia elevada mediante `protect_child_pid` en lugar de añadirlo a `_TRACKED_CHILDREN`, evitando que `terminate_app_child_processes()` lo cierre con `TerminateProcess` al salir la instancia estandar.
+  - Handles de 64 bits endurecidos en `_kernel32_proc()`, espera `--elevated-relaunch` ampliada a `30 s` y manejo de `ERROR_ACCESS_DENIED (5)` en `SingleInstanceLock`.
+- **Verificacion:** `148/148` pruebas aprobadas (`tests/test_v062_tables_and_usage.py`).
+
 ## [0.6.1] - 2026-11-20
 
 ### Corregido y Mejorado (Barra de Tareas, Anillos 2x2 Claros, Ejes Completos, Tipografia y Tour 7 Pasos)

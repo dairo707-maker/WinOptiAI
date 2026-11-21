@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.1`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.2`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -29,8 +29,15 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
      - Conectar senales de `AsyncTask` con `Qt.QueuedConnection` explicita, limitar senales de progreso (~10/s o cambio de `%`) y usar carga perezosa (*lazy loading*) en `QTreeWidget` (`storage_view.py`).
      - En llamadas UAC (`ShellExecuteW`) fuera del hilo UI (`win32_bridge.run_elevated_command`), inicializar COM (`CoInitializeEx`) en el hilo trabajador.
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
-   - **Instancia unica (`v0.5.8`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina. `--elevated-relaunch` espera 20 s al mutex. Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
+   - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.2
+
+- **Tablas/arboles redimensionables y scroll horizontal (`widgets.py`, `theme.py`, `sre_policy.py`):** todas las 10 tablas/arboles (`Aplicaciones`, `Inicio Windows`, 5 sub-modos + arboles/formatos de `Almacenamiento`, `Procesos` + MCP, `Termica/BIOS`, `Resumen`) usan `configure_interactive_columns` (`Interactive`, `stretchLastSection(False)`, anchos minimos por `QFontMetrics`, doble clic auto-fit, tooltips de celda completa, persistencia en `SREPolicyConfig.table_column_widths`) y scrollbar horizontal `0px` (`ScrollPerPixel`), con `setSortIndicator(-1, AscendingOrder)` en `configure_sortable_table` para respetar orden prioritario (`ACTUALIZAR`/`DESACTIVAR` arriba).
+- **Telemetria `ULTIMO USO` sin UAC y `winget` automatico (`usage_telemetry.py`, `app_manager.py`, `apps_view.py`):** lectura de `HKCU\...\Explorer\UserAssist` (ROT13 + KNOWNFOLDERIDs + AUMIDs) sin UAC; eliminacion de `_probe_dir_last_exe_ts` (`st_atime` generaba falsos `"Hoy"` tras antivirus), distincion `"++"`, bloqueo de tokens genericos y respaldo `Inst. YYYY-MM-DD`/`Sin registro`; escaneo de aplicaciones encadena `check_app_updates_winget` con estados honestos (`REVISANDO` -> `ACTUALIZAR`/`AL DIA`/`SIN REVISAR`).
+- **Correccion critica de "Elevar Admin" (`win32_bridge.py`, `main_window.py`, `app.py`, `single_instance.py`):** `run_elevated_command(..., track=False, directory=...)` protege el PID nuevo via `protect_child_pid()` y cierra el handle sin meterlo en `_TRACKED_CHILDREN`, impidiendo que `terminate_app_child_processes()` mate la instancia elevada con `TerminateProcess` al salir; `_kernel32_proc()` fija `argtypes`/`restype` 64-bit, `SingleInstanceLock` espera 30 s en `--elevated-relaunch` y controla `ERROR_ACCESS_DENIED (5)`.
+- **Verificacion:** `148/148` pruebas aprobadas (`tests/test_v062_tables_and_usage.py`) + capturas reales claras/oscuras en PC.
 
 ## Cambios Consolidados v0.6.1
 
@@ -86,7 +93,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.1`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.2`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

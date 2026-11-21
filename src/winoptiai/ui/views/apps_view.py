@@ -10,7 +10,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -33,7 +32,7 @@ from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
 from ...core.safety_guard import QuarantineVault
 from ...core.sre_policy import SREPolicyEngine
-from ...core.usage_telemetry import format_last_used
+from ...core.usage_telemetry import format_app_last_used
 from ..svg_icons import load_svg_icon
 from ..theme import format_bytes
 from ..widgets import (
@@ -44,6 +43,8 @@ from ..widgets import (
     NumericTableItem,
     SectionBenefitStrip,
     SemaphoreDot,
+    apply_table_tooltips,
+    configure_interactive_columns,
     configure_sortable_table,
     semaphore_hex,
     set_button_role,
@@ -72,6 +73,8 @@ class AppsView(QWidget):
         self.lang = lang
         self.apps: list[InstalledApp] = []
         self._updates_checked = False
+        self._checking_updates = False
+        self._updates_error = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 18)
@@ -151,21 +154,19 @@ class AppsView(QWidget):
         sl.addWidget(self.summary_lbl, stretch=1)
         root.addWidget(summary)
 
-        # Sortable Applications Table
+        # Sortable Applications Table (manually resizable + horizontal scroll + persisted widths)
         self.apps_table = QTableWidget(0, 7)
         self.apps_table.setHorizontalHeaderLabels(
             ["ESTADO", "APLICACION", "VERSION", "NUEVA VERSION", "TAMANO", "ULTIMO USO", "EDITOR"]
         )
         configure_sortable_table(self.apps_table)
         self.apps_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        hdr = self.apps_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        configure_interactive_columns(
+            self.apps_table,
+            [114, 290, 128, 136, 96, 138, 220],
+            policy=self.policy,
+            storage_key="apps_table",
+        )
         root.addWidget(self.apps_table, stretch=1)
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
@@ -178,48 +179,75 @@ class AppsView(QWidget):
 
     def refresh_apps(self) -> None:
         self.scan_btn.setEnabled(False)
-        self.summary_lbl.setText("Escaneando aplicaciones instaladas y fechas de ultimo uso...")
+        self.check_updates_btn.setEnabled(False)
+        self.summary_lbl.setText("Escaneando aplicaciones instaladas y fechas reales de ultimo uso...")
 
         def _done(apps: list[InstalledApp]) -> None:
             self.scan_btn.setEnabled(True)
             self.apps = apps
             self._updates_checked = False
-            self._render_apps()
+            self._updates_error = ""
+            if self.apps:
+                self._on_check_updates(auto_chained=True)
+            else:
+                self.check_updates_btn.setEnabled(True)
+                self._render_apps()
+
+        def _err(_msg: str) -> None:
+            self.scan_btn.setEnabled(True)
+            self.check_updates_btn.setEnabled(True)
 
         self.run_async(
             list_installed_apps,
             _done,
             "Escaneo aplicaciones",
             notify_on_complete=False,
-            on_error=lambda _e: self.scan_btn.setEnabled(True),
+            on_error=_err,
         )
 
-    def _on_check_updates(self) -> None:
+    def _on_check_updates(self, _checked: bool = False, *, auto_chained: bool = False) -> None:
         if not self.apps:
             self.refresh_apps()
             return
+        self._checking_updates = True
+        self._updates_error = ""
         self.check_updates_btn.setEnabled(False)
-        self.summary_lbl.setText("Consultando versiones disponibles mediante winget...")
+        self._render_apps()
+        self.summary_lbl.setText(
+            f"{len(self.apps)} aplicaciones inventariadas — consultando nuevas versiones en winget..."
+        )
         snapshot = list(self.apps)
 
         def _work(progress_cb=None) -> tuple[list[InstalledApp], int, str]:
             return check_app_updates_winget(snapshot, progress_cb=progress_cb)
 
         def _done(res: tuple[list[InstalledApp], int, str]) -> None:
+            self._checking_updates = False
             self.check_updates_btn.setEnabled(True)
-            apps, count, msg = res
+            apps, _count, msg = res
             self.apps = apps
-            self._updates_checked = True
+            ok_winget = not msg.startswith(("winget no esta disponible", "No se pudo consultar"))
+            self._updates_checked = ok_winget
+            self._updates_error = "" if ok_winget else msg
             self._render_apps()
-            self.summary_lbl.setText(msg)
-            self.notify_cb(msg)
+            if not ok_winget:
+                self.summary_lbl.setText(f"{self.summary_lbl.text()}  |  {msg}")
+            if not auto_chained:
+                self.notify_cb(msg)
+
+        def _err(err_msg: str) -> None:
+            self._checking_updates = False
+            self.check_updates_btn.setEnabled(True)
+            self._updates_checked = False
+            self._updates_error = err_msg or "Error consultando winget."
+            self._render_apps()
 
         self.run_async(
             _work,
             _done,
             "Buscar actualizaciones de apps",
             notify_on_complete=False,
-            on_error=lambda _e: self.check_updates_btn.setEnabled(True),
+            on_error=_err,
         )
 
     def _selected_app(self) -> InstalledApp | None:
@@ -340,13 +368,15 @@ class AppsView(QWidget):
         updates_cnt = 0
         stale_cnt = 0
         for idx, app in enumerate(self.apps):
+            eff_ts = app.last_used_ts if app.last_used_ts > 0 else app.install_date_ts
+            is_stale = eff_ts > 0 and eff_ts <= stale_cutoff
             if app.available_version:
                 updates_cnt += 1
-            if app.last_used_ts > 0 and app.last_used_ts <= stale_cutoff:
+            if is_stale:
                 stale_cnt += 1
             if flt == "updates" and not app.available_version:
                 continue
-            if flt == "stale" and not (app.last_used_ts <= stale_cutoff):
+            if flt == "stale" and not (eff_ts <= stale_cutoff):
                 continue
             if q and q not in app.name.lower() and q not in app.publisher.lower():
                 continue
@@ -355,12 +385,18 @@ class AppsView(QWidget):
         self.apps_table.setSortingEnabled(False)
         self.apps_table.setRowCount(len(visible))
         for r, (orig_idx, app) in enumerate(visible):
+            eff_ts = app.last_used_ts if app.last_used_ts > 0 else app.install_date_ts
+            is_stale = eff_ts > 0 and eff_ts <= stale_cutoff
             if app.available_version:
                 state_txt, tone = "ACTUALIZAR", "warn"
             elif app.protected_reason:
                 state_txt, tone = "PROTEGIDA", "neutral"
-            elif app.last_used_ts > 0 and app.last_used_ts <= stale_cutoff:
+            elif self._checking_updates:
+                state_txt, tone = "REVISANDO", "active"
+            elif is_stale:
                 state_txt, tone = "SIN USO", "risk"
+            elif not self._updates_checked:
+                state_txt, tone = "SIN REVISAR", "neutral"
             else:
                 state_txt, tone = "AL DIA", "ok"
 
@@ -370,23 +406,51 @@ class AppsView(QWidget):
             self.apps_table.setItem(r, 0, c0)
             self.apps_table.setItem(r, 1, QTableWidgetItem(app.name))
             self.apps_table.setItem(r, 2, QTableWidgetItem(app.version))
-            self.apps_table.setItem(r, 3, QTableWidgetItem(app.available_version or "--"))
+
+            if app.available_version:
+                upd_item = QTableWidgetItem(app.available_version)
+                upd_item.setForeground(QColor(semaphore_hex("warn", mode)))
+            elif self._checking_updates:
+                upd_item = QTableWidgetItem("Consultando...")
+                upd_item.setForeground(QColor(semaphore_hex("active", mode)))
+            else:
+                upd_item = QTableWidgetItem("--")
+            self.apps_table.setItem(r, 3, upd_item)
+
             self.apps_table.setItem(
                 r,
                 4,
                 NumericTableItem(format_bytes(app.size_bytes) if app.size_bytes > 0 else "--", app.size_bytes),
             )
-            self.apps_table.setItem(r, 5, NumericTableItem(format_last_used(app.last_used_ts, now), app.last_used_ts))
+            used_txt = format_app_last_used(app.last_used_ts, app.install_date_ts, now)
+            used_item = NumericTableItem(used_txt, eff_ts)
+            if app.last_used_ts > 0:
+                used_item.setToolTip(f"{used_txt} (ejecucion real registrada en Windows)")
+            elif app.install_date_ts > 0:
+                used_item.setToolTip(f"{used_txt} (sin ejecucion reciente; fecha de instalacion en Registro)")
+            else:
+                used_item.setToolTip("Sin registro de ejecucion ni fecha de instalacion")
+            self.apps_table.setItem(r, 5, used_item)
             self.apps_table.setItem(r, 6, QTableWidgetItem(app.publisher or "--"))
+        apply_table_tooltips(self.apps_table)
         self.apps_table.setSortingEnabled(True)
 
         if self.apps:
+            extra_err = f"  |  {self._updates_error}" if self._updates_error and not self._checking_updates else ""
             self.summary_lbl.setText(
                 f"Mostrando {len(visible)} de {len(self.apps)} apps  |  "
-                f"Actualizaciones: {updates_cnt}  |  Sin uso >30d: {stale_cnt}"
+                f"Actualizaciones: {updates_cnt}  |  Sin uso >30d: {stale_cnt}{extra_err}"
             )
-            sem_tone = "warn" if updates_cnt > 0 else ("risk" if stale_cnt > 5 else "ok")
-            sem_txt = f"{updates_cnt} upd" if updates_cnt > 0 else ("Al dia" if self._updates_checked else f"{len(self.apps)} apps")
+            sem_tone = (
+                "warn"
+                if updates_cnt > 0
+                else ("active" if self._checking_updates else ("risk" if stale_cnt > 5 else ("ok" if self._updates_checked else "neutral")))
+            )
+            sem_txt = (
+                f"{updates_cnt} upd"
+                if updates_cnt > 0
+                else ("Revisando..." if self._checking_updates else ("Al dia" if self._updates_checked else f"{len(self.apps)} apps"))
+            )
             self.sem_dot.set_tone(sem_tone, mode)
             self.summary_changed.emit(sem_txt, sem_tone)
         else:

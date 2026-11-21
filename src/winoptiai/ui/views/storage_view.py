@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
@@ -87,6 +86,9 @@ from ..widgets import (
     NumericTreeItem,
     SectionBenefitStrip,
     StatusTag,
+    apply_table_tooltips,
+    apply_tree_tooltips,
+    configure_interactive_columns,
     configure_sortable_table,
     set_button_role,
 )
@@ -441,12 +443,12 @@ class StorageView(QWidget):
         self.folder_tree.customContextMenuRequested.connect(
             lambda pos: self._show_explorer_menu(self.folder_tree, pos)
         )
-        thdr = self.folder_tree.header()
-        thdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        thdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        thdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        thdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        thdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        configure_interactive_columns(
+            self.folder_tree,
+            [250, 98, 98, 72, 120],
+            policy=self.policy,
+            storage_key="storage_folder_tree",
+        )
         self.tree_splitter.addWidget(self.folder_tree)
 
         self.format_table = QTableWidget(0, 6)
@@ -460,13 +462,12 @@ class StorageView(QWidget):
         self.format_table.customContextMenuRequested.connect(
             lambda pos: self._show_explorer_menu(self.format_table, pos)
         )
-        fhdr = self.format_table.horizontalHeader()
-        fhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.format_table,
+            [105, 135, 98, 114, 120, 260],
+            policy=self.policy,
+            storage_key="storage_format_table",
+        )
         self.tree_splitter.addWidget(self.format_table)
         self.tree_splitter.setSizes([500, 480])
 
@@ -541,13 +542,12 @@ class StorageView(QWidget):
         self.heavy_tree.itemDoubleClicked.connect(lambda it, _c: self._reveal_heavy_item(it))
         self.heavy_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.heavy_tree.customContextMenuRequested.connect(self._show_heavy_menu)
-        hh = self.heavy_tree.header()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        hh.resizeSection(0, 260)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.heavy_tree,
+            [260, 102, 140, 120, 360],
+            policy=self.policy,
+            storage_key="storage_heavy_tree",
+        )
         hlay.addWidget(self.heavy_tree, stretch=1)
         self.heavy_hint_lbl = QLabel("Doble clic en un archivo: abrir su carpeta en el Explorador con el archivo seleccionado.")
         self.heavy_hint_lbl.setObjectName("PageSubtitle")
@@ -722,12 +722,12 @@ class StorageView(QWidget):
         if mode == "junk":
             self.primary_btn.setText(" Analizar Temporales")
             self.secondary_btn.setText("Limpiar Seleccionados")
-            self._configure_columns(["CATEGORIA", "ARCHIVOS", "RECUPERABLE", "ULTIMO USO", "OBJETIVO"])
+            self._configure_columns(["CATEGORIA", "ARCHIVOS", "RECUPERABLE", "ULTIMO USO", "OBJETIVO"], [195, 96, 124, 122, 400])
             self._render_junk()
         elif mode == "duplicates":
             self.primary_btn.setText(" Elegir Carpeta y Buscar")
             self.secondary_btn.setText("Cuarentena Seleccionado")
-            self._configure_columns(["COPIAS", "TAMANO UNIT.", "DESPERDICIO", "ULTIMO USO", "ARCHIVO PRINCIPAL Y COPIAS"])
+            self._configure_columns(["COPIAS", "TAMANO UNIT.", "DESPERDICIO", "ULTIMO USO", "ARCHIVO PRINCIPAL Y COPIAS"], [88, 122, 124, 122, 430])
             self._render_duplicates()
         elif mode == "tree":
             self.primary_btn.setText(" Elegir Carpeta / Disco")
@@ -736,27 +736,29 @@ class StorageView(QWidget):
         elif mode == "orphans":
             self.primary_btn.setText(" Detectar Huerfanos")
             self.secondary_btn.setText("Enviar a Cuarentena")
-            self._configure_columns(["TIPO", "ESTADO", "TAMANO", "ULTIMO USO", "RUTA DETECTADA"])
+            self._configure_columns(["TIPO", "ESTADO", "TAMANO", "ULTIMO USO", "RUTA DETECTADA"], [135, 118, 108, 122, 430])
             self._render_orphans()
         elif mode == "onedrive":
             self._refresh_onedrive_status()
             self._on_onedrive_scope_changed()
-            self._configure_columns(["ORIGEN", "MOTIVO", "TAMANO", "ULTIMO USO", "RUTA EN ONEDRIVE"])
+            self._configure_columns(["ORIGEN", "MOTIVO", "TAMANO", "ULTIMO USO", "RUTA EN ONEDRIVE"], [118, 175, 108, 122, 410])
             self._render_onedrive()
         else:
             self.primary_btn.setText(" Actualizar Boveda")
             self.secondary_btn.setText("Restaurar Seleccionado")
-            self._configure_columns(["FECHA", "CATEGORIA", "TAMANO", "ULTIMO USO", "RUTA ORIGINAL"])
+            self._configure_columns(["FECHA", "CATEGORIA", "TAMANO", "ULTIMO USO", "RUTA ORIGINAL"], [148, 160, 108, 122, 410])
             self._render_quarantine()
         self._sync_select_all_state()
 
-    def _configure_columns(self, headers: list[str]) -> None:
+    def _configure_columns(self, headers: list[str], default_widths: list[int] | None = None) -> None:
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
-        hdr = self.table.horizontalHeader()
-        for idx in range(len(headers) - 1):
-            hdr.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(len(headers) - 1, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.table,
+            default_widths or [140, 130, 120, 120, 400],
+            policy=self.policy,
+            storage_key=f"storage_{self.mode}",
+        )
 
     def _progress_summary(self, pct: int, stage: str) -> None:
         self.summary_lbl.setText(f"[{pct}%] {stage}")
@@ -1156,6 +1158,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(tgt.reclaimable_bytes), tgt.reclaimable_bytes))
             self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
             self.table.setItem(row, 4, QTableWidgetItem(f"{tgt.label} ({tgt.path})"))
+        apply_table_tooltips(self.table)
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Objetivos analizados: {len(self.junk_targets)} | Recuperable seguro: {format_bytes(total)}"
@@ -1189,6 +1192,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(grp.wasted_bytes), grp.wasted_bytes))
             self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
             self.table.setItem(row, 4, QTableWidgetItem(joined))
+        apply_table_tooltips(self.table)
         self.table.setSortingEnabled(True)
         protected_dirs = getattr(self.dup_groups, "protected_dirs", 0)
         structural = sum(1 for g in self.dup_groups if getattr(g, "protected_reason", ""))
@@ -1475,6 +1479,7 @@ class StorageView(QWidget):
             self.heavy_tree.addTopLevelItems([self._make_heavy_file_item(p, sz, cat) for p, sz, cat in files])
             self.heavy_tree.setRootIsDecorated(False)
             hint = f"{len(files)} archivos. Doble clic: abrir su carpeta en el Explorador con el archivo seleccionado."
+        apply_tree_tooltips(self.heavy_tree)
         self.heavy_tree.setSortingEnabled(True)
         self.heavy_tree.sortByColumn(1, Qt.SortOrder.DescendingOrder)
         self.heavy_hint_lbl.setText(hint)
@@ -1546,6 +1551,7 @@ class StorageView(QWidget):
         sorting = self.folder_tree.isSortingEnabled()
         self.folder_tree.setSortingEnabled(False)
         self._populate_tree_children(item)
+        apply_tree_tooltips(self.folder_tree)
         self.folder_tree.setSortingEnabled(sorting)
 
     def _render_tree(self) -> None:
@@ -1572,6 +1578,7 @@ class StorageView(QWidget):
         self.folder_tree.addTopLevelItem(root_item)
         self._populate_tree_children(root_item)
         root_item.setExpanded(True)
+        apply_tree_tooltips(self.folder_tree)
         self.folder_tree.setSortingEnabled(True)
         self.folder_tree.sortByColumn(1, Qt.SortOrder.DescendingOrder)
 
@@ -1589,6 +1596,7 @@ class StorageView(QWidget):
             self.format_table.setItem(r, 4, NumericTableItem(format_last_used(fts), fts))
             heavy_txt = f"{fg.heaviest_file.name} ({format_bytes(fg.heaviest_bytes)})" if fg.heaviest_file else "N/D"
             self.format_table.setItem(r, 5, QTableWidgetItem(heavy_txt))
+        apply_table_tooltips(self.format_table)
         self.format_table.setSortingEnabled(True)
 
         self.summary_lbl.setText(
@@ -1621,6 +1629,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(item.size_bytes), item.size_bytes))
             self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
             self.table.setItem(row, 4, QTableWidgetItem(str(item.path)))
+        apply_table_tooltips(self.table)
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Artefactos huerfanos detectados: {len(self.orphans)} | Tamano total: {format_bytes(total)}"
@@ -1645,6 +1654,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(rec.size_bytes), rec.size_bytes))
             self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
             self.table.setItem(row, 4, QTableWidgetItem(rec.original_path))
+        apply_table_tooltips(self.table)
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Elementos respaldados en Cuarentena: {len(items)} | Espacio en boveda: {format_bytes(total)}"
@@ -2224,6 +2234,7 @@ class StorageView(QWidget):
             self.table.setItem(row, 2, NumericTableItem(format_bytes(item.size_bytes), item.size_bytes))
             self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
             self.table.setItem(row, 4, QTableWidgetItem(item.location))
+        apply_table_tooltips(self.table)
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"OneDrive: {len(self.onedrive_items)} candidatos | Espacio recuperable: {format_bytes(total)}"

@@ -18,6 +18,7 @@ import hashlib
 
 from .win32_bridge import IS_WINDOWS
 
+ERROR_ACCESS_DENIED = 5
 ERROR_ALREADY_EXISTS = 183
 WAIT_OBJECT_0 = 0x00000000
 WAIT_ABANDONED = 0x00000080
@@ -52,7 +53,11 @@ class SingleInstanceLock:
         k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         handle = k32.CreateMutexW(None, 0, f"Local\\{self.key}")
         if not handle:
-            # Sin mutex no bloqueamos el arranque (mejor dos instancias que ninguna).
+            if ctypes.get_last_error() == ERROR_ACCESS_DENIED:
+                # Una instancia ya abierta (p. ej. Administrador) posee el mutex.
+                self.acquired = False
+                return False
+            # Sin mutex por otra causa no bloqueamos el arranque (mejor dos instancias que ninguna).
             self.acquired = True
             return True
         self._handle = handle

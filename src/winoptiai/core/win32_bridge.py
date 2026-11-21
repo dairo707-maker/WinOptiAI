@@ -506,6 +506,33 @@ EXTERNAL_APP_NAMES: frozenset[str] = frozenset(
 _PROTECTED_CHILD_PIDS: set[int] = set()  # p. ej. el puente del actualizador
 
 
+def _kernel32_proc() -> ctypes.WinDLL:
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetProcessId.argtypes = [wintypes.HANDLE]
+    k32.GetProcessId.restype = wintypes.DWORD
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    k32.TerminateProcess.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    return k32
+
+
+def _protect_and_close_process_handle(handle: int | None) -> None:
+    """Register spawned process PID as protected from shutdown cleanup and close its handle."""
+    if not handle:
+        return
+    k32 = _kernel32_proc()
+    h = wintypes.HANDLE(int(handle))
+    try:
+        pid = int(k32.GetProcessId(h))
+        if pid:
+            protect_child_pid(pid)
+    finally:
+        k32.CloseHandle(h)
+
+
 def _track_child(handle: int, label: str) -> None:
     with _TRACK_LOCK:
         _TRACKED_CHILDREN.append((int(handle), label))
@@ -525,11 +552,7 @@ def shell_open_protected(file: str, params: str, directory: str | None = None, s
     info.nShow = show
     if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
         return False
-    if info.hProcess:
-        pid = ctypes.windll.kernel32.GetProcessId(info.hProcess)
-        if pid:
-            protect_child_pid(pid)
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+    _protect_and_close_process_handle(info.hProcess)
     return True
 
 
@@ -543,9 +566,10 @@ def running_tracked_children() -> list[str]:
     if not IS_WINDOWS:
         return []
     alive: list[str] = []
+    k32 = _kernel32_proc()
     with _TRACK_LOCK:
         for handle, label in _TRACKED_CHILDREN:
-            if ctypes.windll.kernel32.WaitForSingleObject(wintypes.HANDLE(handle), 0) == 0x102:  # WAIT_TIMEOUT
+            if k32.WaitForSingleObject(wintypes.HANDLE(handle), 0) == 0x102:  # WAIT_TIMEOUT
                 alive.append(label)
     return alive
 
@@ -554,7 +578,7 @@ def terminate_app_child_processes() -> dict[str, int]:
     """v0.5.9: cerrar TODO lo que inicio la app (consolas elevadas y procesos descendientes).
 
     Se respetan los programas externos abiertos para el usuario (navegador, Explorador,
-    Configuracion) y el actualizador. Devuelve cuantos se cerraron y cuantos no se pudieron.
+    Configuracion), el actualizador y el relanzamiento elevado UAC.
     """
     closed = 0
     failed = 0
@@ -562,7 +586,7 @@ def terminate_app_child_processes() -> dict[str, int]:
         with _TRACK_LOCK:
             tracked = list(_TRACKED_CHILDREN)
             _TRACKED_CHILDREN.clear()
-        k32 = ctypes.windll.kernel32
+        k32 = _kernel32_proc()
         for handle, _label in tracked:
             h = wintypes.HANDLE(handle)
             if k32.WaitForSingleObject(h, 0) == 0x102:
@@ -615,7 +639,13 @@ def terminate_app_child_processes() -> dict[str, int]:
     return {"closed": closed, "failed": failed}
 
 
-def run_elevated_command(executable: str, arguments: str) -> bool:
+def run_elevated_command(
+    executable: str,
+    arguments: str,
+    *,
+    track: bool = True,
+    directory: str | None = None,
+) -> bool:
     """Trigger native Windows UAC prompt cleanly without inheriting PyInstaller _MEI vars."""
     if not IS_WINDOWS:
         return False
@@ -637,18 +667,24 @@ def run_elevated_command(executable: str, arguments: str) -> bool:
     except (AttributeError, OSError):
         com_initialized = False
     try:
-        # v0.5.9: ShellExecuteExW con SEE_MASK_NOCLOSEPROCESS para conservar el proceso y poder
-        # cerrarlo cuando el usuario salga de WinOptiAI (cierre total de procesos derivados).
+        # v0.5.9: ShellExecuteExW con SEE_MASK_NOCLOSEPROCESS para conservar consolas elevadas
+        # (DISM/SFC/CHKDSK) y cerrarlas al salir. Cuando track=False (relanzamiento Admin de la
+        # propia app), se protege el PID nuevo para que el cierre saliente NO lo termine.
         info = _ShellExecuteInfoW()
         info.cbSize = ctypes.sizeof(_ShellExecuteInfoW)
         info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
         info.lpVerb = "runas"
         info.lpFile = executable
         info.lpParameters = arguments
+        if directory:
+            info.lpDirectory = directory
         info.nShow = 1
         ok = bool(ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)))
         if ok and info.hProcess:
-            _track_child(info.hProcess, f"{os.path.basename(executable)} {arguments[:80]}")
+            if track:
+                _track_child(info.hProcess, f"{os.path.basename(executable)} {arguments[:80]}")
+            else:
+                _protect_and_close_process_handle(info.hProcess)
         return ok
     finally:
         if com_initialized:

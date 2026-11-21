@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -30,8 +31,13 @@ from ..widgets import (
     SemaphoreDot,
     SharpMetricCell,
     StatusTag,
+    apply_table_tooltips,
+    configure_interactive_columns,
     configure_sortable_table,
 )
+
+if TYPE_CHECKING:
+    from ...core.sre_policy import SREPolicyEngine
 
 
 class OverviewView(QWidget):
@@ -40,9 +46,15 @@ class OverviewView(QWidget):
     trigger_ai_boost = Signal()
     jump_tab_requested = Signal(int)
 
-    def __init__(self, lang: str = "es", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        lang: str = "es",
+        parent: QWidget | None = None,
+        policy: SREPolicyEngine | None = None,
+    ) -> None:
         super().__init__(parent)
         self.lang = lang
+        self.policy = policy
         self._theme_mode = "dark"
         self._subsystems: dict[str, tuple[str, str]] = {
             "ram": ("OK", "ok"),
@@ -178,10 +190,12 @@ class OverviewView(QWidget):
         self.audit_table.setHorizontalHeaderLabels(["HORA", "ORIGEN", "ACCION", "RESULTADO"])
         configure_sortable_table(self.audit_table)
         self.audit_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.audit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.audit_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.audit_table,
+            [98, 108, 185, 480],
+            policy=self.policy,
+            storage_key="overview_audit_table",
+        )
         ap_layout.addWidget(self.audit_table)
         self.monitor_tabs.addTab(audit_page, tr("tab_audit", lang))
         self.monitor_tabs.currentChanged.connect(lambda _i: self.schedule_history_refresh(0))
@@ -359,5 +373,6 @@ class OverviewView(QWidget):
             self.audit_table.setItem(r, 1, QTableWidgetItem(str(item.get("actor", "")).upper()))
             self.audit_table.setItem(r, 2, QTableWidgetItem(str(item.get("action", ""))))
             self.audit_table.setItem(r, 3, QTableWidgetItem(str(item.get("detail", ""))))
+        apply_table_tooltips(self.audit_table)
         self.audit_table.setSortingEnabled(True)
         self.schedule_history_refresh()

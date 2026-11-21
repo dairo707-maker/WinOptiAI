@@ -10,7 +10,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -35,6 +34,8 @@ from ..widgets import (
     NumericTableItem,
     SectionBenefitStrip,
     SemaphoreDot,
+    apply_table_tooltips,
+    configure_interactive_columns,
     configure_sortable_table,
     semaphore_hex,
     set_button_role,
@@ -140,14 +141,12 @@ class StartupView(QWidget):
         )
         configure_sortable_table(self.startup_table)
         self.startup_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        hdr = self.startup_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        configure_interactive_columns(
+            self.startup_table,
+            [115, 220, 100, 120, 96, 122, 340],
+            policy=self.policy,
+            storage_key="startup_table",
+        )
         root.addWidget(self.startup_table, stretch=1)
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
@@ -270,6 +269,7 @@ class StartupView(QWidget):
             r_it = QTableWidgetItem(it.reason)
             r_it.setToolTip(f"{it.reason}\nComando: {it.command}")
             self.startup_table.setItem(r, 6, r_it)
+        apply_table_tooltips(self.startup_table)
         self.startup_table.setSortingEnabled(True)
 
         if self.items:

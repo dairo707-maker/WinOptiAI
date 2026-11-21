@@ -12,7 +12,7 @@ import subprocess
 from typing import Callable
 
 from ..core.safety_guard import is_internal_app_path, is_protected_path
-from ..core.usage_telemetry import file_last_used_ts, lookup_usage_ts, read_windows_app_usage_map
+from ..core.usage_telemetry import lookup_usage_ts, read_windows_app_usage_map
 from ..core.win32_bridge import IS_WINDOWS, is_user_admin, run_elevated_command
 
 
@@ -60,6 +60,7 @@ class InstalledApp:
     last_used_ts: float = 0.0
     protected_reason: str = ""
     scope: str = "Usuario"  # "Usuario" | "Sistema"
+    install_date_ts: float = 0.0
 
 
 def is_protected_application(name: str, publisher: str = "", install_location: str = "") -> str:
@@ -109,25 +110,18 @@ def _parse_install_date(raw: str) -> float:
     return 0.0
 
 
-def _probe_dir_last_exe_ts(install_dir: str) -> float:
-    if not install_dir:
-        return 0.0
-    p = Path(install_dir)
-    if not p.exists() or not p.is_dir():
-        return 0.0
-    best = 0.0
-    try:
-        for entry in os.scandir(p):
-            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".exe"):
-                try:
-                    ts = file_last_used_ts(entry.stat(follow_symlinks=False))
-                    if ts > best:
-                        best = ts
-                except OSError:
-                    continue
-    except OSError:
-        pass
-    return best
+def _extract_uninstall_dir(uninstall_cmd: str) -> str:
+    raw = (uninstall_cmd or "").strip()
+    if not raw or "msiexec" in raw.lower():
+        return ""
+    m = re.search(r'([A-Za-z]:[^"\r\n*?<>|]*?\.exe)', raw, re.IGNORECASE)
+    if not m:
+        return ""
+    p = Path(m.group(1).strip())
+    low_parent = str(p.parent).lower()
+    if low_parent.startswith(r"c:\windows\system32") or "package cache" in low_parent:
+        return ""
+    return str(p.parent)
 
 
 def list_installed_apps(progress_cb: Callable[[int, str], None] | None = None) -> list[InstalledApp]:
@@ -183,18 +177,18 @@ def list_installed_apps(progress_cb: Callable[[int, str], None] | None = None) -
 
                         version = str(_val("DisplayVersion", "") or "").strip() or "--"
                         publisher = str(_val("Publisher", "") or "").strip()
-                        loc = str(_val("InstallLocation", "") or "").strip()
+                        loc = str(_val("InstallLocation", "") or "").strip().strip('"').strip("'")
                         icon_raw = str(_val("DisplayIcon", "") or "").strip()
                         if not loc and icon_raw:
                             loc = _extract_icon_dir(icon_raw)
+                        if not loc and uninstall_cmd:
+                            loc = _extract_uninstall_dir(uninstall_cmd)
                         est_kb = _val("EstimatedSize", 0)
                         size_bytes = int(est_kb) * 1024 if isinstance(est_kb, int) and est_kb > 0 else 0
 
+                        # Real execution telemetry only (never st_atime, which Defender/indexers touch).
                         ts = lookup_usage_ts(usage_map, name=name, command=icon_raw, install_dir=loc)
-                        if ts <= 0.0 and loc:
-                            ts = _probe_dir_last_exe_ts(loc)
-                        if ts <= 0.0:
-                            ts = _parse_install_date(str(_val("InstallDate", "") or ""))
+                        install_ts = _parse_install_date(str(_val("InstallDate", "") or ""))
 
                         prot = is_protected_application(name, publisher, loc)
                         norm_k = name.lower()
@@ -210,9 +204,13 @@ def list_installed_apps(progress_cb: Callable[[int, str], None] | None = None) -
                             last_used_ts=ts,
                             protected_reason=prot,
                             scope=scope,
+                            install_date_ts=install_ts,
                         )
                         existing = seen.get(norm_k)
                         if existing is None or (candidate.last_used_ts > existing.last_used_ts) or (
+                            candidate.last_used_ts == existing.last_used_ts
+                            and candidate.install_date_ts > existing.install_date_ts
+                        ) or (
                             candidate.size_bytes > existing.size_bytes and existing.size_bytes == 0
                         ):
                             seen[norm_k] = candidate
@@ -222,7 +220,13 @@ def list_installed_apps(progress_cb: Callable[[int, str], None] | None = None) -
             root_key.Close()
 
     apps = list(seen.values())
-    apps.sort(key=lambda a: (0 if a.available_version else 1, -a.last_used_ts, a.name.lower()))
+    apps.sort(
+        key=lambda a: (
+            0 if a.available_version else 1,
+            -(a.last_used_ts if a.last_used_ts > 0 else a.install_date_ts),
+            a.name.lower(),
+        )
+    )
     if progress_cb:
         progress_cb(100, f"{len(apps)} aplicaciones detectadas")
     return apps
@@ -368,7 +372,13 @@ def check_app_updates_winget(
             )
             matched += 1
 
-    apps.sort(key=lambda a: (0 if a.available_version else 1, -a.last_used_ts, a.name.lower()))
+    apps.sort(
+        key=lambda a: (
+            0 if a.available_version else 1,
+            -(a.last_used_ts if a.last_used_ts > 0 else a.install_date_ts),
+            a.name.lower(),
+        )
+    )
     if progress_cb:
         progress_cb(100, f"{matched} actualizacion(es) disponible(s)")
     msg = (

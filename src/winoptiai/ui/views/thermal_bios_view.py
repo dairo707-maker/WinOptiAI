@@ -7,7 +7,6 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -36,7 +35,17 @@ from ...thermal_bios.thermal_controller import (
 )
 from ..svg_icons import load_svg_icon
 from ...core.help_catalog import TOOLTIPS
-from ..widgets import FlowLayout, GlassPanel, SectionBenefitStrip, SemaphoreDot, StatusTag, configure_sortable_table, semaphore_hex
+from ..widgets import (
+    FlowLayout,
+    GlassPanel,
+    SectionBenefitStrip,
+    SemaphoreDot,
+    StatusTag,
+    apply_table_tooltips,
+    configure_interactive_columns,
+    configure_sortable_table,
+    semaphore_hex,
+)
 
 
 # Acciones que lanzan una consola PowerShell elevada desacoplada (seguimiento informativo).
@@ -203,13 +212,13 @@ class ThermalBiosView(QWidget):
             ["SUBSISTEMA", "ESTADO", "REINICIO", "DIAGNOSTICO", "ACCION AUTOMATICA"]
         )
         configure_sortable_table(self.rec_table)
+        configure_interactive_columns(
+            self.rec_table,
+            [130, 108, 108, 370, 190],
+            policy=self.policy,
+            storage_key="thermal_rec_table",
+        )
         self.rec_table.setWordWrap(True)
-        hdr = self.rec_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self.rec_table, stretch=1)
 
         self._highlight_profile_button(self.policy.config.active_thermal_profile)
@@ -451,6 +460,7 @@ class ThermalBiosView(QWidget):
             btn.setEnabled(item.get("action_id", "") not in self._running_actions)
             btn.clicked.connect(lambda _=False, rec=dict(item): self._run_recommendation(rec))
             self.rec_table.setCellWidget(r, 4, btn)
+        apply_table_tooltips(self.rec_table)
         self.rec_table.setSortingEnabled(True)
         self.rec_table.resizeRowsToContents()
 

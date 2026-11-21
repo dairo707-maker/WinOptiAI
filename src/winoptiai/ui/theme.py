@@ -495,6 +495,12 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border-bottom: 1px solid {p["border_hairline"]};
     }}
 
+    QHeaderView::section:hover {{
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
+        border-right: 1px solid {p["accent"]};
+    }}
+
     QProgressBar {{
         background-color: {p["border_hairline"]};
         border: none;
@@ -562,6 +568,30 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
+    }}
+
+    QScrollBar:horizontal {{
+        background: transparent;
+        height: 9px;
+        margin: 0px;
+    }}
+
+    QScrollBar::handle:horizontal {{
+        background: {p["border_strong"]};
+        min-width: 28px;
+    }}
+
+    QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover {{
+        background: {p["accent"]};
+    }}
+
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        width: 0px;
+    }}
+
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: transparent;
     }}
 
     QMenu {{

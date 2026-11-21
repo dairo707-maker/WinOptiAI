@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMargins, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import QMargins, QPoint, QPointF, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLayout,
     QLayoutItem,
@@ -15,10 +19,17 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from .svg_icons import load_svg_pixmap
+from .theme import MONO_FONT_FAMILY, get_palette
+
+if TYPE_CHECKING:
+    from ..core.sre_policy import SREPolicyEngine
 
 
 class FlowLayout(QLayout):
@@ -307,16 +318,192 @@ class NumericTreeItem(QTreeWidgetItem):
 
 
 def configure_sortable_table(table: QTableWidget) -> None:
-    """Apply consistent non-editable row-selection and clickable column sorting."""
+    """Apply consistent non-editable row-selection, pixel scroll, eliding, and column sorting."""
     table.verticalHeader().setVisible(False)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     table.setAlternatingRowColors(True)
     table.setSortingEnabled(True)
+    table.setWordWrap(False)
+    table.setTextElideMode(Qt.TextElideMode.ElideRight)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     table.horizontalHeader().setSortIndicatorShown(True)
+    table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
 
-from .svg_icons import load_svg_pixmap
-from .theme import MONO_FONT_FAMILY, get_palette
+
+def _header_labels_of(view: QTableWidget | QTreeWidget, count: int) -> list[str]:
+    labels: list[str] = []
+    if isinstance(view, QTableWidget):
+        for i in range(count):
+            it = view.horizontalHeaderItem(i)
+            labels.append(it.text() if it is not None else "")
+    else:
+        it = view.headerItem()
+        for i in range(count):
+            labels.append(it.text(i) if it is not None else "")
+    return labels
+
+
+def _auto_fit_column(view: QTableWidget | QTreeWidget, col: int) -> None:
+    hdr = view.horizontalHeader() if isinstance(view, QTableWidget) else view.header()
+    if col < 0 or col >= hdr.count():
+        return
+    mins: list[int] = list(getattr(hdr, "_winopti_col_mins", []))
+    col_min = mins[col] if col < len(mins) else 64
+    fm = QFontMetrics(view.font())
+    best = col_min
+    if isinstance(view, QTableWidget):
+        limit = min(view.rowCount(), 300)
+        for r in range(limit):
+            it = view.item(r, col)
+            if it is not None:
+                txt = it.text()
+                if txt:
+                    best = max(best, fm.horizontalAdvance(txt) + 28)
+    else:
+        # Measure top-level rows and first-level children for tree views (indentation on col 0).
+        indent = 32 if col == 0 else 0
+        for i in range(min(view.topLevelItemCount(), 200)):
+            it = view.topLevelItem(i)
+            if it is not None:
+                txt = it.text(col)
+                if txt:
+                    best = max(best, fm.horizontalAdvance(txt) + 28 + indent)
+                if it.isExpanded():
+                    for c_i in range(min(it.childCount(), 100)):
+                        ch = it.child(c_i)
+                        if ch is not None and ch.text(col):
+                            best = max(best, fm.horizontalAdvance(ch.text(col)) + 28 + indent + 20)
+    hdr.resizeSection(col, max(col_min, min(best, 620)))
+
+
+def configure_interactive_columns(
+    view: QTableWidget | QTreeWidget,
+    default_widths: list[int],
+    *,
+    policy: SREPolicyEngine | None = None,
+    storage_key: str = "",
+    min_widths: list[int] | None = None,
+) -> None:
+    """Enable manual dragging + horizontal scroll + header safety minimums + optional width persistence."""
+    view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    if isinstance(view, QTreeWidget):
+        view.setTextElideMode(Qt.TextElideMode.ElideRight)
+
+    hdr = view.horizontalHeader() if isinstance(view, QTableWidget) else view.header()
+    count = hdr.count()
+    if count <= 0:
+        return
+
+    hdr.setStretchLastSection(False)
+    hdr.setMinimumSectionSize(54)
+
+    fm_hdr = QFontMetrics(hdr.font())
+    mono_hdr_font = QFont(MONO_FONT_FAMILY)
+    mono_hdr_font.setPixelSize(11)
+    fm_mono = QFontMetrics(mono_hdr_font)
+    labels = _header_labels_of(view, count)
+
+    col_mins: list[int] = []
+    for i in range(count):
+        lbl = labels[i]
+        adv = max(fm_hdr.horizontalAdvance(lbl), fm_mono.horizontalAdvance(lbl))
+        hdr_min = adv + int(len(lbl) * 1.1) + 38
+        floor_w = min_widths[i] if min_widths and i < len(min_widths) else 64
+        col_mins.append(max(hdr_min, floor_w))
+
+    pending_timer = getattr(hdr, "_winopti_save_timer", None)
+    if pending_timer is not None:
+        pending_timer.stop()
+
+    hdr._winopti_restoring = True
+    try:
+        hdr._winopti_storage_key = storage_key
+        hdr._winopti_policy = policy
+        hdr._winopti_col_mins = col_mins
+
+        saved = policy.get_table_widths(storage_key) if (policy is not None and storage_key) else None
+        for i in range(count):
+            hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+            col_min = col_mins[i]
+            if saved is not None and len(saved) == count:
+                w = max(col_min, min(int(saved[i]), 1600))
+            else:
+                base_w = default_widths[i] if i < len(default_widths) else 120
+                w = max(base_w, col_min)
+            hdr.resizeSection(i, w)
+    finally:
+        hdr._winopti_restoring = False
+
+    if not getattr(hdr, "_winopti_interactive_wired", False):
+        save_timer = QTimer(hdr)
+        save_timer.setSingleShot(True)
+        save_timer.setInterval(350)
+
+        def _flush_save() -> None:
+            pol = getattr(hdr, "_winopti_policy", None)
+            skey = str(getattr(hdr, "_winopti_storage_key", "") or "")
+            if pol is None or not skey or hdr.count() <= 0:
+                return
+            pol.set_table_widths(skey, [hdr.sectionSize(idx) for idx in range(hdr.count())])
+
+        def _on_resized(_logical: int, _old: int, _new: int) -> None:
+            if getattr(hdr, "_winopti_restoring", False):
+                return
+            save_timer.start()
+
+        save_timer.timeout.connect(_flush_save)
+        hdr.sectionResized.connect(_on_resized)
+        hdr.sectionHandleDoubleClicked.connect(lambda idx: _auto_fit_column(view, idx))
+        hdr._winopti_save_timer = save_timer
+        hdr._winopti_save_fn = _flush_save
+        hdr._winopti_interactive_wired = True
+
+
+def flush_column_width_saves(view: QTableWidget | QTreeWidget) -> None:
+    """Flush any pending debounced column-width save immediately (useful in tests)."""
+    hdr = view.horizontalHeader() if isinstance(view, QTableWidget) else view.header()
+    timer = getattr(hdr, "_winopti_save_timer", None)
+    fn = getattr(hdr, "_winopti_save_fn", None)
+    if timer is not None:
+        timer.stop()
+    if callable(fn):
+        fn()
+
+
+def apply_table_tooltips(table: QTableWidget) -> None:
+    """Attach full-text hover tooltips to table cells that lack an explicit custom tooltip."""
+    rows = table.rowCount()
+    cols = table.columnCount()
+    for r in range(rows):
+        for c in range(cols):
+            it = table.item(r, c)
+            if it is not None and it.text() and not it.toolTip():
+                it.setToolTip(it.text())
+
+
+def _apply_tree_item_tooltips(item: QTreeWidgetItem, cols: int) -> None:
+    for c in range(cols):
+        txt = item.text(c)
+        if txt and not item.toolTip(c):
+            item.setToolTip(c, txt)
+    for idx in range(item.childCount()):
+        ch = item.child(idx)
+        if ch is not None:
+            _apply_tree_item_tooltips(ch, cols)
+
+
+def apply_tree_tooltips(tree: QTreeWidget) -> None:
+    """Attach full-text hover tooltips to loaded tree items that lack custom tooltips."""
+    cols = tree.columnCount()
+    for i in range(tree.topLevelItemCount()):
+        it = tree.topLevelItem(i)
+        if it is not None:
+            _apply_tree_item_tooltips(it, cols)
 
 
 class GlassPanel(QFrame):

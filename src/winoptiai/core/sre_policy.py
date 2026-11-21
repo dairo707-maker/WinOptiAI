@@ -52,6 +52,30 @@ class SREPolicyConfig:
     auto_check_updates: bool = True
     last_notified_version: str = ""
     last_update_check_ts: float = 0.0
+    table_column_widths: dict[str, list[int]] = field(default_factory=dict)
+
+
+def _sanitize_table_widths(raw: object) -> dict[str, list[int]]:
+    if not isinstance(raw, dict):
+        return {}
+    clean: dict[str, list[int]] = {}
+    for key, vals in raw.items():
+        if not isinstance(key, str) or not key or not isinstance(vals, list):
+            continue
+        parsed: list[int] = []
+        valid = True
+        for w in vals:
+            if isinstance(w, bool) or not isinstance(w, (int, float)):
+                valid = False
+                break
+            iw = int(w)
+            if iw <= 0:
+                valid = False
+                break
+            parsed.append(max(20, min(iw, 2000)))
+        if valid and parsed:
+            clean[key] = parsed
+    return clean
 
 
 class SREPolicyEngine:
@@ -81,6 +105,7 @@ class SREPolicyEngine:
                 )
             )
             defaults.update({k: v for k, v in raw.items() if k in defaults})
+            defaults["table_column_widths"] = _sanitize_table_widths(defaults.get("table_column_widths"))
             return SREPolicyConfig(**defaults)
         except (OSError, json.JSONDecodeError, TypeError):
             return SREPolicyConfig()
@@ -92,6 +117,23 @@ class SREPolicyEngine:
             self.config_path,
             json.dumps(asdict(self.config), indent=2, ensure_ascii=False),
         )
+
+    def get_table_widths(self, table_key: str) -> list[int] | None:
+        """Return persisted column widths for ``table_key`` when present."""
+        if not table_key:
+            return None
+        vals = self.config.table_column_widths.get(table_key)
+        return list(vals) if vals else None
+
+    def set_table_widths(self, table_key: str, widths: list[int]) -> None:
+        """Persist user-adjusted column widths for ``table_key`` in config.json."""
+        if not table_key or not widths:
+            return
+        cleaned = [max(20, min(int(w), 2000)) for w in widths]
+        if self.config.table_column_widths.get(table_key) == cleaned:
+            return
+        self.config.table_column_widths[table_key] = cleaned
+        self.save_config()
 
     def evaluate_ram_pressure(
         self,

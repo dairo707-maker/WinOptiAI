@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -358,7 +359,7 @@ class MainWindow(QMainWindow):
 
         # Stacked Views
         self.stack = QStackedWidget()
-        self.overview_view = OverviewView(lang=lang)
+        self.overview_view = OverviewView(lang=lang, policy=self.policy)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
         self.overview_view.jump_tab_requested.connect(self._switch_tab)
         self.overview_view.attach_metrics(self.metrics_history, lambda: self.policy.config.ram_threshold_gb)
@@ -640,11 +641,25 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         if getattr(sys, "frozen", False):
-            ok = run_elevated_command(sys.executable, ELEVATED_RELAUNCH_ARG)
+            work_dir = str(Path(sys.executable).resolve().parent)
+            ok = run_elevated_command(
+                sys.executable,
+                ELEVATED_RELAUNCH_ARG,
+                track=False,
+                directory=work_dir,
+            )
         else:
-            ok = run_elevated_command(sys.executable, f"-m winoptiai.app {ELEVATED_RELAUNCH_ARG}")
+            work_dir = os.getcwd()
+            ok = run_elevated_command(
+                sys.executable,
+                f"-m winoptiai.app {ELEVATED_RELAUNCH_ARG}",
+                track=False,
+                directory=work_dir,
+            )
         if ok:
             self._quit_app()
+        else:
+            self._set_status("Elevacion UAC cancelada o no autorizada.")
 
     def _toggle_theme(self) -> None:
         new_mode = "light" if self.policy.config.theme_mode == "dark" else "dark"

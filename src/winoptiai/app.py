@@ -92,7 +92,7 @@ def main() -> int:
     # pisar session_lock.json de la instancia en curso. Tras "Elevar Admin" se espera a que la
     # instancia anterior termine de cerrarse.
     instance_lock = SingleInstanceLock()
-    if not instance_lock.acquire(wait_ms=20000 if ELEVATED_RELAUNCH_ARG in sys.argv else 0):
+    if not instance_lock.acquire(wait_ms=30000 if ELEVATED_RELAUNCH_ARG in sys.argv else 0):
         _notify_running_instance(instance_lock.key)
         return 0
 

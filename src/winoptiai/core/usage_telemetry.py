@@ -2,15 +2,86 @@
 
 from __future__ import annotations
 
+import codecs
 from datetime import datetime
 import os
 from pathlib import Path
+import re
 import time
 import psutil
 
 from .win32_bridge import IS_WINDOWS
 
 _EPOCH_DIFF_1601_1970 = 116_444_736_000_000_000  # 100-ns intervals between 1601-01-01 and 1970-01-01
+_NORM_PREFIX = "__norm:"
+
+_GENERIC_APP_TOKENS: frozenset[str] = frozenset(
+    {
+        "microsoft",
+        "windows",
+        "seiko",
+        "epson",
+        "hp",
+        "lenovo",
+        "intel",
+        "amd",
+        "nvidia",
+        "realtek",
+        "adobe",
+        "google",
+        "python",
+        "java",
+        "oracle",
+        "apple",
+        "arcgis",
+        "office",
+        "autodesk",
+        "jetbrains",
+        "system",
+        "update",
+        "updater",
+        "setup",
+        "driver",
+        "drivers",
+        "runtime",
+        "service",
+        "helper",
+        "plugin",
+        "launcher",
+        "installer",
+        "tools",
+        "common",
+        "program",
+        "software",
+        "client",
+        "desktop",
+        "viewer",
+        "reader",
+        "player",
+        "browser",
+        "editor",
+        "ide",
+        "app",
+    }
+)
+
+_AUMID_NOISE_SEGMENTS: frozenset[str] = frozenset(
+    {"com", "org", "net", "io", "app", "desktop", "exe", "bin", "electron", "win", "win32", "win64", "x64", "user"}
+)
+
+_BROAD_INSTALL_DIRS: frozenset[str] = frozenset(
+    {
+        r"c:\windows",
+        r"c:\windows\system32",
+        r"c:\windows\syswow64",
+        r"c:\program files",
+        r"c:\program files (x86)",
+        r"c:\program files\common files",
+        r"c:\program files (x86)\common files",
+        r"c:\programdata",
+        r"c:\users",
+    }
+)
 
 
 def format_last_used(ts: float | None, now: float | None = None) -> str:
@@ -49,6 +120,23 @@ def format_last_used_time(ts: float | None, now: float | None = None) -> str:
     if dt_val.date() == dt_now.date():
         return f"Hoy {dt_val.strftime('%H:%M')}"
     return format_last_used(val, now=cur)
+
+
+def format_app_last_used(
+    last_used_ts: float | None,
+    install_date_ts: float | None = 0.0,
+    now: float | None = None,
+) -> str:
+    """Format real execution timestamp, falling back honestly to 'Inst. YYYY-MM-DD' or 'Sin registro'."""
+    if last_used_ts is not None and float(last_used_ts) > 0.0:
+        return format_last_used(last_used_ts, now=now)
+    if install_date_ts is not None and float(install_date_ts) > 0.0:
+        try:
+            dt_inst = datetime.fromtimestamp(float(install_date_ts))
+            return f"Inst. {dt_inst.strftime('%Y-%m-%d')}"
+        except (OSError, OverflowError, ValueError):
+            pass
+    return "Sin registro"
 
 
 def file_last_used_ts(st: os.stat_result | None) -> float:
@@ -92,6 +180,61 @@ def filetime_bytes_to_epoch(raw: bytes) -> float:
     return ts
 
 
+def _norm_alnum(text: str) -> str:
+    """Normalize text for exact app matching while keeping '++' distinct from plain names."""
+    s = (text or "").lower().replace("++", "plusplus")
+    s = re.sub(r"[®™©]", " ", s)
+    return re.sub(r"[^a-z0-9]+", "", s)
+
+
+def _known_folder_map() -> dict[str, str]:
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    pf64 = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
+    pf86 = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    roaming = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    profile = os.environ.get("USERPROFILE") or str(Path.home())
+    progdata = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+    return {
+        "{6D809377-6AF0-444B-8957-A3773F02200E}": pf64,
+        "{905E63B6-C1BF-494E-B29C-65B732D3D21A}": os.environ.get("ProgramFiles") or pf64,
+        "{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}": pf86,
+        "{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}": local,
+        "{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D}": roaming,
+        "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}": f"{windir}\\System32",
+        "{F38BF404-1D43-42F2-9305-67DE0B28FC23}": windir,
+        "{5E6C858F-0E22-4760-9AFE-EA3317B67173}": profile,
+        "{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}": f"{progdata}\\Microsoft\\Windows\\Start Menu\\Programs",
+        "{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}": f"{roaming}\\Microsoft\\Windows\\Start Menu\\Programs",
+    }
+
+
+def decode_userassist_name(encoded: str) -> str:
+    """ROT13-decode a UserAssist registry value name and expand standard KNOWNFOLDERID prefixes."""
+    if not encoded:
+        return ""
+    dec = codecs.decode(encoded, "rot_13").replace("/", "\\").strip()
+    if dec.startswith("{") and len(dec) >= 38:
+        prefix = dec[:38].upper()
+        base_dir = _known_folder_map().get(prefix)
+        if base_dir:
+            rest = dec[38:].lstrip("\\")
+            return f"{base_dir.rstrip(chr(92))}\\{rest}" if rest else base_dir
+    return dec
+
+
+def parse_userassist_blob(raw: bytes) -> float:
+    """Extract Windows last-run FILETIME (bytes 60..68) from a 72+ byte UserAssist v5 value."""
+    if not isinstance(raw, (bytes, bytearray)) or len(raw) < 72:
+        return 0.0
+    return filetime_bytes_to_epoch(raw[60:68])
+
+
+def _store_ts(usage: dict[str, float], key: str, ts: float) -> None:
+    if key and ts > usage.get(key, 0.0):
+        usage[key] = ts
+
+
 def _record_usage_key(usage: dict[str, float], name_or_path: str, ts: float) -> None:
     if ts <= 0.0 or not name_or_path:
         return
@@ -101,12 +244,52 @@ def _record_usage_key(usage: dict[str, float], name_or_path: str, ts: float) -> 
     base = clean.rsplit("\\", 1)[-1]
     stem = base[:-4] if base.endswith(".exe") else base
     for key in (clean, base, stem):
-        if key and ts > usage.get(key, 0.0):
-            usage[key] = ts
+        _store_ts(usage, key, ts)
+    norm = _norm_alnum(stem)
+    if len(norm) >= 4:
+        _store_ts(usage, f"{_NORM_PREFIX}{norm}", ts)
+
+
+def _record_userassist_entry(usage: dict[str, float], decoded_name: str, ts: float) -> None:
+    if ts <= 0.0 or not decoded_name:
+        return
+    up = decoded_name.upper()
+    if up.startswith(("UEME_", "MICROSOFT.AUTOGENERATED.")):
+        return
+    low = decoded_name.lower()
+    if "\\" not in low and "/" not in low:
+        # AUMID / AppUserModelId (e.g. 'com.mdhero.app', 'electron.app.Antigravity', 'Pkg_hash!App')
+        no_bang = low.split("!", 1)[0]
+        no_hash = re.sub(r"_[a-z0-9]{13}$", "", no_bang)
+        norm_full = _norm_alnum(no_hash)
+        if len(norm_full) >= 4:
+            _store_ts(usage, f"{_NORM_PREFIX}{norm_full}", ts)
+        if "." in no_hash:
+            parts = [p for p in no_hash.split(".") if p and p not in _AUMID_NOISE_SEGMENTS]
+            if parts:
+                joined = _norm_alnum("".join(parts))
+                if len(joined) >= 4:
+                    _store_ts(usage, f"{_NORM_PREFIX}{joined}", ts)
+                tail = _norm_alnum(parts[-1])
+                if len(tail) >= 4 and tail not in _GENERIC_APP_TOKENS:
+                    _store_ts(usage, f"{_NORM_PREFIX}{tail}", ts)
+        return
+
+    clean = low.replace("/", "\\").strip()
+    base = clean.rsplit("\\", 1)[-1]
+    if base.endswith(".lnk"):
+        lnk_stem = base[:-4].strip()
+        if lnk_stem:
+            _store_ts(usage, lnk_stem, ts)
+            norm_lnk = _norm_alnum(lnk_stem)
+            if len(norm_lnk) >= 4:
+                _store_ts(usage, f"{_NORM_PREFIX}{norm_lnk}", ts)
+        return
+    _record_usage_key(usage, clean, ts)
 
 
 def read_windows_app_usage_map() -> dict[str, float]:
-    """Read last-executed timestamps by exe/path from Windows BAM, Prefetch, and active processes."""
+    """Read last-executed timestamps from live processes, BAM, HKCU UserAssist (no UAC), and Prefetch."""
     usage: dict[str, float] = {}
     now = time.time()
 
@@ -126,10 +309,10 @@ def read_windows_app_usage_map() -> dict[str, float]:
     if not IS_WINDOWS:
         return usage
 
+    import winreg
+
     # 2. Windows Background Activity Moderator (BAM) registry timestamps
     try:
-        import winreg
-
         for subroot in (
             r"SYSTEM\CurrentControlSet\Services\bam\State\UserSettings",
             r"SYSTEM\CurrentControlSet\Services\dam\State\UserSettings",
@@ -163,6 +346,36 @@ def read_windows_app_usage_map() -> dict[str, float]:
     except Exception:
         pass
 
+    # 2.5 Windows Explorer UserAssist (HKCU - fully readable without UAC elevation)
+    try:
+        ua_root = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, ua_root) as rk:
+            g_idx = 0
+            while True:
+                try:
+                    guid = winreg.EnumKey(rk, g_idx)
+                    g_idx += 1
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(rk, rf"{guid}\Count") as ck:
+                        v_idx = 0
+                        while True:
+                            try:
+                                v_name, v_val, _v_type = winreg.EnumValue(ck, v_idx)
+                                v_idx += 1
+                            except OSError:
+                                break
+                            ts = parse_userassist_blob(v_val)
+                            if ts > 0.0:
+                                dec = decode_userassist_name(str(v_name))
+                                if dec:
+                                    _record_userassist_entry(usage, dec, ts)
+                except OSError:
+                    continue
+    except Exception:
+        pass
+
     # 3. Windows Prefetch (*.pf mtime reflects recent launches if readable)
     try:
         prefetch_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Prefetch"
@@ -181,6 +394,35 @@ def read_windows_app_usage_map() -> dict[str, float]:
     return usage
 
 
+def _extract_exe_candidates(command: str) -> list[str]:
+    clean = (command or "").strip().strip('"').strip("'")
+    if not clean or ".exe" not in clean.lower():
+        return []
+    m = re.search(r'([A-Za-z]:[^"\r\n*?<>|]*?\.exe|[^\\/\s"\'\r\n]+?\.exe)', clean, re.IGNORECASE)
+    if not m:
+        return []
+    exe_token = m.group(1).replace("/", "\\").strip()
+    base = exe_token.rsplit("\\", 1)[-1].lower()
+    if not base or base in ("uninstall.exe", "unins000.exe", "uninst.exe", "setup.exe", "msiexec.exe"):
+        return []
+    stem = base[:-4] if base.endswith(".exe") else base
+    out = [base, stem]
+    norm = _norm_alnum(stem)
+    if len(norm) >= 4:
+        out.append(f"{_NORM_PREFIX}{norm}")
+    return out
+
+
+def _clean_app_display_name(name: str) -> str:
+    clean = (name or "").strip().lower()
+    if not clean:
+        return ""
+    clean = re.sub(r"[®™©]", " ", clean)
+    clean = re.sub(r"\([^)]*\)", " ", clean)
+    clean = re.sub(r"\bv?\d+(?:\.\d+){1,4}\b", " ", clean)
+    return re.sub(r"\s+", " ", clean).strip(" -_")
+
+
 def lookup_usage_ts(
     usage_map: dict[str, float],
     *,
@@ -188,38 +430,53 @@ def lookup_usage_ts(
     command: str = "",
     install_dir: str = "",
 ) -> float:
-    """Resolve best matching execution/last-used timestamp for an app or startup entry."""
+    """Resolve real execution timestamp for an app/startup item without vendor false-positives."""
     best = 0.0
-    candidates: list[str] = []
-    if command:
-        cmd_clean = command.strip().strip('"').strip("'")
-        exe_token = cmd_clean.split(" -")[0].split(" /")[0].strip('"')
-        if ".exe" in exe_token.lower():
-            idx = exe_token.lower().find(".exe") + 4
-            exe_token = exe_token[:idx].strip('"').strip()
-        if exe_token:
-            base = exe_token.replace("/", "\\").rsplit("\\", 1)[-1].lower()
-            candidates.extend([base, base.removesuffix(".exe")])
+    candidates = _extract_exe_candidates(command)
+
     if name:
         nlow = name.strip().lower()
-        candidates.extend([nlow, f"{nlow}.exe", nlow.split(" ")[0]])
+        clean_name = _clean_app_display_name(name)
+        for nm in (nlow, clean_name):
+            if not nm:
+                continue
+            candidates.extend([nm, f"{nm}.exe"])
+            norm = _norm_alnum(nm)
+            if len(norm) >= 4:
+                candidates.append(f"{_NORM_PREFIX}{norm}")
+
+        # Strip generic trailing role word ('Antigravity IDE' -> 'antigravity')
+        words = [w for w in clean_name.split() if w]
+        if len(words) == 2 and words[1] in _GENERIC_APP_TOKENS and words[0] not in _GENERIC_APP_TOKENS:
+            w0_norm = _norm_alnum(words[0])
+            if len(w0_norm) >= 4:
+                candidates.append(f"{_NORM_PREFIX}{w0_norm}")
+                candidates.extend([words[0], f"{words[0]}.exe"])
+        if len(words) >= 3 and words[0] in ("microsoft", "google", "adobe"):
+            tail_name = " ".join(words[1:])
+            tail_norm = _norm_alnum(tail_name)
+            if len(tail_norm) >= 6:
+                candidates.extend([tail_name, f"{_NORM_PREFIX}{tail_norm}"])
 
     for cand in candidates:
         ts = usage_map.get(cand, 0.0)
         if ts > best:
             best = ts
 
-    # Match against exe name or install folder inside BAM full paths
-    if best == 0.0 and (install_dir or candidates):
-        norm_dir = install_dir.replace("/", "\\").lower().rstrip("\\")
+    # Full install_dir path match inside BAM (\Device\HarddiskVolume*\...) or expanded UserAssist paths
+    norm_dir = install_dir.strip().strip('"').strip("'").replace("/", "\\").lower().rstrip("\\")
+    if best == 0.0 and norm_dir and norm_dir not in _BROAD_INSTALL_DIRS and norm_dir.count("\\") >= 2:
+        dir_prefix = norm_dir + "\\"
+        tail_dir = norm_dir[2:] + "\\" if len(norm_dir) >= 3 and norm_dir[1] == ":" else ""
         for key, ts in usage_map.items():
-            if norm_dir and len(norm_dir) >= 8 and norm_dir in key and ts > best:
-                best = ts
+            if key.startswith(_NORM_PREFIX) or "\\" not in key:
                 continue
-            for cand in candidates:
-                if len(cand) >= 4 and (key == cand or key.endswith("\\" + cand)):
-                    if ts > best:
-                        best = ts
+            if key.startswith(dir_prefix) or (tail_dir and tail_dir in key):
+                base = key.rsplit("\\", 1)[-1]
+                if base in ("uninstall.exe", "unins000.exe", "uninst.exe", "setup.exe"):
+                    continue
+                if ts > best:
+                    best = ts
     return best
 
 
