@@ -53,6 +53,12 @@ class SREPolicyConfig:
     last_notified_version: str = ""
     last_update_check_ts: float = 0.0
     table_column_widths: dict[str, list[int]] = field(default_factory=dict)
+    # v0.6.3 Vigia diario: resumen de actualizaciones y temporales a horas fijas (solo lectura).
+    daily_watch_enabled: bool = True
+    daily_watch_hours: list[int] = field(default_factory=lambda: [9, 14, 19])
+    daily_watch_last_slot: str = ""
+    daily_watch_last_signature: str = ""
+    daily_watch_last_sent_ts: float = 0.0
 
 
 def _sanitize_table_widths(raw: object) -> dict[str, list[int]]:

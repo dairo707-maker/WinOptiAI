@@ -430,6 +430,68 @@ def upgrade_app_winget(
         return False, f"Error actualizando {app.name}: {exc}"
 
 
+# v0.6.3: "Actualizar todas" nunca toca entornos de desarrollo ni saltos de version mayor:
+# cambian rutas, paquetes y compatibilidad de proyectos (leccion del incidente del 17/11).
+_BULK_SKIP_KEYWORDS: tuple[str, ...] = (
+    "anaconda", "miniconda", "python", "rtools", "r for windows", "node.js", "nodejs", "java", "jdk",
+    "runtime", ".net", "dotnet", "asp.net", "visual c++", "wsl", "subsistema de windows para linux",
+    "machine-wide installer", "php",
+)
+
+
+def _major_version(text: str) -> int | None:
+    m = re.search(r"(\d+)", text or "")
+    return int(m.group(1)) if m else None
+
+
+def bulk_upgrade_skip_reason(app: InstalledApp) -> str:
+    """Motivo para excluir una app de 'Actualizar todas' ('' = se puede actualizar en lote)."""
+    if app.protected_reason:
+        return app.protected_reason
+    if not app.available_version:
+        return "Sin nueva version"
+    low = f"{app.name} {app.winget_id}".lower()
+    for kw in _BULK_SKIP_KEYWORDS:
+        if kw in low:
+            return "Entorno o componente de desarrollo: actualizar a mano"
+    cur, new = _major_version(app.version), _major_version(app.available_version)
+    if cur is not None and new is not None and new > cur and cur < 1000:
+        return f"Salto de version mayor ({cur} -> {new}): revisar antes"
+    return ""
+
+
+def upgrade_apps_winget(
+    apps: list[InstalledApp],
+    progress_cb: Callable[[int, str], None] | None = None,
+    controller=None,
+    upgrade_fn: Callable[..., tuple[bool, str]] | None = None,
+) -> list[tuple[InstalledApp, bool, str]]:
+    """Actualizar varias apps una por una (microprocesos): se puede cancelar entre una y otra."""
+    from ..core.task_control import TaskCanceledError, stop_point
+
+    fn = upgrade_fn or upgrade_app_winget
+    results: list[tuple[InstalledApp, bool, str]] = []
+    total = max(1, len(apps))
+    for i, app in enumerate(apps):
+        try:
+            stop_point(controller)
+        except TaskCanceledError:
+            break
+        except Exception:  # noqa: BLE001 - Guardar Pausa no aplica: se trata como cancelar
+            break
+        if progress_cb:
+            progress_cb(int(5 + 90 * i / total), f"({i + 1}/{len(apps)}) Actualizando {app.name}...")
+        ok, msg = fn(app)
+        if ok:
+            app.version = app.available_version or app.version
+            app.available_version = ""
+        results.append((app, ok, msg))
+    if progress_cb:
+        ok_n = sum(1 for _a, ok, _m in results if ok)
+        progress_cb(100, f"{ok_n}/{len(apps)} actualizadas")
+    return results
+
+
 def uninstall_installed_app(
     app: InstalledApp,
     progress_cb: Callable[[int, str], None] | None = None,

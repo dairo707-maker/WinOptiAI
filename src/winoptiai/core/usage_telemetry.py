@@ -66,7 +66,30 @@ _GENERIC_APP_TOKENS: frozenset[str] = frozenset(
 )
 
 _AUMID_NOISE_SEGMENTS: frozenset[str] = frozenset(
-    {"com", "org", "net", "io", "app", "desktop", "exe", "bin", "electron", "win", "win32", "win64", "x64", "user"}
+    {"com", "org", "net", "io", "app", "desktop", "exe", "bin", "electron", "win", "win32", "win64", "x64", "user",
+     "userdata", "default", "systemprofile"}
+)
+
+# v0.6.3: navegadores registran un AUMID por perfil ('Chrome.UserData.Profile1', 'MSEdge.edgeX.Default').
+# Todos cuentan como uso del navegador; WebView2 NO es uso de Edge (lo abren otras apps).
+_BROWSER_AUMID_HEADS: frozenset[str] = frozenset({"chrome", "msedge", "brave", "firefox", "opera", "vivaldi"})
+_IGNORED_AUMID_HEADS: frozenset[str] = frozenset({"msedgewebview", "microsoft.windows.explorer_recommendationsfiles"})
+
+# Complementos/instaladores de una suite no heredan la fecha de uso de la suite.
+_COMPONENT_MARKERS: tuple[str, ...] = (
+    "add-in", "addin", "plugin", "plug-in", "installer", "runtime", "language pack", "paquete de idioma", "redistributable",
+)
+
+# v0.6.3: suites cuyo nombre en "Programas" no coincide con sus ejecutables.
+_SUITE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("microsoft 365", ("excel", "winword", "powerpnt", "outlook", "onenote", "msaccess", "mspub")),
+    ("office", ("excel", "winword", "powerpnt", "outlook", "onenote", "msaccess", "mspub")),
+    ("stata", ("statamp", "statase", "statabe", "statamp64", "statase64", "statamp1764bit")),
+    ("power bi", ("pbidesktop",)),
+    ("powerbi", ("pbidesktop",)),
+    ("zoom", ("zoom", "zoomuszoomvideomeetings")),
+    ("teams", ("msteams", "teams")),
+    ("whatsapp", ("whatsappdesktop", "whatsapp")),
 )
 
 _BROAD_INSTALL_DIRS: frozenset[str] = frozenset(
@@ -206,6 +229,7 @@ def _known_folder_map() -> dict[str, str]:
         "{5E6C858F-0E22-4760-9AFE-EA3317B67173}": profile,
         "{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}": f"{progdata}\\Microsoft\\Windows\\Start Menu\\Programs",
         "{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}": f"{roaming}\\Microsoft\\Windows\\Start Menu\\Programs",
+        "{9E3995AB-1F9C-4F13-B827-48B24B6C7174}": f"{roaming}\\Microsoft\\Internet Explorer\\Quick Launch\\User Pinned",
     }
 
 
@@ -213,7 +237,12 @@ def decode_userassist_name(encoded: str) -> str:
     """ROT13-decode a UserAssist registry value name and expand standard KNOWNFOLDERID prefixes."""
     if not encoded:
         return ""
-    dec = codecs.decode(encoded, "rot_13").replace("/", "\\").strip()
+    return expand_known_folder(codecs.decode(encoded, "rot_13"))
+
+
+def expand_known_folder(name: str) -> str:
+    """Expand a leading '{KNOWNFOLDERID}' (UserAssist / JumplistData) into its real folder path."""
+    dec = (name or "").replace("/", "\\").strip()
     if dec.startswith("{") and len(dec) >= 38:
         prefix = dec[:38].upper()
         base_dir = _known_folder_map().get(prefix)
@@ -261,11 +290,21 @@ def _record_userassist_entry(usage: dict[str, float], decoded_name: str, ts: flo
         # AUMID / AppUserModelId (e.g. 'com.mdhero.app', 'electron.app.Antigravity', 'Pkg_hash!App')
         no_bang = low.split("!", 1)[0]
         no_hash = re.sub(r"_[a-z0-9]{13}$", "", no_bang)
+        head = no_hash.split(".", 1)[0]
+        if head in _IGNORED_AUMID_HEADS or no_hash in _IGNORED_AUMID_HEADS:
+            return
+        if head in _BROWSER_AUMID_HEADS:
+            # Cualquier perfil del navegador cuenta como uso del navegador (y nada mas).
+            _store_ts(usage, f"{_NORM_PREFIX}{head}", ts)
+            return
         norm_full = _norm_alnum(no_hash)
         if len(norm_full) >= 4:
             _store_ts(usage, f"{_NORM_PREFIX}{norm_full}", ts)
         if "." in no_hash:
-            parts = [p for p in no_hash.split(".") if p and p not in _AUMID_NOISE_SEGMENTS]
+            parts = [
+                p for p in no_hash.split(".")
+                if p and p not in _AUMID_NOISE_SEGMENTS and not p.isdigit() and not re.fullmatch(r"profile\d*", p)
+            ]
             if parts:
                 joined = _norm_alnum("".join(parts))
                 if len(joined) >= 4:
@@ -284,8 +323,112 @@ def _record_userassist_entry(usage: dict[str, float], decoded_name: str, ts: flo
             norm_lnk = _norm_alnum(lnk_stem)
             if len(norm_lnk) >= 4:
                 _store_ts(usage, f"{_NORM_PREFIX}{norm_lnk}", ts)
+        target = resolve_lnk_target(decoded_name)
+        if target and target.lower().endswith(".exe"):
+            _record_usage_key(usage, target, ts)
         return
     _record_usage_key(usage, clean, ts)
+
+
+_LNK_CACHE: dict[str, str] = {}
+
+
+def resolve_lnk_target(lnk_path: str) -> str:
+    """Return the local target path of a Windows .lnk (MS-SHLLINK LinkInfo), or '' if unknown.
+
+    Lector minimo sin pywin32 ni COM: solo lee la cabecera y LinkInfo.LocalBasePath. Los accesos
+    "anunciados" de MSI (sin LinkInfo) devuelven ''.
+    """
+    key = (lnk_path or "").lower()
+    if key in _LNK_CACHE:
+        return _LNK_CACHE[key]
+    result = ""
+    try:
+        with open(lnk_path, "rb") as fh:
+            data = fh.read(65536)
+        if len(data) >= 76 and int.from_bytes(data[0:4], "little") == 0x4C:
+            flags = int.from_bytes(data[20:24], "little")
+            pos = 76
+            if flags & 0x1:  # HasLinkTargetIDList
+                pos += 2 + int.from_bytes(data[pos:pos + 2], "little")
+            if flags & 0x2:  # HasLinkInfo
+                li = pos
+                li_hdr = int.from_bytes(data[li + 4:li + 8], "little")
+                li_flags = int.from_bytes(data[li + 8:li + 12], "little")
+                if li_flags & 0x1:  # VolumeIDAndLocalBasePath
+                    if li_hdr >= 0x24:
+                        off_u = int.from_bytes(data[li + 28:li + 32], "little")
+                        raw = data[li + off_u:]
+                        end = raw.find(b"\x00\x00")
+                        while end % 2:
+                            end = raw.find(b"\x00\x00", end + 1)
+                        result = raw[:end].decode("utf-16-le", "ignore")
+                    else:
+                        off = int.from_bytes(data[li + 16:li + 20], "little")
+                        raw = data[li + off:]
+                        result = raw[: raw.find(b"\x00")].decode("mbcs" if IS_WINDOWS else "latin-1", "ignore")
+    except (OSError, ValueError, LookupError):
+        result = ""
+    _LNK_CACHE[key] = result.strip()
+    return _LNK_CACHE[key]
+
+
+def visible_window_pids() -> set[int]:
+    """PIDs que tienen una ventana principal visible (apps que la persona esta usando ahora).
+
+    v0.6.3: antes cualquier proceso vivo marcaba la app como "Hoy"; servicios y procesos de fondo
+    (antivirus, Lenovo, WebView2, actualizadores) daban falsos "Hoy" en 21 aplicaciones.
+    """
+    pids: set[int] = set()
+    if not IS_WINDOWS:
+        return pids
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.GetWindow.restype = wintypes.HWND
+        user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+
+        def _cb(hwnd, _lparam):
+            if user32.IsWindowVisible(hwnd) and not user32.GetWindow(hwnd, 4):  # GW_OWNER
+                if user32.GetWindowTextLengthW(hwnd) > 0:
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value:
+                        pids.add(int(pid.value))
+            return True
+
+        user32.EnumWindows(enum_proc(_cb), 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return pids
+
+
+def _read_jumplist_data(usage: dict[str, float]) -> None:
+    """HKCU\\...\\Search\\JumplistData: ultimo arranque por AUMID o ruta (sin UAC, mas fresco que UserAssist)."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Search\JumplistData"
+        ) as k:
+            idx = 0
+            while True:
+                try:
+                    v_name, v_val, _v_type = winreg.EnumValue(k, idx)
+                    idx += 1
+                except OSError:
+                    break
+                if isinstance(v_val, int):
+                    ts = filetime_bytes_to_epoch(int(v_val).to_bytes(8, "little", signed=False))
+                else:
+                    ts = filetime_bytes_to_epoch(v_val)
+                if ts > 0.0 and v_name:
+                    _record_userassist_entry(usage, expand_known_folder(str(v_name)), ts)
+    except (OSError, OverflowError):
+        pass
 
 
 def read_windows_app_usage_map() -> dict[str, float]:
@@ -293,12 +436,14 @@ def read_windows_app_usage_map() -> dict[str, float]:
     usage: dict[str, float] = {}
     now = time.time()
 
-    # 1. Live processes right now
+    # 1. Apps abiertas AHORA con ventana visible (los procesos de fondo no son "uso")
     try:
-        for proc in psutil.process_iter(attrs=["name", "exe", "create_time"]):
+        window_pids = visible_window_pids() if IS_WINDOWS else None
+        for proc in psutil.process_iter(attrs=["pid", "name", "exe", "create_time"]):
             info = proc.info
-            ct = float(info.get("create_time") or now)
-            ts = max(now, ct)
+            if window_pids is not None and int(info.get("pid") or 0) not in window_pids:
+                continue
+            ts = now
             if info.get("name"):
                 _record_usage_key(usage, str(info["name"]), ts)
             if info.get("exe"):
@@ -376,6 +521,9 @@ def read_windows_app_usage_map() -> dict[str, float]:
     except Exception:
         pass
 
+    # 2.6 JumplistData (HKCU, sin UAC): registra aperturas recientes que UserAssist no actualiza
+    _read_jumplist_data(usage)
+
     # 3. Windows Prefetch (*.pf mtime reflects recent launches if readable)
     try:
         prefetch_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Prefetch"
@@ -452,11 +600,18 @@ def lookup_usage_ts(
             if len(w0_norm) >= 4:
                 candidates.append(f"{_NORM_PREFIX}{w0_norm}")
                 candidates.extend([words[0], f"{words[0]}.exe"])
-        if len(words) >= 3 and words[0] in ("microsoft", "google", "adobe"):
+        if len(words) >= 2 and words[0] in ("microsoft", "google", "adobe"):
             tail_name = " ".join(words[1:])
             tail_norm = _norm_alnum(tail_name)
             if len(tail_norm) >= 6:
                 candidates.extend([tail_name, f"{_NORM_PREFIX}{tail_norm}"])
+
+        clean_low = clean_name or nlow
+        is_component = any(t in clean_low for t in _COMPONENT_MARKERS)
+        for needle, exes in _SUITE_ALIASES:
+            if needle in clean_low and not is_component:
+                for exe in exes:
+                    candidates.extend([exe, f"{exe}.exe", f"{_NORM_PREFIX}{_norm_alnum(exe)}"])
 
     for cand in candidates:
         ts = usage_map.get(cand, 0.0)

@@ -2,6 +2,22 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.3] - 2026-11-21
+
+### Corregido
+- **Ultimo uso de aplicaciones:**
+  - Ya no marca "Hoy" a programas que solo tienen procesos de fondo; solo cuentan las apps con ventana abierta.
+  - Lee `JumplistData` (mas reciente que UserAssist) y resuelve los accesos directos `.lnk`.
+  - Reconoce los perfiles de navegador y las suites (Microsoft 365, Stata, Power BI, Zoom, Teams).
+
+### Agregado
+- **Aplicaciones:**
+  - Seleccion multiple con "Actualizar seleccionadas" y nuevo boton "Actualizar todas" (winget, una por una, cancelable).
+  - El lote omite entornos de desarrollo y saltos de version mayor.
+- **Vigia diario:**
+  - Revisa a las 9, 14 y 19 h si hay apps por actualizar o temporales acumulados.
+  - Avisa con notificacion de Windows y en la campana; solo lectura, nunca actua solo.
+
 ## [0.6.2] - 2026-11-21
 
 ### Corregido y Mejorado (Columnas Redimensionables, UserAssist sin UAC, winget Automatico y Elevacion UAC)

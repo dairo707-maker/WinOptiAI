@@ -48,7 +48,7 @@ from ..core.win32_bridge import (
     running_tracked_children,
     terminate_app_child_processes,
 )
-from ..storage.junk_scanner import resume_junk_session, scan_junk_targets
+from ..storage.junk_scanner import resume_junk_session
 from ..thermal_bios.thermal_controller import THERMAL_PROFILES, apply_thermal_profile
 from .dialogs.about_updater_dialog import AboutUpdaterDialog
 from ..core.crash_reporter import KIND_CRASH, KIND_ERROR
@@ -441,6 +441,15 @@ class MainWindow(QMainWindow):
         self.advisor_timer.timeout.connect(self._run_periodic_advisor)
         self.advisor_timer.start(900_000)
 
+        # v0.6.3: Vigia diario (09/14/19 h por defecto). Revisa cada 5 min si paso un horario.
+        self._watch_running = False
+        self._watch_tab: int | None = None
+        self.daily_watch_timer = QTimer(self)
+        self.daily_watch_timer.timeout.connect(self._maybe_run_daily_watch)
+        self.daily_watch_timer.start(300_000)
+        self.tray.on_watch_clicked = self._open_watch_target
+        QTimer.singleShot(90_000, self._maybe_run_daily_watch)
+
         # v0.5.13/v0.6.0: automatic update check every 12h + network backoff retry timer
         self.update_check_timer = QTimer(self)
         self.update_check_timer.timeout.connect(self._check_updates_background)
@@ -490,6 +499,7 @@ class MainWindow(QMainWindow):
             self._warmup_timer,
             self.telemetry_timer,
             self.advisor_timer,
+            self.daily_watch_timer,
             self.update_check_timer,
             self.update_retry_timer,
             self.heartbeat_timer,
@@ -1184,12 +1194,70 @@ class MainWindow(QMainWindow):
         if self.policy.evaluate_ram_pressure(ram["free_gb"]):
             self._execute_ai_boost("sre_auto")
 
+    def _maybe_run_daily_watch(self, force: bool = False) -> None:
+        """v0.6.3: lanzar el Vigia diario si paso un horario no atendido (solo lectura)."""
+        from datetime import datetime
+
+        from ..core import daily_watch
+
+        cfg = self.policy.config
+        if self._watch_running or (not cfg.daily_watch_enabled and not force):
+            return
+        if not force and os.environ.get("PYTEST_CURRENT_TEST"):
+            return  # las pruebas no deben consultar winget ni escanear el disco real
+        slot = daily_watch.due_slot(datetime.now(), cfg.daily_watch_hours, cfg.daily_watch_last_slot)
+        if slot is None and not force:
+            return
+        self._watch_running = True
+
+        def _done(findings) -> None:
+            import time as _time
+
+            self._watch_running = False
+            if slot is not None:
+                cfg.daily_watch_last_slot = slot
+            items = daily_watch.build_digest(findings)
+            sig = daily_watch.digest_signature(items)
+            now_ts = _time.time()
+            if force or daily_watch.should_send(
+                sig, cfg.daily_watch_last_signature, cfg.daily_watch_last_sent_ts, now_ts
+            ):
+                if items:
+                    cfg.daily_watch_last_signature = sig
+                    cfg.daily_watch_last_sent_ts = now_ts
+                    self._deliver_watch_digest(items)
+                elif force:
+                    self._notify_user("SUGERENCIA", "Vigia diario", "Todo en orden: sin actualizaciones ni temporales para atender.")
+            self.policy.save_config()
+
+        def _err(_msg: str) -> None:
+            self._watch_running = False
+            if slot is not None:
+                cfg.daily_watch_last_slot = slot
+                self.policy.save_config()
+
+        self._run_async(
+            daily_watch.collect_findings, _done, "Vigia diario", notify_on_complete=False, on_error=_err
+        )
+
+    def _deliver_watch_digest(self, items: list[dict]) -> None:
+        """Un aviso por hallazgo en la campana + UN globo de Windows con el resumen (siempre)."""
+        for it in items:
+            self._notify_user("SUGERENCIA", it["title"], it["detail"], action_tab=it.get("action_tab"))
+        self._watch_tab = items[0].get("action_tab")
+        title = "WinOptiAI - Vigia diario"
+        body = " · ".join(it["title"] for it in items)
+        self.tray.show_toast(title, body, kind="watch", msecs=10000)
+
+    def _open_watch_target(self) -> None:
+        if self._watch_tab is not None:
+            self._switch_tab(self._watch_tab)
+
     def _run_periodic_advisor(self) -> None:
-        """Quietly evaluate storage/zombie/RAM deltas every 15 minutes."""
+        """Quietly evaluate zombie/RAM deltas every 15 minutes (temporales: Vigia diario)."""
         def _probe() -> list[dict]:
             ram = get_memory_snapshot()
-            targets = scan_junk_targets()
-            junk_gb = sum(t.reclaimable_bytes for t in targets) / (1024**3)
+            junk_gb = 0.0  # v0.6.3: los temporales los revisa el Vigia diario (sin avisos duplicados)
             zombies = detect_orphan_ai_workers()
             z_mb = sum(z.ram_mb for z in zombies)
             return self.advisor.evaluate(

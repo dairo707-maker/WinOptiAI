@@ -22,11 +22,12 @@ from PySide6.QtWidgets import (
 
 from ...apps.app_manager import (
     InstalledApp,
+    bulk_upgrade_skip_reason,
     check_app_updates_winget,
     find_app_leftovers,
     list_installed_apps,
     uninstall_installed_app,
-    upgrade_app_winget,
+    upgrade_apps_winget,
 )
 from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
@@ -113,12 +114,25 @@ class AppsView(QWidget):
         self.check_updates_btn.clicked.connect(self._on_check_updates)
         actions.addWidget(self.check_updates_btn)
 
-        self.upgrade_btn = QPushButton("Actualizar App")
+        self.upgrade_btn = QPushButton("Actualizar seleccionadas")
         set_button_role(self.upgrade_btn, ROLE_RESTORE)
         self.upgrade_btn.setToolTip(TOOLTIPS["apps_upgrade"])
         self.upgrade_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.upgrade_btn.clicked.connect(self._on_upgrade_selected)
         actions.addWidget(self.upgrade_btn)
+
+        # v0.6.3: actualizar en lote (una por una, cancelable). Excluye entornos de desarrollo,
+        # componentes del sistema y saltos de version mayor (ver bulk_upgrade_skip_reason).
+        self.upgrade_all_btn = QPushButton("Actualizar todas")
+        set_button_role(self.upgrade_all_btn, ROLE_RESTORE)
+        self.upgrade_all_btn.setToolTip(
+            "Actualiza con winget, una por una, todas las apps con nueva version. Omite entornos de "
+            "desarrollo (Python, R, Node, .NET), componentes del sistema y saltos de version mayor: "
+            "esas se actualizan a mano. Puedes cancelar entre una app y otra."
+        )
+        self.upgrade_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.upgrade_all_btn.clicked.connect(self._on_upgrade_all)
+        actions.addWidget(self.upgrade_all_btn)
 
         self.uninstall_btn = QPushButton("Desinstalar")
         set_button_role(self.uninstall_btn, ROLE_RISK)
@@ -160,7 +174,7 @@ class AppsView(QWidget):
             ["ESTADO", "APLICACION", "VERSION", "NUEVA VERSION", "TAMANO", "ULTIMO USO", "EDITOR"]
         )
         configure_sortable_table(self.apps_table)
-        self.apps_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.apps_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         configure_interactive_columns(
             self.apps_table,
             [114, 290, 128, 136, 96, 138, 220],
@@ -250,52 +264,107 @@ class AppsView(QWidget):
             on_error=_err,
         )
 
-    def _selected_app(self) -> InstalledApp | None:
+    def _selected_apps(self) -> list[InstalledApp]:
         rows = sorted({idx.row() for idx in self.apps_table.selectedIndexes()})
-        if not rows:
-            return None
-        it = self.apps_table.item(rows[0], 0)
-        if it is None:
-            return None
-        orig = it.data(Qt.ItemDataRole.UserRole + 1)
-        if isinstance(orig, int) and 0 <= orig < len(self.apps):
-            return self.apps[orig]
-        return None
+        out: list[InstalledApp] = []
+        for r in rows:
+            it = self.apps_table.item(r, 0)
+            if it is None:
+                continue
+            orig = it.data(Qt.ItemDataRole.UserRole + 1)
+            if isinstance(orig, int) and 0 <= orig < len(self.apps):
+                out.append(self.apps[orig])
+        return out
+
+    def _selected_app(self) -> InstalledApp | None:
+        apps = self._selected_apps()
+        return apps[0] if apps else None
 
     def _on_upgrade_selected(self) -> None:
-        app = self._selected_app()
-        if app is None:
-            self.notify_cb("Selecciona primero una aplicacion de la tabla.")
+        selected = self._selected_apps()
+        if not selected:
+            self.notify_cb("Selecciona una o varias aplicaciones de la tabla (Ctrl o Mayus para varias).")
             return
-        if app.protected_reason:
-            self.notify_cb(f"Protegida: {app.protected_reason}")
+        blocked = [a for a in selected if a.protected_reason]
+        targets = [a for a in selected if a.available_version and not a.protected_reason]
+        if not targets:
+            if blocked:
+                self.notify_cb(f"Protegida: {blocked[0].protected_reason}")
+            else:
+                self.notify_cb("Primero usa 'Buscar Actualizaciones' o selecciona apps con nueva version.")
             return
-        if not app.available_version:
-            self.notify_cb("Primero usa 'Buscar Actualizaciones' o selecciona una app con nueva version.")
-            return
+        # Seleccion manual: la persona eligio estas apps, pero se avisa de los saltos mayores.
+        warn = [a for a in targets if bulk_upgrade_skip_reason(a)]
+        if warn:
+            lines = "\n".join(f"- {a.name}: {bulk_upgrade_skip_reason(a)}" for a in warn[:8])
+            ans = QMessageBox.question(
+                self,
+                "Confirmar actualizacion",
+                f"Vas a actualizar {len(targets)} app(s). Revisa estas antes de continuar:\n\n{lines}\n\n"
+                "Si un proyecto depende de esa version, podria dejar de funcionar. Continuar?",
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        self._run_upgrades(targets, "Actualizar apps seleccionadas")
 
+    def _on_upgrade_all(self) -> None:
+        candidates = [a for a in self.apps if a.available_version]
+        if not candidates:
+            self.notify_cb("No hay actualizaciones pendientes. Usa 'Buscar Actualizaciones' primero.")
+            return
+        targets = [a for a in candidates if not bulk_upgrade_skip_reason(a)]
+        skipped = [a for a in candidates if bulk_upgrade_skip_reason(a)]
+        if not targets:
+            self.notify_cb(
+                f"Las {len(skipped)} actualizaciones pendientes requieren revision manual "
+                "(entornos de desarrollo o version mayor). Seleccionalas y usa 'Actualizar seleccionadas'."
+            )
+            return
+        skipped_txt = ""
+        if skipped:
+            names = ", ".join(a.name for a in skipped[:6]) + ("..." if len(skipped) > 6 else "")
+            skipped_txt = f"\n\nSe omiten {len(skipped)} para revisar a mano: {names}"
+        ans = QMessageBox.question(
+            self,
+            "Actualizar todas",
+            f"Se actualizaran {len(targets)} aplicaciones con winget, una por una.{skipped_txt}\n\n"
+            "Windows puede pedir permiso de administrador en algunas. Cierra las apps que vayas a "
+            "actualizar para evitar fallos. Continuar?",
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        self._run_upgrades(targets, f"Actualizar {len(targets)} apps")
+
+    def _run_upgrades(self, targets: list[InstalledApp], label: str) -> None:
         self.upgrade_btn.setEnabled(False)
-        self.summary_lbl.setText(f"Actualizando {app.name} a {app.available_version}...")
+        self.upgrade_all_btn.setEnabled(False)
+        self.summary_lbl.setText(f"Actualizando {len(targets)} aplicacion(es) con winget...")
 
-        def _work(progress_cb=None) -> tuple[bool, str]:
-            return upgrade_app_winget(app, progress_cb=progress_cb)
+        def _work(progress_cb=None, controller=None):
+            return upgrade_apps_winget(targets, progress_cb=progress_cb, controller=controller)
 
-        def _done(res: tuple[bool, str]) -> None:
+        def _done(results) -> None:
             self.upgrade_btn.setEnabled(True)
-            ok, msg = res
-            if ok:
-                app.version = app.available_version or app.version
-                app.available_version = ""
-                self.policy.record_audit_event("usuario", "Actualizar App", msg)
+            self.upgrade_all_btn.setEnabled(True)
+            ok = [a for a, good, _m in results if good]
+            failed = [(a, m) for a, good, m in results if not good]
+            for a, _good, m in results:
+                if _good:
+                    self.policy.record_audit_event("usuario", "Actualizar App", m)
+            msg = f"{len(ok)} de {len(targets)} aplicacion(es) actualizadas."
+            if len(results) < len(targets):
+                msg += f" Cancelado: {len(targets) - len(results)} sin intentar."
+            if failed:
+                msg += " Fallaron: " + "; ".join(f"{a.name} ({m[:60]})" for a, m in failed[:3])
             self.notify_cb(msg)
+            self.summary_lbl.setText(msg)
             self._render_apps()
 
-        self.run_async(
-            _work,
-            _done,
-            f"Actualizar: {app.name}",
-            on_error=lambda _e: self.upgrade_btn.setEnabled(True),
-        )
+        def _err(_e: str) -> None:
+            self.upgrade_btn.setEnabled(True)
+            self.upgrade_all_btn.setEnabled(True)
+
+        self.run_async(_work, _done, label, on_error=_err)
 
     def _on_uninstall_selected(self) -> None:
         app = self._selected_app()

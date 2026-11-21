@@ -248,3 +248,7 @@ class WinOptiTray(QSystemTrayIcon):
             self._on_open_updates()
             return
         self._on_show()
+        # v0.6.3: el resumen del Vigia diario abre la pestana correspondiente.
+        cb = getattr(self, "on_watch_clicked", None)
+        if self._last_toast_kind == "watch" and cb is not None:
+            cb()

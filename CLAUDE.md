@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.2`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.3`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,30 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.3 (21/11/2026, Claude Code)
+
+- **ULTIMO USO preciso (`core/usage_telemetry.py`):** auditado contra el registro real del equipo.
+  - Antes, cualquier proceso vivo marcaba "Hoy" (21 apps falsas: Bitdefender, Lenovo, WebView2, OneDrive). Ahora solo cuentan los procesos con ventana principal visible (`visible_window_pids`, EnumWindows).
+  - Nueva fuente `HKCU\...\Search\JumplistData` (sin UAC, mas fresca que UserAssist).
+  - Los AUMID de navegador por perfil (`Chrome.UserData.Profile1`, `MSEdge.x.Default`) cuentan como el navegador; WebView2 se ignora.
+  - Se descartan los segmentos numericos de los AUMID (`Microsoft.Office.EXCEL.EXE.15` -> `excel`).
+  - Los accesos `.lnk` de UserAssist se resuelven a su `.exe` (`resolve_lnk_target`, lector MS-SHLLINK sin pywin32); se agrego el KNOWNFOLDERID de accesos anclados `{9E3995AB-...}`.
+  - Alias de suites (`_SUITE_ALIASES`: Microsoft 365/Office, Stata, Power BI, Zoom, Teams, WhatsApp). Complementos e instaladores no heredan la fecha (`_COMPONENT_MARKERS`).
+  - BAM y Prefetch solo se leen como administrador; sin UAC dan 0 claves.
+  - "Sin registro" es honesto: Windows no guardo ninguna apertura.
+- **Actualizar apps desde la App (`apps/app_manager.py`, `ui/views/apps_view.py`):**
+  - Seleccion multiple (Ctrl/Mayus) con "Actualizar seleccionadas" y nuevo "Actualizar todas" (`upgrade_apps_winget`: una por una, cancelable entre apps).
+  - `bulk_upgrade_skip_reason` excluye del lote las apps protegidas, los entornos de desarrollo (Python, Anaconda, R, Rtools, Node, Java, .NET, VC++, WSL, PHP) y los saltos de version mayor; esas se actualizan a mano, con advertencia.
+- **Vigia diario (`core/daily_watch.py`, `main_window._maybe_run_daily_watch`):**
+  - Revisa cada 5 min si paso un horario (`SREPolicyConfig.daily_watch_hours`, por defecto 9/14/19); si el equipo estaba suspendido, avisa al volver, una vez por horario.
+  - Solo lectura: consulta winget y temporales seguros (desde 300 MB).
+  - Entrega un aviso en la campana por cada hallazgo y un globo de Windows SIEMPRE; al hacer clic, abre la pestana correspondiente (`tray.on_watch_clicked`).
+  - No repite el mismo resumen antes de 20 h (`daily_watch_last_signature`).
+  - El asesor de 15 min ya no escanea temporales (evita avisos duplicados).
+  - Bajo pytest no se ejecuta (`PYTEST_CURRENT_TEST`).
+- **Pruebas:** `tests/test_v063_usage_updates_watch.py` (10).
+- **Verificacion:** 158/158 pruebas aprobadas; publicado como release v0.6.3 tras el "si" del propietario.
 
 ## Cambios Consolidados v0.6.2
 
@@ -93,7 +117,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.2`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.3`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).
