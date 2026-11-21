@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         brand_title = QLabel("WinOptiAI")
         brand_title.setStyleSheet("font-size: 14px; font-weight: 700; letter-spacing: 0.2px;")
         brand_sub = QLabel("by TRODAI")
-        brand_sub.setObjectName("SectionLabel")
+        brand_sub.setObjectName("Caption")
         brand_txt.addWidget(brand_title)
         brand_txt.addWidget(brand_sub)
         brand_layout.addLayout(brand_txt)
@@ -196,33 +196,29 @@ class MainWindow(QMainWindow):
 
         sb_layout.addStretch()
 
-        # Quiet footer: Theme toggle, Language selector, About & Updates, Status
+        # Quiet footer: Execution mode / UAC elevation, Tour, About & Updates, Status
         footer = QWidget()
         f_layout = QVBoxLayout(footer)
         f_layout.setContentsMargins(14, 10, 14, 14)
         f_layout.setSpacing(8)
 
-        ctl_row = QHBoxLayout()
-        ctl_row.setSpacing(6)
-        self.theme_btn = QPushButton()
-        self.theme_btn.setObjectName("GhostAction")
-        self.theme_btn.setFixedWidth(36)
-        self._refresh_theme_button_icon(theme_mode, pal["icon_color"])
-        self.theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.theme_btn.clicked.connect(self._toggle_theme)
-        ctl_row.addWidget(self.theme_btn)
+        is_admin = is_user_admin()
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        self.admin_tag = StatusTag("ADMIN UAC" if is_admin else "MODO ESTANDAR", "ok" if is_admin else "neutral")
+        mode_row.addWidget(self.admin_tag)
 
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItem("ES", "es")
-        self.lang_combo.addItem("EN", "en")
-        self.lang_combo.addItem("PT", "pt")
-        idx_lang = self.lang_combo.findData(lang)
-        if idx_lang >= 0:
-            self.lang_combo.setCurrentIndex(idx_lang)
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        self.lang_combo.setToolTip(TOOLTIPS["lang_combo"])
-        ctl_row.addWidget(self.lang_combo, stretch=1)
-        f_layout.addLayout(ctl_row)
+        if not is_admin:
+            self.uac_btn = AdaptiveButton("Elevar Admin (UAC)")
+            self.uac_btn.set_variants(["Elevar Admin (UAC)", "Elevar Admin", "Elevar UAC", "Admin"])
+            self.uac_btn.setObjectName("GhostAction")
+            self.uac_btn.setToolTip(TOOLTIPS["uac_btn"])
+            self.uac_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.uac_btn.clicked.connect(self._request_admin_relaunch)
+            mode_row.addWidget(self.uac_btn, stretch=1)
+        else:
+            mode_row.addStretch()
+        f_layout.addLayout(mode_row)
 
         self.tour_btn = QPushButton(f" {tr('btn_tour', lang)}")
         self.tour_btn.setObjectName("GhostAction")
@@ -248,7 +244,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(sidebar)
 
-        # Right column: Top Utility Bar (Tasks Progress % + Admin UAC + Bell) + Stacked Views
+        # Right column: Top Utility Bar (Tasks Progress % + minimalist Theme/Lang + Bell) + Stacked Views
         right_col = QWidget()
         rc_layout = QVBoxLayout(right_col)
         rc_layout.setContentsMargins(0, 0, 0, 0)
@@ -302,18 +298,30 @@ class MainWindow(QMainWindow):
         tb_layout.addWidget(self.resume_session_btn)
         tb_layout.addStretch()
 
-        is_admin = is_user_admin()
-        self.admin_tag = StatusTag("ADMIN UAC" if is_admin else "MODO ESTANDAR", "ok" if is_admin else "neutral")
-        tb_layout.addWidget(self.admin_tag)
+        util_row = QHBoxLayout()
+        util_row.setSpacing(6)
+        self.theme_btn = QPushButton()
+        self.theme_btn.setObjectName("TopUtilityBtn")
+        self.theme_btn.setFixedSize(30, 28)
+        self._refresh_theme_button_icon(theme_mode, pal["icon_color"])
+        self.theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        util_row.addWidget(self.theme_btn)
 
-        if not is_admin:
-            self.uac_btn = AdaptiveButton("Elevar Admin (UAC)")
-            self.uac_btn.set_variants(["Elevar Admin (UAC)", "Elevar Admin", "Admin"])
-            self.uac_btn.setObjectName("GhostAction")
-            self.uac_btn.setToolTip(TOOLTIPS["uac_btn"])
-            self.uac_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.uac_btn.clicked.connect(self._request_admin_relaunch)
-            tb_layout.addWidget(self.uac_btn)
+        self.lang_combo = QComboBox()
+        self.lang_combo.setObjectName("TopLangCombo")
+        self.lang_combo.setFixedSize(52, 28)
+        self.lang_combo.addItem("ES", "es")
+        self.lang_combo.addItem("EN", "en")
+        self.lang_combo.addItem("PT", "pt")
+        idx_lang = self.lang_combo.findData(lang)
+        if idx_lang >= 0:
+            self.lang_combo.setCurrentIndex(idx_lang)
+        self.lang_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        self.lang_combo.setToolTip(TOOLTIPS["lang_combo"])
+        util_row.addWidget(self.lang_combo)
+        tb_layout.addLayout(util_row)
 
         self.bell_btn = QPushButton(" 0")
         self.bell_btn.setObjectName("BellBtn")
@@ -333,7 +341,7 @@ class MainWindow(QMainWindow):
         self.update_banner_dot = SemaphoreDot("active", theme_mode)
         ub_layout.addWidget(self.update_banner_dot)
         self.update_banner_lbl = QLabel("")
-        self.update_banner_lbl.setObjectName("MonoValue")
+        self.update_banner_lbl.setObjectName("BodyText")
         ub_layout.addWidget(self.update_banner_lbl, stretch=1)
         self.update_banner_btn = QPushButton("Actualizar ahora")
         self.update_banner_btn.setObjectName("PrimaryAction")
@@ -652,10 +660,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_theme_button_icon(self, mode: str, color: str) -> None:
         if mode == "light":
-            self.theme_btn.setIcon(load_svg_icon("moon", color=color, size=15))
+            self.theme_btn.setIcon(load_svg_icon("moon", color=color, size=14))
             self.theme_btn.setToolTip("Cambiar a modo oscuro (cuaderno grafito)")
         else:
-            self.theme_btn.setIcon(load_svg_icon("sun", color=color, size=15))
+            self.theme_btn.setIcon(load_svg_icon("sun", color=color, size=14))
             self.theme_btn.setToolTip("Cambiar a modo claro (papel de libreta)")
 
     def _apply_ui_appearance(self) -> None:

@@ -126,16 +126,42 @@ class TimeSeriesChart(QWidget):
         self.update()
 
     # ------------------------------------------------------------------ geometry
-    def _plot_rect(self) -> QRectF:
-        return QRectF(self.LEFT, self.TOP, max(10.0, self.width() - self.LEFT - self.RIGHT), max(10.0, self.height() - self.TOP - self.EVENT_STRIP - self.AXIS))
+    def _layout_metrics(self, fm: QFontMetrics | None = None) -> tuple[float, float, float, float, float, float]:
+        if fm is None:
+            fm = QFontMetrics(QFont(MONO_FONT_FAMILY, 8))
+        ram_max = self.ram_scale_max()
+        step = _nice_step(ram_max)
+        y_labels = ["0%", "50%", "100%"]
+        v = 0.0
+        while v <= ram_max + 1e-6:
+            y_labels.append(f"{v:.0f} GB" if step >= 1 else f"{v:.1f} GB")
+            v += step
+        max_y_w = max((fm.horizontalAdvance(lab) for lab in y_labels), default=32)
+        left = max(float(self.LEFT), float(max_y_w + 14))
+        right = max(float(self.RIGHT), float(fm.horizontalAdvance("ahora") / 2.0 + 6.0))
+        label_h = max(14.0, float(fm.height() + 2))
+        top = max(float(self.TOP), label_h / 2.0 + 2.0)
+        event_strip = max(float(self.EVENT_STRIP), float(fm.height() + 4))
+        axis = max(18.0, float(fm.height() + 8))
+        return left, right, top, event_strip, axis, label_h
 
-    def bands(self) -> tuple[QRectF, QRectF, QRectF]:
+    def _plot_rect(self, fm: QFontMetrics | None = None) -> QRectF:
+        left, right, top, event_strip, axis, _ = self._layout_metrics(fm)
+        return QRectF(
+            left,
+            top,
+            max(10.0, self.width() - left - right),
+            max(10.0, self.height() - top - event_strip - axis),
+        )
+
+    def bands(self, fm: QFontMetrics | None = None) -> tuple[QRectF, QRectF, QRectF]:
         """(banda RAM, banda CPU, franja de eventos)."""
-        plot = self._plot_rect()
+        _, _, _, event_strip, _, _ = self._layout_metrics(fm)
+        plot = self._plot_rect(fm)
         ram_h = (plot.height() - self.GAP) * 0.58
         ram = QRectF(plot.left(), plot.top(), plot.width(), ram_h)
         cpu = QRectF(plot.left(), ram.bottom() + self.GAP, plot.width(), plot.height() - ram_h - self.GAP)
-        strip = QRectF(plot.left(), plot.bottom() + 1, plot.width(), self.EVENT_STRIP - 2)
+        strip = QRectF(plot.left(), plot.bottom() + 1, plot.width(), event_strip - 2)
         return ram, cpu, strip
 
     def x_for(self, ts: float) -> float:
@@ -176,7 +202,8 @@ class TimeSeriesChart(QWidget):
         mono = QFont(MONO_FONT_FAMILY, 8)
         ui = QFont(UI_FONT_FAMILY, 8)
         fm = QFontMetrics(mono)
-        ram_band, cpu_band, strip = self.bands()
+        left, right, _top, _strip_h, axis, label_h = self._layout_metrics(fm)
+        ram_band, cpu_band, strip = self.bands(fm)
         self._event_hits = []
 
         # Marco y rejilla hairline
@@ -188,39 +215,76 @@ class TimeSeriesChart(QWidget):
         ram_max = self.ram_scale_max()
         step = _nice_step(ram_max)
         p.setFont(mono)
+        ticks_v: list[float] = []
         v = 0.0
         while v <= ram_max + 1e-6:
+            ticks_v.append(v)
+            v += step
+
+        def _ram_ly(val: float) -> float:
+            y_pos = ram_band.bottom() - (val / ram_max) * ram_band.height()
+            return min(max(y_pos - label_h / 2.0, ram_band.top() - 2.0), ram_band.bottom() - label_h)
+
+        top_v = ticks_v[-1] if ticks_v else ram_max
+        top_ly = _ram_ly(top_v)
+        prev_drawn_ly: float | None = None
+        for idx, v in enumerate(ticks_v):
             y = ram_band.bottom() - (v / ram_max) * ram_band.height()
+            is_edge = idx == 0 or idx == len(ticks_v) - 1
             p.setPen(QPen(grid, 1))
             if 0 < v < ram_max:
                 p.drawLine(QPointF(ram_band.left(), y), QPointF(ram_band.right(), y))
+            ly = _ram_ly(v)
+            if not is_edge:
+                if prev_drawn_ly is not None and abs(ly - prev_drawn_ly) < label_h + 1.0:
+                    continue
+                if abs(ly - top_ly) < label_h + 1.0:
+                    continue
+            prev_drawn_ly = ly
             p.setPen(muted)
             label = f"{v:.0f} GB" if step >= 1 else f"{v:.1f} GB"
-            ly = min(max(y - 7, ram_band.top()), ram_band.bottom() - 14)  # dentro de la banda
-            p.drawText(QRectF(0, ly, self.LEFT - 6, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
-            v += step
+            p.drawText(QRectF(2, ly, left - 8, label_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+
         for pct in (0, 50, 100):
             y = cpu_band.bottom() - (pct / 100.0) * cpu_band.height()
             p.setPen(QPen(grid, 1))
             if pct == 50:
                 p.drawLine(QPointF(cpu_band.left(), y), QPointF(cpu_band.right(), y))
+                if cpu_band.height() < 3.0 * label_h:
+                    continue
             p.setPen(muted)
-            ly = min(max(y - 7, cpu_band.top()), cpu_band.bottom() - 14)
-            p.drawText(QRectF(0, ly, self.LEFT - 6, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{pct}%")
+            ly = min(max(y - label_h / 2.0, cpu_band.top() - 2.0), cpu_band.bottom() - label_h)
+            p.drawText(QRectF(2, ly, left - 8, label_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{pct}%")
 
-        # Eje de tiempo
+        # Eje de tiempo (evita colision entre ticks contiguos y "ahora")
         ticks = 6 if self.range_s <= 36 * 3600 else 7
+        w_now = fm.horizontalAdvance("ahora")
+        now_lx = min(max(self.x_for(self.now) - w_now / 2.0, ram_band.left()), ram_band.right() - w_now)
+        last_x_right = ram_band.left() - 8.0
         for i in range(ticks + 1):
             ts = self.now - self.range_s + self.range_s * i / ticks
             x = self.x_for(ts)
             p.setPen(QPen(grid, 1))
             p.drawLine(QPointF(x, ram_band.top()), QPointF(x, cpu_band.bottom()))
-            if 0 < i < ticks or i == ticks:
-                lab = "ahora" if i == ticks else _time_label(ts, self.range_s)
-                w = fm.horizontalAdvance(lab)
-                lx = min(max(x - w / 2, self.LEFT), self.width() - self.RIGHT - w)
+            if i == ticks:
                 p.setPen(muted)
-                p.drawText(QRectF(lx, strip.bottom() + 2, w + 2, self.AXIS - 2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lab)
+                p.drawText(
+                    QRectF(now_lx, strip.bottom() + 3, w_now + 4, axis - 4),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    "ahora",
+                )
+            elif i > 0:
+                lab = _time_label(ts, self.range_s)
+                w = fm.horizontalAdvance(lab)
+                lx = min(max(x - w / 2.0, ram_band.left()), ram_band.right() - w)
+                if lx >= last_x_right + 8.0 and lx + w + 8.0 <= now_lx:
+                    p.setPen(muted)
+                    p.drawText(
+                        QRectF(lx, strip.bottom() + 3, w + 4, axis - 4),
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        lab,
+                    )
+                    last_x_right = lx + w
 
         # Titulos de banda
         p.setFont(ui)
@@ -228,7 +292,7 @@ class TimeSeriesChart(QWidget):
         p.drawText(ram_band.adjusted(6, 3, -6, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, "RAM libre (promedio por minuto)")
         p.drawText(cpu_band.adjusted(6, 3, -6, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, "CPU %")
 
-        # Umbral SRE (linea discontinua, tono ambar atenuado)
+        # Umbral SRE (linea discontinua, tono ambar atenuado; nunca se recorta arriba)
         if 0 < self.threshold_gb <= ram_max:
             y = ram_band.bottom() - (self.threshold_gb / ram_max) * ram_band.height()
             pen = QPen(_with_alpha(warn, 200), 1, Qt.PenStyle.DashLine)
@@ -237,7 +301,16 @@ class TimeSeriesChart(QWidget):
             p.setFont(mono)
             lab = f"umbral SRE {self.threshold_gb:.1f} GB"
             w = fm.horizontalAdvance(lab)
-            p.drawText(QRectF(ram_band.right() - w - 6, y - 14, w + 2, 12), Qt.AlignmentFlag.AlignRight, lab)
+            ui_h = max(14.0, float(QFontMetrics(ui).height() + 2))
+            if y - label_h - 1.0 >= ram_band.top() + ui_h + 2.0:
+                thresh_ly = y - label_h - 1.0
+            else:
+                thresh_ly = min(y + 2.0, ram_band.bottom() - label_h)
+            p.drawText(
+                QRectF(ram_band.right() - w - 8, thresh_ly, w + 4, label_h),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                lab,
+            )
 
         # Series (Cyber Cyan / Governance Blue en paleta TRODAI)
         ram_col = QColor(pal.get("accent", "#0EA5E9"))
@@ -372,6 +445,29 @@ class FreedSpaceChart(QWidget):
             out.append((ts, dict(acc)))
         return out
 
+    def _layout_metrics(
+        self,
+        fm: QFontMetrics | None = None,
+        y_labels: list[str] | None = None,
+    ) -> tuple[float, float, float, float, float]:
+        if fm is None:
+            fm = QFontMetrics(QFont(MONO_FONT_FAMILY, 8))
+        if y_labels is None:
+            points = self.stacked_totals()
+            if points:
+                total_max = max(sum(v.values()) for _, v in points)
+                top_val = total_max * 1.15 if total_max > 0 else 1.0
+                y_labels = [format_mb(top_val * frac) for frac in (0.0, 0.5, 1.0)]
+            else:
+                y_labels = ["0 MB"]
+        max_y_w = max((fm.horizontalAdvance(lab) for lab in y_labels), default=40)
+        left = max(float(self.LEFT), float(max_y_w + 14))
+        right = max(float(self.RIGHT), float(fm.horizontalAdvance("ahora") / 2.0 + 6.0))
+        label_h = max(14.0, float(fm.height() + 2))
+        margin_top = max(float(self.TOP), label_h / 2.0 + 2.0)
+        axis = max(float(self.AXIS), float(fm.height() + 6))
+        return left, right, margin_top, axis, label_h
+
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
         pal = self._palette_fn()
         p = QPainter(self)
@@ -381,10 +477,23 @@ class FreedSpaceChart(QWidget):
         grid = _with_alpha(muted, 60)
         mono = QFont(MONO_FONT_FAMILY, 8)
         fm = QFontMetrics(mono)
-        plot = QRectF(self.LEFT, self.TOP, max(10.0, self.width() - self.LEFT - self.RIGHT), max(10.0, self.height() - self.TOP - self.AXIS))
+        points = self.stacked_totals()
+        if points:
+            total_max = max(sum(v.values()) for _, v in points)
+            top = total_max * 1.15 if total_max > 0 else 1.0
+            y_labels = [format_mb(top * frac) for frac in (0.0, 0.5, 1.0)]
+        else:
+            top = 1.0
+            y_labels = ["0 MB"]
+        left, right, margin_top, axis, label_h = self._layout_metrics(fm, y_labels)
+        plot = QRectF(
+            left,
+            margin_top,
+            max(10.0, self.width() - left - right),
+            max(10.0, self.height() - margin_top - axis),
+        )
         p.setPen(QPen(grid, 1))
         p.drawRect(plot.adjusted(0.5, 0.5, -0.5, -0.5))
-        points = self.stacked_totals()
         p.setFont(mono)
         if not points:
             p.setFont(QFont(UI_FONT_FAMILY, 9))
@@ -401,8 +510,6 @@ class FreedSpaceChart(QWidget):
         start = points[0][0]
         end = max(self.now, points[-1][0] + 1)
         span = max(1.0, end - start)
-        total_max = max(sum(v.values()) for _, v in points)
-        top = total_max * 1.15 if total_max > 0 else 1.0
 
         def x_for(ts: float) -> float:
             return plot.left() + (ts - start) / span * plot.width()
@@ -410,15 +517,20 @@ class FreedSpaceChart(QWidget):
         def y_for(mb: float) -> float:
             return plot.bottom() - (mb / top) * plot.height()
 
-        # Eje vertical: 0, medio y maximo
-        for frac in (0.0, 0.5, 1.0):
+        # Eje vertical: 0, medio y maximo (centrados en su linea sin recortar arriba ni abajo)
+        for frac, y_lab in zip((0.0, 0.5, 1.0), y_labels):
             mb = top * frac
             y = y_for(mb)
             if 0 < frac < 1:
                 p.setPen(QPen(grid, 1))
                 p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
             p.setPen(muted)
-            p.drawText(QRectF(0, y - 7, self.LEFT - 6, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, format_mb(mb))
+            ly = min(max(y - label_h / 2.0, 2.0), plot.bottom() - label_h)
+            p.drawText(
+                QRectF(2, ly, left - 8, label_h),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                y_lab,
+            )
 
         # Capas apiladas de abajo hacia arriba (escalonadas: tono acento TRODAI)
         area_col = QColor(pal.get("accent", txt.name()))
@@ -453,15 +565,21 @@ class FreedSpaceChart(QWidget):
             p.drawPath(edge)
             lower = upper
 
-        # Eje de tiempo: inicio, medio, ahora
-        for frac, lab in ((0.0, None), (0.5, None), (1.0, "ahora")):
-            ts = start + span * frac
-            text = lab or datetime.fromtimestamp(ts).strftime("%d/%m %H:%M" if span <= 36 * 3600 else "%d/%m")
-            w = fm.horizontalAdvance(text)
-            x = plot.left() + plot.width() * frac
-            lx = min(max(x - w / 2, plot.left()), plot.right() - w)
-            p.setPen(muted)
-            p.drawText(QRectF(lx, plot.bottom() + 2, w + 2, self.AXIS - 2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        # Eje de tiempo: inicio, medio, ahora (evita solapamientos si la vista es estrecha)
+        fmt = "%d/%m %H:%M" if span <= 36 * 3600 else "%d/%m"
+        t_start = datetime.fromtimestamp(start).strftime(fmt)
+        t_mid = datetime.fromtimestamp(start + span * 0.5).strftime(fmt)
+        w_start = fm.horizontalAdvance(t_start)
+        w_mid = fm.horizontalAdvance(t_mid)
+        w_now = fm.horizontalAdvance("ahora")
+        lx_start = plot.left()
+        lx_now = max(plot.left(), plot.right() - w_now)
+        lx_mid = min(max(plot.left() + plot.width() * 0.5 - w_mid / 2.0, plot.left()), plot.right() - w_mid)
+        p.setPen(muted)
+        p.drawText(QRectF(lx_start, plot.bottom() + 2, w_start + 4, axis - 2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, t_start)
+        if lx_mid >= lx_start + w_start + 10.0 and lx_mid + w_mid + 10.0 <= lx_now:
+            p.drawText(QRectF(lx_mid, plot.bottom() + 2, w_mid + 4, axis - 2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, t_mid)
+        p.drawText(QRectF(lx_now, plot.bottom() + 2, w_now + 4, axis - 2), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "ahora")
         p.end()
 
 
@@ -554,18 +672,18 @@ class HistoryPanel(_AsyncPanel):
         super().__init__(palette_fn, parent)
         self.range_s = RANGE_24H
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 8, 0, 0)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setSpacing(4)
         head, self.range_buttons = _range_tabs([(RANGE_24H, "24 h"), (RANGE_7D, "7 d")], self.set_range)
         self.summary_lbl = QLabel("Sin datos todavia")
-        self.summary_lbl.setObjectName("MonoValue")
+        self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
-        head.addSpacing(6)
+        head.addSpacing(8)
         head.addWidget(self.summary_lbl, stretch=1)
-        self.legend_lbl = QLabel("B AI Boost   L Limpieza   D Depuracion   E Error")
-        self.legend_lbl.setObjectName("PageSubtitle")
-        head.addWidget(self.legend_lbl)
         lay.addLayout(head)
+        self.legend_lbl = QLabel("B AI Boost   L Limpieza   D Depuracion   E Error")
+        self.legend_lbl.setObjectName("Caption")
+        lay.addWidget(self.legend_lbl)
         self.chart = TimeSeriesChart(palette_fn)
         self.chart.setMinimumHeight(170)
         lay.addWidget(self.chart, stretch=1)
@@ -605,7 +723,7 @@ class FreedSpacePanel(_AsyncPanel):
         lay.setContentsMargins(0, 8, 0, 0)
         lay.setSpacing(6)
         self.totals_lbl = QLabel("Sin limpiezas registradas")
-        self.totals_lbl.setObjectName("MonoValue")
+        self.totals_lbl.setObjectName("BodyText")
         self.totals_lbl.setWordWrap(True)
         lay.addWidget(self.totals_lbl)
         self.legend = _FreedLegend(palette_fn)
@@ -637,10 +755,13 @@ class _FreedLegend(QWidget):
         super().__init__(parent)
         self._palette_fn = palette_fn
         self.totals: dict[str, float] = {k: 0.0 for k in FREED_KINDS}
-        self.setMinimumHeight(18)
+        self.setMinimumHeight(self.heightForWidth(400))
 
     def set_totals(self, totals: dict[str, float]) -> None:
         self.totals = {k: float(totals.get(k, 0.0)) for k in FREED_KINDS}
+        h = self.heightForWidth(max(200, self.width() or 400))
+        if self.minimumHeight() != h:
+            self.setMinimumHeight(h)
         self.updateGeometry()
         self.update()
 
@@ -655,15 +776,17 @@ class _FreedLegend(QWidget):
 
     def _layout(self, width: int) -> tuple[list[QRectF], int]:
         fm = QFontMetrics(QFont(UI_FONT_FAMILY, 8))
-        x, y, row_h = 0.0, 0.0, 18.0
+        row_h = float(max(22, fm.height() + 6))
+        x, y = 0.0, 0.0
+        eff_w = max(120, int(width))
         rects: list[QRectF] = []
         for text in self._items():
-            w = 16 + fm.horizontalAdvance(text) + 16
-            if x > 0 and x + w > width:
+            w = 16 + fm.horizontalAdvance(text) + 18
+            if x > 0 and x + w > eff_w:
                 x, y = 0.0, y + row_h
             rects.append(QRectF(x, y, w, row_h))
             x += w
-        return rects, int(y + row_h)
+        return rects, int(round(y + row_h))
 
     def sizeHint(self):  # noqa: N802
         from PySide6.QtCore import QSize
@@ -684,7 +807,7 @@ class _FreedLegend(QWidget):
         p.setFont(QFont(UI_FONT_FAMILY, 8))
         rects, _ = self._layout(self.width())
         for kind, rect, text in zip(FREED_KINDS, rects, self._items()):
-            sw = QRectF(rect.left(), rect.top() + 4, 10, 10)
+            sw = QRectF(rect.left(), rect.top() + (rect.height() - 10.0) / 2.0, 10, 10)
             p.fillRect(sw, _with_alpha(txt, FREED_ALPHAS[kind]))
             p.setPen(QPen(_with_alpha(txt, 200), 1))
             p.drawRect(sw.adjusted(0.5, 0.5, -0.5, -0.5))
@@ -693,21 +816,58 @@ class _FreedLegend(QWidget):
         p.end()
 
 
+def css_qcolor(value: str, fallback: str = "#000000") -> QColor:
+    """Convierte colores de la paleta QSS a QColor, incluido el formato ``rgba(r, g, b, a)``.
+
+    v0.6.1: ``QColor("rgba(...)")`` es invalido y se pintaba NEGRO; en modo claro el panel de
+    medidores quedaba negro con texto oscuro ilegible.
+    """
+    text = (value or "").strip()
+    if text.lower().startswith("rgba(") and text.endswith(")"):
+        try:
+            parts = [float(x) for x in text[5:-1].split(",")]
+            r, g, b = (int(v) for v in parts[:3])
+            alpha = int(parts[3]) if len(parts) > 3 else 255
+            return QColor(r, g, b, max(0, min(255, alpha)))
+        except (ValueError, IndexError):
+            return QColor(fallback)
+    c = QColor(text)
+    return c if c.isValid() else QColor(fallback)
+
+
 class SystemGaugesWidget(QWidget):
-    """Medidores visuales radiales (RAM %, Disco %, CPU %) + estado semaforo global TRODAI."""
+    """Medidores radiales en cuadricula 2x2 (RAM, Disco, CPU y Temperatura/Memoria virtual).
+
+    v0.6.1: 4 medidores que crecen con el alto disponible (antes 3 fijos de 56 px dejaban un
+    hueco grande debajo), linea de detalle bajo cada etiqueta y colores legibles en modo claro.
+    Jerarquia tipografica: cabecera y porcentaje en negrita, etiquetas semibold, detalle normal.
+    """
 
     def __init__(self, palette_fn: Callable[[], dict[str, str]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._palette_fn = palette_fn
-        self._ram_pct = 0
-        self._ram_tone = "ok"
-        self._disk_pct = 0
-        self._disk_tone = "ok"
-        self._cpu_pct = 0
-        self._cpu_tone = "ok"
+        self._gauges: list[dict[str, Any]] = [
+            {"label": "RAM", "pct": 0, "tone": "ok", "text": "0%", "detail": ""},
+            {"label": "DISCO C:", "pct": 0, "tone": "ok", "text": "0%", "detail": ""},
+            {"label": "CPU", "pct": 0, "tone": "ok", "text": "0%", "detail": ""},
+            {"label": "TEMP. CPU", "pct": 0, "tone": "neutral", "text": "--", "detail": "Sin sensor"},
+        ]
         self._health_label = "OPTIMO"
         self._health_tone = "ok"
         self.setMinimumSize(185, 160)
+
+    # Compatibilidad: pruebas y codigo antiguo leen estos atributos.
+    @property
+    def _ram_pct(self) -> int:
+        return int(self._gauges[0]["pct"])
+
+    @property
+    def _disk_pct(self) -> int:
+        return int(self._gauges[1]["pct"])
+
+    @property
+    def _cpu_pct(self) -> int:
+        return int(self._gauges[2]["pct"])
 
     def update_values(
         self,
@@ -719,13 +879,22 @@ class SystemGaugesWidget(QWidget):
         cpu_tone: str,
         health_label: str,
         health_tone: str,
+        details: tuple[str, str, str] | None = None,
+        fourth: dict[str, Any] | None = None,
     ) -> None:
-        self._ram_pct = max(0, min(100, int(ram_pct)))
-        self._ram_tone = ram_tone
-        self._disk_pct = max(0, min(100, int(disk_pct)))
-        self._disk_tone = disk_tone
-        self._cpu_pct = max(0, min(100, int(cpu_pct)))
-        self._cpu_tone = cpu_tone
+        values = ((ram_pct, ram_tone), (disk_pct, disk_tone), (cpu_pct, cpu_tone))
+        for i, (pct, tone) in enumerate(values):
+            pct_i = max(0, min(100, int(pct)))
+            self._gauges[i].update(pct=pct_i, tone=tone, text=f"{pct_i}%")
+            if details is not None:
+                self._gauges[i]["detail"] = details[i]
+        if fourth is not None:
+            g = self._gauges[3]
+            g["label"] = str(fourth.get("label", g["label"]))
+            g["pct"] = max(0, min(100, int(fourth.get("pct", 0))))
+            g["tone"] = str(fourth.get("tone", "neutral"))
+            g["text"] = str(fourth.get("text", f"{g['pct']}%"))
+            g["detail"] = str(fourth.get("detail", ""))
         self._health_label = health_label
         self._health_tone = health_tone
         self.update()
@@ -733,69 +902,85 @@ class SystemGaugesWidget(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
         pal = self._palette_fn()
         mode = pal.get("mode", "dark")
+        light = mode == "light"
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         w, h = float(self.width()), float(self.height())
-        border_col = QColor(pal.get("border_hairline", "#1F2A44"))
-        bg_col = QColor(pal.get("bg_table", "#0A0F1D"))
-        txt_col = QColor(pal.get("text_primary", "#F8FAFC"))
-        muted_col = QColor(pal.get("text_muted", "#94A3B8"))
-        track_col = _with_alpha(QColor(pal.get("border_strong", "#33415F")), 125)
+        border_col = css_qcolor(pal.get("border_hairline", "#1F2A44"), "#1F2A44")
+        bg_col = css_qcolor(pal.get("bg_table", "#0A0F1D"), "#FFFFFF" if light else "#0A0F1D")
+        bg_col.setAlpha(255)  # lienzo opaco y legible en ambos temas
+        txt_col = css_qcolor(pal.get("text_primary", ""), "#0A0F1D" if light else "#F8FAFC")
+        sec_col = css_qcolor(pal.get("text_secondary", ""), "#334155" if light else "#CBD5E1")
+        muted_col = css_qcolor(pal.get("text_muted", ""), "#4A5568" if light else "#94A3B8")
+        track_col = css_qcolor(pal.get("border_hairline" if light else "border_strong", ""), "#33415F")
 
         p.fillRect(self.rect(), bg_col)
         p.setPen(QPen(border_col, 1))
         p.drawRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0))
 
-        # Cabecera semaforo global
+        # Cabecera: titulo en negrita, estado global con su color de semaforo
         h_col = QColor(semaphore_hex(self._health_tone, mode))
-        p.setFont(QFont(MONO_FONT_FAMILY, 8, QFont.Weight.DemiBold))
-        p.fillRect(QRectF(10, 10, 8, 8), h_col)
-        p.setPen(muted_col)
-        p.drawText(QRectF(24, 6, w - 34, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "SALUD")
+        p.fillRect(QRectF(10, 11, 8, 8), h_col)
+        p.setFont(QFont(UI_FONT_FAMILY, 9, QFont.Weight.Bold))
+        p.setPen(txt_col)
+        p.drawText(QRectF(24, 6, w - 34, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "SALUD")
         p.setPen(h_col)
-        p.drawText(QRectF(10, 6, w - 20, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._health_label)
+        p.drawText(QRectF(10, 6, w - 20, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._health_label)
 
-        # Barras de semaforo visuales para 3 recursos clave + arcos compactos
-        gauges = [
-            ("RAM", self._ram_pct, self._ram_tone),
-            ("DISCO", self._disk_pct, self._disk_tone),
-            ("CPU", self._cpu_pct, self._cpu_tone),
-        ]
-        avail_h = max(90.0, h - 34.0)
-        if w >= 190 and avail_h >= 145:
-            # Vista con 2 arcos arriba + 1 abajo centrados
-            arc_d = min(56.0, (w - 32.0) / 2.2, (avail_h - 32.0) / 2.2)
-            positions = [
-                (w * 0.28 - arc_d / 2, 32.0),
-                (w * 0.72 - arc_d / 2, 32.0),
-                (w * 0.50 - arc_d / 2, 34.0 + arc_d + 18.0),
-            ]
-            for (label, pct, tone), (gx, gy) in zip(gauges, positions):
-                arc_r = QRectF(gx, gy, arc_d, arc_d)
-                tone_col = QColor(semaphore_hex(tone, mode))
-                p.setPen(QPen(track_col, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-                p.drawArc(arc_r, 90 * 16, -360 * 16)
-                p.setPen(QPen(tone_col, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-                p.drawArc(arc_r, 90 * 16, -int((pct / 100.0) * 360 * 16))
-                p.setFont(QFont(MONO_FONT_FAMILY, 9, QFont.Weight.Medium))
-                p.setPen(txt_col)
-                p.drawText(arc_r, Qt.AlignmentFlag.AlignCenter, f"{pct}%")
-                p.setFont(QFont(MONO_FONT_FAMILY, 7.5))
+        top = 30.0
+        avail_h = max(60.0, h - top - 6.0)
+        cols, rows = 2, 2
+        cell_w = (w - 12.0) / cols
+        cell_h = avail_h / rows
+        label_block = 30.0  # etiqueta + detalle bajo el anillo
+        if cell_h - label_block < 34.0:
+            self._paint_bars(p, top, avail_h, w, mode, txt_col, track_col)
+            p.end()
+            return
+
+        arc_d = max(34.0, min(cell_w - 22.0, cell_h - label_block - 8.0, 96.0))
+        ring_w = max(4.0, float(round(arc_d / 14.0)))
+        pct_pt = int(max(9.0, min(15.0, arc_d / 5.6)))
+        for idx, g in enumerate(self._gauges):
+            r_i, c_i = divmod(idx, cols)
+            cx = 6.0 + cell_w * c_i + cell_w / 2.0
+            cy0 = top + cell_h * r_i + max(2.0, (cell_h - arc_d - label_block) / 2.0)
+            arc_r = QRectF(0, 0, arc_d - ring_w, arc_d - ring_w)
+            arc_r.moveCenter(QPointF(cx, cy0 + arc_d / 2.0))
+            tone_col = QColor(semaphore_hex(g["tone"], mode))
+            p.setPen(QPen(track_col, ring_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            p.drawArc(arc_r, 90 * 16, -360 * 16)
+            if g["pct"] > 0:
+                p.setPen(QPen(tone_col, ring_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+                p.drawArc(arc_r, 90 * 16, -int((g["pct"] / 100.0) * 360 * 16))
+            p.setFont(QFont(MONO_FONT_FAMILY, pct_pt, QFont.Weight.Medium))
+            p.setPen(txt_col)
+            p.drawText(arc_r, Qt.AlignmentFlag.AlignCenter, g["text"])
+            ly = cy0 + arc_d + 3.0
+            p.setFont(QFont(UI_FONT_FAMILY, 8, QFont.Weight.Medium))
+            p.setPen(sec_col)
+            p.drawText(QRectF(cx - cell_w / 2.0, ly, cell_w, 14), Qt.AlignmentFlag.AlignCenter, g["label"])
+            if g["detail"]:
+                p.setFont(QFont(UI_FONT_FAMILY, 8, QFont.Weight.Normal))
                 p.setPen(muted_col)
-                p.drawText(QRectF(gx - 8, gy + arc_d + 1, arc_d + 16, 13), Qt.AlignmentFlag.AlignCenter, label)
-        else:
-            # Respaldo compacto por barras si la ventana es muy baja
-            y = 34.0
-            row_step = avail_h / 3.0
-            for label, pct, tone in gauges:
-                tone_col = QColor(semaphore_hex(tone, mode))
-                p.setFont(QFont(MONO_FONT_FAMILY, 8))
-                p.setPen(txt_col)
-                p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignLeft, label)
-                p.setPen(tone_col)
-                p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignRight, f"{pct}%")
-                p.fillRect(QRectF(10, y + 17, w - 20, 5), track_col)
-                p.fillRect(QRectF(10, y + 17, (w - 20) * (pct / 100.0), 5), tone_col)
-                y += row_step
+                fm = QFontMetrics(p.font())
+                detail = fm.elidedText(g["detail"], Qt.TextElideMode.ElideRight, int(cell_w - 6))
+                p.drawText(QRectF(cx - cell_w / 2.0, ly + 14, cell_w, 14), Qt.AlignmentFlag.AlignCenter, detail)
         p.end()
+
+    def _paint_bars(self, p, top, avail_h, w, mode, txt_col, track_col) -> None:
+        """Respaldo compacto por barras si el panel es muy bajo."""
+        y = top
+        row_step = avail_h / len(self._gauges)
+        for g in self._gauges:
+            tone_col = QColor(semaphore_hex(g["tone"], mode))
+            p.setFont(QFont(UI_FONT_FAMILY, 8, QFont.Weight.Medium))
+            p.setPen(txt_col)
+            p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignLeft, g["label"])
+            p.setFont(QFont(MONO_FONT_FAMILY, 8, QFont.Weight.Medium))
+            p.setPen(tone_col)
+            p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignRight, g["text"])
+            p.fillRect(QRectF(10, y + 16, w - 20, 4), track_col)
+            p.fillRect(QRectF(10, y + 16, (w - 20) * (g["pct"] / 100.0), 4), tone_col)
+            y += row_step

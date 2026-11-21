@@ -264,7 +264,7 @@ class StorageView(QWidget):
         actions_bar.addWidget(self.select_all_chk)
 
         self.selection_lbl = QLabel("")
-        self.selection_lbl.setObjectName("MonoValue")
+        self.selection_lbl.setObjectName("BodyText")
         actions_bar.addWidget(self.selection_lbl)
 
         actions_bar.addStretch()
@@ -315,7 +315,7 @@ class StorageView(QWidget):
         od_top = QHBoxLayout()
         od_top.setSpacing(8)
         self.od_status_lbl = QLabel("OneDrive local detectado | Nube sin vincular")
-        self.od_status_lbl.setObjectName("MonoValue")
+        self.od_status_lbl.setObjectName("BodyText")
         self.od_status_lbl.setWordWrap(True)  # v0.5.6
         od_top.addWidget(self.od_status_lbl, stretch=1)
 
@@ -372,7 +372,7 @@ class StorageView(QWidget):
         sum_layout = QHBoxLayout(summary)
         sum_layout.setContentsMargins(14, 9, 14, 9)
         self.summary_lbl = QLabel("Seleccione un modo y ejecute el analisis bajo demanda.")
-        self.summary_lbl.setObjectName("MonoValue")
+        self.summary_lbl.setObjectName("BodyText")
         sum_layout.addWidget(self.summary_lbl)
         sum_layout.addStretch()
         sum_layout.addWidget(StatusTag("RSTRTMGR + ONEDRIVE GUARD", "ok"))

@@ -2,6 +2,25 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.1] - 2026-11-20
+
+### Corregido y Mejorado (Barra de Tareas, Anillos 2x2 Claros, Ejes Completos, Tipografia y Tour 7 Pasos)
+- **Identidad en Barra de Tareas y Bandeja (`app.py`, `installer.iss`, `system_tray.py`):**
+  - Fijado `SetCurrentProcessExplicitAppUserModelID("TRODAI.WinOptiAI")`, icono de ventana con `assets/icons/winoptiai.ico` (Hexa-Vault a color) y `AppUserModelID` + `ChangesAssociations=yes` + refresco `ie4uinit.exe -show` en el instalador Inno Setup.
+  - Tooltip de bandeja simplificado a `"WinOptiAI"`.
+- **Panel Salud 2x2 Legible en Modo Claro (`history_charts.py`, `overview_view.py`):**
+  - Añadido `css_qcolor()` para traducir valores `rgba(...)` sin caer en negro sobre modo claro.
+  - Cuadricula radial **2x2** adaptable (`RAM`, `DISCO C:`, `CPU` y 4.o medidor dinámico `TEMP. CPU` / `MEM. VIRTUAL`) con detalle compacto debajo de cada anillo.
+- **Graficas, Leyendas y Tarjetas KPI Sin Recortes (`history_charts.py`, `widgets.py`, `theme.py`, `i18n.py`):**
+  - Calculo dinamico `_layout_metrics(fm)` en `TimeSeriesChart` y `FreedSpaceChart` para que el eje Y (`43.91 GB`, `128 GB`) y marcas X (`02:51 ... ahora`) nunca se recorten ni solapen.
+  - `_FreedLegend` con altura de fila dinamica, `HistoryPanel.legend_lbl` en fila propia (`Caption`), `StatusTag` con politica `Fixed` y tarjetas KPI compactas (`14px` y titulos breves `RAM`, `Disco C:`, `CPU / Temp`, `SRE Auto`).
+- **Jerarquia Tipografica TRODAI Estricta (`theme.py`, vistas y dialogos):**
+  - Pesos unificados en `Space Grotesk` (`700` titulos, `500` botones, `400` cuerpo, `300` secundarios; cero `600`/`DemiBold`) y conversión de textos narrativos/resumenes/banners/guias de `MonoValue` a `CardTitle` / `BodyText`.
+- **Barra Superior Minimalista y Tour Guiado Actualizado (`main_window.py`, `tour_dialog.py`, `onboarding_check.py`):**
+  - Intercambio limpio: tema (`TopUtilityBtn`, `30x28`) e idioma (`TopLangCombo`, `52x28`) discretos arriba a la derecha; badge `MODO ESTANDAR` / `ADMIN UAC` y boton `Elevar Admin` en el pie lateral.
+  - Tour Guiado ampliado a **7 pasos** cubriendo todas las pestañas (`Resumen`, `Almacenamiento + Treemap opaco + ULTIMO USO`, `Procesos e IA`, `Termica y BIOS`, `Aplicaciones winget`, `Inicio Inteligente` y `Prueba Rapida`) con **6 verificaciones diagnósticas** en el chequeo inicial.
+  - Nueva suite de regresion en `tests/test_v061_ui_polish.py` (`144/144` pruebas aprobadas).
+
 ## [0.6.0] - 2026-11-20
 
 ### Agregado y Redisenado (Identidad Corporativa TRODAI + 6 Pestanas)

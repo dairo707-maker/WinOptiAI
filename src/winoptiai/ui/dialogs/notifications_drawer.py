@@ -186,7 +186,7 @@ class NotificationsTasksDialog(QDialog):
             rl.setSpacing(6)
             top = QHBoxLayout()
             title = QLabel(f"{task.title} ({task.started_at})")
-            title.setStyleSheet("font-size: 12px; font-weight: 600;")
+            title.setStyleSheet("font-size: 12px; font-weight: 700;")
             top.addWidget(title)
             top.addStretch()
             eta = task.eta_label()
@@ -243,7 +243,7 @@ class NotificationsTasksDialog(QDialog):
             info = QLabel(
                 f"{rec.title} — {rec.percent}% | {len(rec.pending_paths)} pendientes ({rec.created_at})"
             )
-            info.setObjectName("MonoValue")
+            info.setObjectName("BodyText")
             rl.addWidget(info, stretch=1)
 
             res_btn = QPushButton("Reanudar")
@@ -299,7 +299,7 @@ class NotificationsTasksDialog(QDialog):
             top.setSpacing(8)
             top.addWidget(StatusTag(item.kind, tone_map.get(item.kind, "neutral")))
             title = QLabel(item.title)
-            title.setStyleSheet("font-size: 12px; font-weight: 600;")
+            title.setStyleSheet("font-size: 12px; font-weight: 700;")
             top.addWidget(title)
             top.addStretch()
             ts = QLabel(item.timestamp[11:])

@@ -324,7 +324,7 @@ class TreemapWidget(QWidget):
 
         total = max(1, self.current.size_bytes if self.current else 1)
         mono = QFont(MONO_FONT_FAMILY, 8)
-        ui = QFont(UI_FONT_FAMILY, 9, QFont.Weight.DemiBold)
+        ui = QFont(UI_FONT_FAMILY, 9, QFont.Weight.Bold)
         fm_ui = QFontMetrics(ui)
         fm_mono = QFontMetrics(mono)
         level1 = [t for t in self._tiles if t.depth == 1]

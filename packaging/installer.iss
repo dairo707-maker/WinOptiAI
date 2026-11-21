@@ -1,6 +1,6 @@
 ; Inno Setup 6 script for WinOptiAI — Multilingual Dual-Mode Windows Installer Wizard
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.0"
+  #define MyAppVersion "0.6.1"
 #endif
 
 #define MyAppName "WinOptiAI"
@@ -30,6 +30,7 @@ SetupIconFile=..\assets\icons\winoptiai.ico
 WizardImageFile=..\assets\icons\wizard_large.bmp
 WizardSmallImageFile=..\assets\icons\wizard_small.bmp
 UninstallDisplayIcon={app}\{#MyAppExeName}
+ChangesAssociations=yes
 UninstallDisplayName={#MyAppName}
 OutputDir=..\dist
 OutputBaseFilename=WinOptiAI-Setup
@@ -89,11 +90,11 @@ Source: "..\docs\INSTALL_GUIDE.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\BIOS_AND_THERMAL_GUIDE_LENOVO_82FE.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "TRODAI.WinOptiAI"
 Name: "{group}\INSTALL_GUIDE"; Filename: "{app}\docs\INSTALL_GUIDE.md"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startmenuicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "TRODAI.WinOptiAI"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "TRODAI.WinOptiAI"; Tasks: startmenuicon
 
 [Registry]
 ; Sync installer language to HKCU so WinOptiAI launches in the same language
@@ -101,6 +102,8 @@ Root: HKCU; Subkey: "Software\WinOptiAI"; ValueType: string; ValueName: "Languag
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --minimized"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
+; v0.6.1: refrescar la cache de iconos de Windows para que barra de tareas e Inicio muestren el icono nuevo.
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden skipifdoesntexist
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]

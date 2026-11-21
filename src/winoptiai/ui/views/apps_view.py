@@ -146,7 +146,7 @@ class AppsView(QWidget):
         self.sem_dot = SemaphoreDot("neutral", self.policy.config.theme_mode)
         sl.addWidget(self.sem_dot)
         self.summary_lbl = QLabel("Haz clic en 'Escanear Aplicaciones' para inventariar software y uso real.")
-        self.summary_lbl.setObjectName("MonoValue")
+        self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
         sl.addWidget(self.summary_lbl, stretch=1)
         root.addWidget(summary)

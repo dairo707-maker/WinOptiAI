@@ -205,23 +205,40 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border: none;
     }}
 
+    /* v0.6.1 Jerarquia tipografica unica (Space Grotesk solo trae Light/Regular/Medium/Bold;
+       JetBrains Mono no trae Bold): titulos 700, cuerpo 400, secundarios 300, botones 500.
+       Nunca usar 600: Qt lo resuelve distinto segun la fuente y se ve "raro". */
     QLabel#PageTitle {{
         font-size: 19px;
-        font-weight: 600;
+        font-weight: 700;
         letter-spacing: -0.3px;
         color: {p["text_primary"]};
     }}
 
-    QLabel#PageSubtitle {{
+    QLabel#PageSubtitle, QLabel#BodyText {{
         font-size: 12px;
+        font-weight: 400;
         color: {p["text_secondary"]};
     }}
 
+    QLabel#CardTitle {{
+        font-size: 13px;
+        font-weight: 700;
+        color: {p["text_primary"]};
+    }}
+
     QLabel#SectionLabel {{
-        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
+        font-family: "{UI_FONT_FAMILY}", "Instrument Sans", "Segoe UI", sans-serif;
         font-size: 10px;
-        font-weight: 500;
-        letter-spacing: 1.1px;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        color: {p["text_secondary"]};
+    }}
+
+    QLabel#Caption {{
+        font-size: 10.5px;
+        font-weight: 300;
+        letter-spacing: 0.4px;
         color: {p["text_muted"]};
     }}
 
@@ -234,7 +251,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QLabel#MetricValueCompact {{
         font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 500;
         color: {p["text_primary"]};
     }}
@@ -274,7 +291,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border: 1px solid {p["primary_bg"]};
         padding: 8px 16px;
         font-size: 12px;
-        font-weight: 600;
+        font-weight: 700;
         letter-spacing: 0.2px;
     }}
 
@@ -326,14 +343,14 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         color: {p["text_primary"]};
         border-color: {p["border_strong"]};
         border-bottom: 2px solid {p["accent"]};
-        font-weight: 600;
+        font-weight: 700;
     }}
 
     /* v0.5.6: acciones especificas de cada pestana segun su efecto (tonos apagados, sin neon). */
     QPushButton#RestoreAction, QPushButton#MoveAction, QPushButton#RiskAction {{
         padding: 7px 12px;
         font-size: 12px;
-        font-weight: 600;
+        font-weight: 700;
         border-left-width: 3px;
     }}
 
@@ -383,6 +400,56 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QWidget#TopBar QLabel {{
         border-radius: 5px;
+    }}
+
+    /* Controles minimalistas de tema e idioma en barra superior (v0.6.1). */
+    QWidget#TopBar QPushButton#TopUtilityBtn {{
+        background-color: transparent;
+        border: 1px solid transparent;
+        padding: 0px;
+        border-radius: 6px;
+    }}
+
+    QWidget#TopBar QPushButton#TopUtilityBtn:hover {{
+        background-color: {p["bg_hover"]};
+        border-color: {p["border_hairline"]};
+    }}
+
+    QWidget#TopBar QComboBox#TopLangCombo {{
+        background-color: transparent;
+        color: {p["text_secondary"]};
+        border: 1px solid {p["border_hairline"]};
+        border-radius: 6px;
+        padding: 2px 14px 2px 8px;
+        font-size: 11px;
+        font-weight: 500;
+    }}
+
+    QWidget#TopBar QComboBox#TopLangCombo:hover {{
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
+        border-color: {p["border_strong"]};
+    }}
+
+    QWidget#TopBar QComboBox#TopLangCombo::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 14px;
+        border: none;
+        background: transparent;
+    }}
+
+    QWidget#TopBar QComboBox#TopLangCombo::down-arrow {{
+        width: 0px;
+        height: 0px;
+        border-left: 3px solid transparent;
+        border-right: 3px solid transparent;
+        border-top: 4px solid {p["text_secondary"]};
+        margin-right: 4px;
+    }}
+
+    QComboBox#TopLangCombo QAbstractItemView {{
+        border-radius: 0px;
     }}
 
     QComboBox, QLineEdit {{

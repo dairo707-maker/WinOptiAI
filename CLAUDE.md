@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.0`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.1`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -14,23 +14,34 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Roles de botones (`v0.5.6`):** `PrimaryAction` (1 por vista), `GhostAction` (neutro), `ModeTab` (pestanas de modo, subrayado al activarse) y acciones especificas de cada pestana por efecto: `RestoreAction` (salvia, restaurar/restablecer), `MoveAction` (ambar, mover a Cuarentena/Papelera/hardlink), `RiskAction` (oxido, eliminar definitivo o cerrar procesos). Asignar con `widgets.set_button_role()`; tonos apagados de la paleta (`tag_ok/warn/risk`), nunca neon.
    - **Texto nunca recortado (`v0.5.6`):** filas de botones con `widgets.FlowLayout` (pasan a otra fila), textos dinamicos con `widgets.AdaptiveButton.set_variants([largo, ..., corto])`, dialogos con `setMinimumSize` (nunca `setFixedSize`) y subtitulos con `setWordWrap(True)`. `tests/test_v056_ui_polish.py` recorre todas las vistas a 980x650 en oscuro y claro con `find_clipped_buttons`.
    - Lineas divisorias `1px` hairline, fondo translucido DWM Acrylic (`DWMWA_SYSTEMBACKDROP_TYPE = 3`).
-   - Jerarquia monocromo / acero-hielo (`#E2E7ED`, `#9BA3AE`, `#0B0D10`). **Prohibidos los brillos neon, gradientes llamativos o colores saturados de "estetica IA".**
+   - Paleta corporativa **TRODAI**: Oscuro **Obsidian Navy** (`#0A0F1D` / `#0F1628`) y Claro **Crisp White** (`#F8FAFC` / `#EEF2F7`) con acentos **Cyber Cyan** (`#0EA5E9`) y **Governance Blue** (`#3B82F6`) y semaforos legibles. **Prohibidos los brillos neon, gradientes llamativos o colores saturados de "estetica IA".**
 2. **Cero Emojis — 100% SVG Minimalistas:**
    - Prohibido usar emojis Unicode en `src/winoptiai/` (verificado por `tests/test_sre_and_hardware.py`), UI, etiquetas, notificaciones Tray o botones.
    - Usar exclusivamente iconos SVG geometricos de `assets/icons/*.svg` via `winoptiai.ui.svg_icons.load_svg_icon()`.
 3. **Tipografia Embebida OFL:**
-   - `Instrument Sans` (UI) + `IBM Plex Mono` (metricas, rutas, hashes, tags), cargadas desde `assets/fonts/`.
+   - `Space Grotesk` (UI: Light 300, Regular 400, Medium 500, Bold 700; nunca 600) + `JetBrains Mono` (solo KPIs, ejes de graficas, rutas, hashes, tags y logs), cargadas desde `assets/fonts/` (con respaldo legacy `Instrument Sans` / `IBM Plex Mono`).
 4. **Limpieza, Arranque Fluido y Concurrencia Segura:**
-   - Arranque en 2 fases: pintar ventana principal antes de lanzar escaneos WMI/disco/retencion en `QThreadPool`.
+   - Arranque en 2 fases: pintar ventana principal antes de lanzar escaneos WMI/disco/retencion en `QThreadPool`. Telemetria PDH diferida en hilo secundario (`lazy_init=True` + `ensure_initialized`).
    - Limite de concurrencia: maximo **2 tareas de almacenamiento simultaneas** (`storage_view.MAX_STORAGE_TASKS = 2`; global `main_window.MAX_CONCURRENT_TASKS = 4`) y proteccion por RAM libre minima; control cooperativo global (`Pausar`, `Guardar Pausa`, `Cancelar`, `Retomar Sesion`) en barra superior y cajon de tareas.
    - **Reglas criticas de PySide6 / Shiboken6 (lecciones P0 de `v0.5.1`–`v0.5.3`):**
      - **NUNCA** llamar a `super().__lt__()` dentro de `NumericTableItem.__lt__` o `NumericTreeItem.__lt__` (`ui/widgets.py`): en PySide6 vuelve a despachar al override de Python hasta desbordar la pila (`0xc0000005` en `shiboken6.abi3.dll`). Usar comparacion de texto propia en Python.
      - **NUNCA** llamar `setRowCount()` ni destruir widgets hijos (`deleteLater()` / `removeCellWidget()`) de forma sincrona dentro de un slot `clicked` (`thermal_bios_view.py`, `notifications_drawer.py`): diferir siempre la reconstruccion con `QTimer.singleShot(0, ...)`.
      - Conectar senales de `AsyncTask` con `Qt.QueuedConnection` explicita, limitar senales de progreso (~10/s o cambio de `%`) y usar carga perezosa (*lazy loading*) en `QTreeWidget` (`storage_view.py`).
      - En llamadas UAC (`ShellExecuteW`) fuera del hilo UI (`win32_bridge.run_elevated_command`), inicializar COM (`CoInitializeEx`) en el hilo trabajador.
-   - **Monitoreo con historial (`v0.5.8`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (monocromo, 1 px) RAM libre + umbral SRE, CPU % y marcadores B/L/D/E de `audit.jsonl`, y el acumulado de espacio liberado por tipo (AI Boost no cuenta: es RAM). Resumen va en `QScrollArea`: nunca poner reglas QSS sin selector en su viewport (se heredan a todos los hijos).
+   - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina. `--elevated-relaunch` espera 20 s al mutex. Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
-   - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, monocromo, 2 niveles, clic = entrar, doble clic = Explorador), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+   - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.1
+
+Consolidado entre Claude Code y Antigravity (aprobado por el propietario y empaquetado para release):
+- **Icono barra de tareas y bandeja:** `app.py` fija `SetCurrentProcessExplicitAppUserModelID("TRODAI.WinOptiAI")` y usa `winoptiai.ico` como icono de ventana; `installer.iss` agrega `AppUserModelID`, `ChangesAssociations=yes` y `ie4uinit.exe -show`; tooltip de bandeja en `system_tray.py` reducido a `"WinOptiAI"`.
+- **Medidores de Salud (`history_charts.SystemGaugesWidget` + `overview_view._fourth_gauge`):** `css_qcolor()` traduce `rgba(...)` evitando fondo negro en modo claro; cuadricula 2x2 adaptable con 4.o medidor (`TEMP. CPU` o `MEM. VIRTUAL`) y detalle compacto bajo cada etiqueta.
+- **Graficas sin recorte de ejes ni leyendas (`history_charts.py`):** `TimeSeriesChart` y `FreedSpaceChart` calculan dinamicamente `_layout_metrics(fm)` segun el ancho real del eje Y (`43.91 GB`, `128 GB`) y alto del eje X; `_FreedLegend` ajusta altura `max(22, fm.height()+6)`; `HistoryPanel.legend_lbl` pasa a linea propia (`Caption`) para evitar que `summary_lbl` comprima la grafica a `980x650`.
+- **Jerarquia tipografica y badges sin recorte (`theme.py`, `widgets.py`, `i18n.py`, vistas y dialogos):** pesos estrictos `700`/`500`/`400`/`300` (cero `600`/`DemiBold`); todos los textos de prosa/resumenes/banners/guias usan `CardTitle`/`BodyText` en `Space Grotesk` (reservando `MonoValue` para cifras KPI, rutas y logs); `StatusTag` fija `QSizePolicy.Fixed` y tarjetas KPI usan `14px` compacto + titulos breves (`RAM`, `Disco C:`, `CPU / Temp`, `SRE Auto`).
+- **Tour Guiado de 7 pasos y Prueba Rapida (`tour_dialog.py`, `onboarding_check.py`):** actualizado para recorrer las 6 pestanas reales (`0..5`, incluyendo Aplicaciones `winget`, Inicio Inteligente, Treemap moderno opaco, semaforos/anillos 2x2 y columna `ULTIMO USO`) y sumar una 6.a verificacion (`Aplicaciones e Inicio de Windows`) en la Prueba Rapida.
+- **Intercambio minimalista TopBar / Barra lateral (`main_window.py`, `theme.py`):** boton de tema (`TopUtilityBtn`, `30x28`, fondo transparente) e idioma (`TopLangCombo`, `52x28`) arriba a la derecha junto a la campana; `admin_tag` (`MODO ESTANDAR` / `ADMIN UAC`) y `uac_btn` (`Elevar Admin`) al pie de `Sidebar`.
+- **Verificacion:** capturas reales (Resumen claro/oscuro `980x650` y `1200x760` + pasos 5 y 6 del Tour) inspeccionadas sin recortes; suite completa `144/144` pruebas aprobadas (`uv run --no-sync pytest -v`, incluyendo `tests/test_v061_ui_polish.py`, `tests/test_v060_features.py` y `tests/test_v0511_features.py`).
 
 ## Invariantes de Seguridad del Sistema Operativo
 
@@ -75,7 +86,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.5.10`), sincronizada con `pyproject.toml`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.1`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

@@ -382,6 +382,7 @@ class StatusTag(QLabel):
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None) -> None:
         super().__init__(text.upper(), parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.set_tone(text, tone)
 
     def set_tone(self, text: str, tone: str = "neutral") -> None:
@@ -391,16 +392,17 @@ class StatusTag(QLabel):
             f"""
             QLabel {{
                 font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
-                font-size: 9px;
+                font-size: 8.5px;
                 font-weight: 500;
-                letter-spacing: 0.9px;
+                letter-spacing: 0.5px;
                 color: {fg};
                 border: 1px solid {border};
                 background-color: {bg};
-                padding: 2px 6px;
+                padding: 2px 5px;
             }}
             """
         )
+        self.adjustSize()
 
 
 class SharpMetricCell(GlassPanel):
@@ -419,7 +421,7 @@ class SharpMetricCell(GlassPanel):
         self._theme_mode = "dark"
         layout = QVBoxLayout(self)
         if ultra_compact:
-            layout.setContentsMargins(12, 8, 12, 8)
+            layout.setContentsMargins(10, 7, 10, 7)
             layout.setSpacing(3)
         else:
             vpad = 10 if compact else 14
@@ -427,9 +429,10 @@ class SharpMetricCell(GlassPanel):
             layout.setSpacing(4 if compact else 8)
 
         header = QHBoxLayout()
-        header.setSpacing(6 if ultra_compact else 8)
+        header.setSpacing(4 if ultra_compact else 8)
         self.icon_lbl = QLabel()
         self.icon_lbl.setPixmap(load_svg_pixmap(icon_name, color=get_palette("dark")["text_secondary"], size=13 if ultra_compact else 14))
+        self.icon_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         header.addWidget(self.icon_lbl)
 
         self.semaphore = SemaphoreDot("neutral", "dark")
@@ -437,8 +440,7 @@ class SharpMetricCell(GlassPanel):
 
         self.title_lbl = QLabel(title.upper())
         self.title_lbl.setObjectName("SectionLabel")
-        header.addWidget(self.title_lbl)
-        header.addStretch()
+        header.addWidget(self.title_lbl, stretch=1)
 
         self.tag = StatusTag("OK", "neutral")
         header.addWidget(self.tag)
@@ -504,7 +506,7 @@ class SectionBenefitStrip(GlassPanel):
         hdr.addWidget(self.badge)
 
         self.title_lbl = QLabel("")
-        self.title_lbl.setObjectName("MonoValue")
+        self.title_lbl.setObjectName("CardTitle")
         self.title_lbl.setWordWrap(True)
         hdr.addWidget(self.title_lbl, stretch=1)
 
@@ -521,12 +523,12 @@ class SectionBenefitStrip(GlassPanel):
         bl.setSpacing(4)
 
         self.improves_lbl = QLabel("")
-        self.improves_lbl.setObjectName("PageSubtitle")
+        self.improves_lbl.setObjectName("BodyText")
         self.improves_lbl.setWordWrap(True)
         bl.addWidget(self.improves_lbl)
 
         self.safety_lbl = QLabel("")
-        self.safety_lbl.setObjectName("MonoValue")
+        self.safety_lbl.setObjectName("BodyText")
         self.safety_lbl.setWordWrap(True)
         bl.addWidget(self.safety_lbl)
 

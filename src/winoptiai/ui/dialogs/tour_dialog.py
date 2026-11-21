@@ -1,4 +1,4 @@
-"""Interactive 5-step guided tour and new-PC quick system verification dialog."""
+"""Interactive 7-step guided tour and new-PC quick system verification dialog."""
 
 from __future__ import annotations
 
@@ -28,51 +28,73 @@ from ..widgets import FlowLayout, GlassPanel, StatusTag, set_button_role
 
 _TOUR_STEPS: list[dict[str, object]] = [
     {
-        "tag": "PASO 1 / 5",
+        "tag": "PASO 1 / 7",
         "tab": 0,
-        "title": "Resumen, Telemetria y Guardia SRE",
-        "subtitle": "Monitoreo ligero de RAM, frecuencia CPU, temperatura y liberacion segura.",
+        "title": "Resumen TRODAI, Semaforos y Salud 2x2",
+        "subtitle": "Primera vista compacta sin scroll: 4 KPIs, semaforos interactivos y graficas.",
         "bullets": [
-            "Graficos locales de las ultimas 24 horas o 7 dias sin saturar el disco (metrics.sqlite).",
-            "Guardia SRE automatico: calibra su umbral segun la RAM real del equipo y usa histeresis de 300 s.",
-            "AI Boost: compacta RAM inactiva y activa EcoQoS sin tocar nunca tu ventana activa ni tu IDE.",
+            "Cuatro medidores radiales 2x2 (RAM, Disco C:, CPU y Temp. CPU / Mem. Virtual) con estado de salud.",
+            "Barra de semaforo clickable para saltar directo a RAM, Disco, Termica, Apps o Inicio.",
+            "Curvas locales de 24 h / 7 d (metrics.sqlite), espacio liberado, boton '?' de guia y AI Boost SRE.",
         ],
     },
     {
-        "tag": "PASO 2 / 5",
+        "tag": "PASO 2 / 7",
         "tab": 1,
-        "title": "Almacenamiento, OneDrive y Boveda",
-        "subtitle": "Limpieza masiva con respaldo en Cuarentena, mapa de carpetas y proteccion de programas.",
+        "title": "Almacenamiento, Treemap Moderno y Boveda",
+        "subtitle": "Temporales, duplicados BLAKE3, columna ULTIMO USO y mapa jerarquico opaco.",
         "bullets": [
-            "Temporales con Pausa, Guardar Pausa y Reanudacion entre reinicios; casilla 'Seleccionar todo' por listado.",
-            "Duplicados BLAKE3 protege instalaciones (AppData, Program Files, .venv, drivers) y re-verifica antes de hardlink.",
-            "Cuarentena instantanea (Supr o arrastrar archivos) con Deshacer y auto-purga segura a los 30 dias.",
+            "Temporales con Pausa, Guardar Pausa, Reanudacion y casilla tri-estado 'Seleccionar todo'.",
+            "Treemap moderno opaco por categoria con ruta navegable (breadcrumbs) y tabla de archivos pesados.",
+            "Columna 'ULTIMO USO' cronologica en todos los listados y Cuarentena instantanea con Deshacer.",
         ],
     },
     {
-        "tag": "PASO 3 / 5",
+        "tag": "PASO 3 / 7",
         "tab": 2,
         "title": "Procesos e IA Agentica",
-        "subtitle": "Control en tiempo real del consumo % CPU y workers huerfanos.",
+        "subtitle": "Consumo en vivo, fecha de ultimo uso y cierre seguro de workers zombis.",
         "bullets": [
-            "Medicion real de % CPU por proceso mediante cache de handles psutil.",
+            "Medicion real de % CPU, RAM y columna 'ULTIMO USO' por proceso mediante handles psutil.",
             "Deteccion de procesos Node/Python/uv huerfanos cuyo proceso padre ya cerro.",
-            "Proteccion estricta para agentes IA, editores de codigo, antivirus y OneDrive.",
+            "Proteccion estricta para agentes IA, editores de codigo, ventana activa, antivirus y OneDrive.",
         ],
     },
     {
-        "tag": "PASO 4 / 5",
+        "tag": "PASO 4 / 7",
         "tab": 3,
         "title": "Termica, BIOS OEM y Salud S.M.A.R.T.",
-        "subtitle": "Perfiles energeticos verificados con powercfg /q y diagnostico profundo de disco.",
+        "subtitle": "Semaforo termico en vivo, perfiles powercfg /q y diagnostico profundo de disco.",
         "bullets": [
-            "Cambia al instante entre Frio/Silencioso, Equilibrado Inteligente o IA Local Maxima (tambien con check en la bandeja).",
+            "Cambia al instante entre Frio/Silencioso, Equilibrado Inteligente o IA Local Maxima (tambien en la bandeja).",
             "Lee salud S.M.A.R.T. NVMe/SSD, eventos Disk/Ntfs/WHEA de 14 dias, TPM, BitLocker y HVCI.",
-            "Acciones 1-clic con UAC (CHKDSK, DISM/SFC, WinSxS) con guardia previa si Windows tiene reinicio pendiente.",
+            "Acciones 1-clic con UAC (CHKDSK, DISM/SFC, WinSxS) protegiendo reinicios pendientes de Windows.",
         ],
     },
     {
-        "tag": "PASO 5 / 5",
+        "tag": "PASO 5 / 7",
+        "tab": 4,
+        "title": "Administrador de Aplicaciones (winget)",
+        "subtitle": "Inventario de programas instalados, fecha de ultimo uso, actualizaciones y limpieza.",
+        "bullets": [
+            "Combina el Registro de Windows con winget para listar versiones, editor, tamano y 'ULTIMO USO'.",
+            "Verifica nuevas versiones disponibles y actualiza con 1 clic desde la interfaz via winget.",
+            "Desinstalacion protegida (bloquea OS, drivers, antivirus y WinOptiAI) con rescate de residuos en AppData.",
+        ],
+    },
+    {
+        "tag": "PASO 6 / 7",
+        "tab": 5,
+        "title": "Inicio de Windows Inteligente",
+        "subtitle": "Sugerencias segun uso real para acelerar el arranque de forma 100% reversible.",
+        "bullets": [
+            "Analiza claves Run, StartupApproved y carpetas de inicio junto con telemetria BAM, Prefetch y RAM.",
+            "Asigna un semaforo inteligente (MANTENER, PAUSAR o DESACTIVAR) segun frecuencia de uso e impacto.",
+            "Activa o pausa entradas al instante guardando una copia previa de seguridad (100% reversible).",
+        ],
+    },
+    {
+        "tag": "PASO 7 / 7",
         "tab": 0,
         "title": "Prueba Rapida del Sistema (Equipo Nuevo)",
         "subtitle": "Verificacion segura de solo lectura (~3-5 s) del estado real de este computador.",
@@ -116,7 +138,7 @@ class QuickTourDialog(QDialog):
         # Header
         hdr = QHBoxLayout()
         icon_lbl = QLabel()
-        icon_lbl.setPixmap(load_svg_pixmap("brand", color=pal["text_primary"], size=24))
+        icon_lbl.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=24))
         hdr.addWidget(icon_lbl)
         hdr.addSpacing(8)
 
@@ -131,7 +153,7 @@ class QuickTourDialog(QDialog):
         tbox.addWidget(self.sub_lbl)
         hdr.addLayout(tbox, stretch=1)
 
-        self.step_tag = StatusTag("PASO 1 / 5", "active")
+        self.step_tag = StatusTag("PASO 1 / 7", "active")
         hdr.addWidget(self.step_tag)
         root.addLayout(hdr)
 
@@ -149,7 +171,7 @@ class QuickTourDialog(QDialog):
         bp_outer.addWidget(self.progress_bar)
 
         self.check_status_lbl = QLabel("")
-        self.check_status_lbl.setObjectName("MonoValue")
+        self.check_status_lbl.setObjectName("BodyText")
         self.check_status_lbl.setWordWrap(True)
         self.check_status_lbl.setVisible(False)
         bp_outer.addWidget(self.check_status_lbl)
@@ -230,7 +252,7 @@ class QuickTourDialog(QDialog):
                 rl = QVBoxLayout(row)
                 rl.setContentsMargins(12, 10, 12, 10)
                 lbl = QLabel(f"- {bullet}")
-                lbl.setObjectName("MonoValue")
+                lbl.setObjectName("BodyText")
                 lbl.setWordWrap(True)
                 rl.addWidget(lbl)
                 self._body_layout.addWidget(row)
@@ -363,7 +385,7 @@ class QuickTourDialog(QDialog):
             cl.addLayout(top)
 
             sum_lbl = QLabel(item.summary)
-            sum_lbl.setObjectName("MonoValue")
+            sum_lbl.setObjectName("BodyText")
             sum_lbl.setWordWrap(True)
             cl.addWidget(sum_lbl)
 

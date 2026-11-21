@@ -288,9 +288,10 @@ class OverviewView(QWidget):
         cpu_int = int(live.cpu_utility_pct)
         cpu_tone = "risk" if (live.cpu_temp_c or 0) >= 85 or cpu_int >= 90 else ("warn" if (live.cpu_temp_c or 0) >= 72 or cpu_int >= 70 else "ok")
         cpu_tag = f"{live.cpu_temp_c:.0f} C" if live.cpu_temp_c else ("ALTA" if cpu_tone != "ok" else "OK")
+        thermal_short = thermal_label.replace(" Inteligente", "").replace(" Local Maxima", " Max").replace(" / Silencioso", "")
         self.cpu_cell.update_metric(
             f"{live.cpu_utility_pct:.0f}% · {freq_ghz:.2f} GHz{temp_part}",
-            f"Turbo {live.cpu_turbo_pct:.0f}% · {thermal_label}",
+            f"Turbo {live.cpu_turbo_pct:.0f}% · {thermal_short}",
             cpu_int,
             cpu_tag,
             cpu_tone,
@@ -312,7 +313,36 @@ class OverviewView(QWidget):
         elif "warn" in (ram_tone, disk_tone, cpu_tone):
             worst = "warn"
         h_label = "OPTIMO" if worst == "ok" else ("ATENCION" if worst == "warn" else "CRITICO")
-        self.gauges_widget.update_values(used_pct, ram_tone, disk_pct, disk_tone, cpu_int, cpu_tone, h_label, worst)
+        details = (
+            f"{free_gb:.1f} GB libres",
+            f"{disk_free_gb:.0f} GB libres",
+            f"{freq_ghz:.2f} GHz" if freq_ghz else "En uso",
+        )
+        self.gauges_widget.update_values(
+            used_pct, ram_tone, disk_pct, disk_tone, cpu_int, cpu_tone, h_label, worst,
+            details=details, fourth=self._fourth_gauge(live),
+        )
+
+    @staticmethod
+    def _fourth_gauge(live: LiveSystemTelemetry) -> dict:
+        """4.o medidor: temperatura de CPU si hay sensor; si no, memoria virtual (archivo de paginacion)."""
+        temp = live.cpu_temp_c
+        if temp is not None and temp > 0:
+            t = int(round(temp))
+            tone = "risk" if t >= 85 else ("warn" if t >= 72 else "ok")
+            return {"label": "TEMP. CPU", "pct": min(100, t), "tone": tone, "text": f"{t} C",
+                    "detail": "Critica" if tone == "risk" else ("Elevada" if tone == "warn" else "Normal")}
+        try:
+            import psutil
+
+            sw = psutil.swap_memory()
+            pct = int(sw.percent)
+            tone = "risk" if pct >= 85 else ("warn" if pct >= 65 else "ok")
+            used_gb = sw.used / (1024 ** 3)
+            return {"label": "MEM. VIRTUAL", "pct": pct, "tone": tone, "text": f"{pct}%",
+                    "detail": f"{used_gb:.1f} GB uso"}
+        except Exception:  # noqa: BLE001
+            return {"label": "MEM. VIRTUAL", "pct": 0, "tone": "neutral", "text": "--", "detail": "No disponible"}
 
     def set_audit_rows(self, rows: list[dict]) -> None:
         from datetime import datetime

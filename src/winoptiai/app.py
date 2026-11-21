@@ -52,6 +52,40 @@ def _start_activation_server(key: str, on_activate):
     return server
 
 
+APP_USER_MODEL_ID = "TRODAI.WinOptiAI"
+
+
+def _set_app_user_model_id() -> None:
+    """v0.6.1: identidad propia en la barra de tareas (coincide con los accesos del instalador).
+
+    Sin esto Windows agrupa la ventana bajo python.exe o bajo un acceso anclado viejo y muestra
+    el icono guardado en su cache en lugar del icono actual de la app.
+    """
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:  # noqa: BLE001 - no Windows o shell32 sin la funcion
+        pass
+
+
+def _app_window_icon():
+    """Icono de ventana/barra de tareas: el mismo .ico a color del ejecutable (Hexa-Vault).
+
+    Antes se usaba brand.svg teñido gris claro (#E2E7ED), casi invisible en barra clara.
+    """
+    from PySide6.QtGui import QIcon
+
+    from . import get_base_dir
+
+    ico = get_base_dir() / "assets" / "icons" / "winoptiai.ico"
+    if ico.exists():
+        icon = QIcon(str(ico))
+        if not icon.isNull():
+            return icon
+    return load_svg_icon("brand", color="#0EA5E9", size=32)
+
+
 def main() -> int:
     # v0.5.8: instancia unica. Dos procesos abiertos duplicaban AI Boost automatico y
     # registros de audit.jsonl (16/11 22:45:35). Se comprueba antes del crash guard para no
@@ -72,6 +106,7 @@ def main() -> int:
     if getattr(sys, "frozen", False):
         register_application_restart(CRASH_RESTART_ARG)
 
+    _set_app_user_model_id()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -84,7 +119,7 @@ def main() -> int:
     policy = SREPolicyEngine()
     register_embedded_fonts(app)
     app.setStyleSheet(build_obsidian_qss(policy.config.theme_mode))
-    app.setWindowIcon(load_svg_icon("brand", color="#E2E7ED", size=24))
+    app.setWindowIcon(_app_window_icon())
 
     window = MainWindow(crash_guard=crash_guard, auto_restarted=CRASH_RESTART_ARG in sys.argv)
     activation_server = _start_activation_server(instance_lock.key, window.restore_from_tray)  # noqa: F841

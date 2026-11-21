@@ -130,7 +130,7 @@ class UndoToast(QFrame):
         lay.setContentsMargins(14, 8, 8, 8)
         lay.setSpacing(10)
         self.label = QLabel("")
-        self.label.setObjectName("MonoValue")
+        self.label.setObjectName("BodyText")
         lay.addWidget(self.label)
         self.undo_btn = QPushButton("Deshacer")
         self.undo_btn.setObjectName("RestoreAction")

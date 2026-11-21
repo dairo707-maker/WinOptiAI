@@ -129,7 +129,7 @@ class StartupView(QWidget):
         self.sem_dot = SemaphoreDot("neutral", self.policy.config.theme_mode)
         sl.addWidget(self.sem_dot)
         self.summary_lbl = QLabel("Haz clic en 'Analizar Inicio' para evaluar programas de arranque.")
-        self.summary_lbl.setObjectName("MonoValue")
+        self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
         sl.addWidget(self.summary_lbl, stretch=1)
         root.addWidget(summary)

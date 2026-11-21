@@ -97,6 +97,8 @@ def test_overview_no_scroll_single_row_kpis_gauges_and_semaphores(
         win.show()
         _pump(qapp, 12)
 
+        win.telemetry_timer.stop()
+        win._warmup_timer.stop()
         ov = win.overview_view
         assert ov.findChildren(QScrollArea) == []
         assert not ov.benefit_strip.isVisible()

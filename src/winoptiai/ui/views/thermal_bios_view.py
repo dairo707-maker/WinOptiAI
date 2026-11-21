@@ -138,7 +138,7 @@ class ThermalBiosView(QWidget):
 
             # v0.5.6: titulo y etiqueta apilados (antes se recortaban en ventanas angostas)
             name_lbl = QLabel(prof.title)
-            name_lbl.setStyleSheet("font-size: 13px; font-weight: 600;")
+            name_lbl.setStyleSheet("font-size: 13px; font-weight: 700;")
             name_lbl.setWordWrap(True)
             cl.addWidget(name_lbl)
             tag_row = QHBoxLayout()
@@ -168,7 +168,7 @@ class ThermalBiosView(QWidget):
         hw_outer.setSpacing(8)
 
         self.hw_lbl = QLabel("Escaneando perfil completo de hardware...")
-        self.hw_lbl.setObjectName("MonoValue")
+        self.hw_lbl.setObjectName("BodyText")
         self.hw_lbl.setWordWrap(True)
         hw_outer.addWidget(self.hw_lbl)
         # v0.5.6: acciones en su propia fila (antes comprimian el inventario en ventanas angostas)

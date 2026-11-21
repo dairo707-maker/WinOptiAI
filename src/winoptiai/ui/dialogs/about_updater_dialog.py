@@ -82,7 +82,7 @@ class AboutUpdaterDialog(QDialog):
         author = QLabel(tr("about_author", lang))
         author.setObjectName("PageSubtitle")
         desc = QLabel("GOBERNANZA · SEGURIDAD · ANALITICA DE DATOS")
-        desc.setObjectName("SectionLabel")
+        desc.setObjectName("Caption")
         tbox.addWidget(title)
         tbox.addWidget(author)
         tbox.addWidget(desc)
@@ -112,7 +112,7 @@ class AboutUpdaterDialog(QDialog):
             f"Repositorio: {REPO_WEB_URL}\n"
             f"Perfil detectado: {hardware_summary or 'Analizando equipo...'}"
         )
-        meta.setObjectName("MonoValue")
+        meta.setObjectName("BodyText")
         meta.setWordWrap(True)
         il.addWidget(meta)
         about_layout.addWidget(info_panel)

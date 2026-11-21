@@ -233,7 +233,8 @@ class WinOptiTray(QSystemTrayIcon):
         )
         t_lbl = _THERMAL_SHORT_LABELS.get(active_therm, active_therm)
         sre_lbl = "SRE ON" if self.sre_action.isChecked() else "SRE OFF"
-        self.setToolTip(f"WinOptiAI · by TRODAI | Termica: {t_lbl} | {sre_lbl}")
+        # v0.6.1: el propietario pidio un tooltip corto (solo el nombre); el estado va en el menu.
+        self.setToolTip("WinOptiAI")
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (

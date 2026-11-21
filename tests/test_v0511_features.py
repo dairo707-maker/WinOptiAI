@@ -72,7 +72,7 @@ def test_tray_high_contrast_icon_and_active_mode_checks(qapp: QApplication) -> N
     assert not tray.sre_action.isChecked()
     assert not tray.theme_action.isChecked()
     assert "42%" in tray.status_action.text()
-    assert "SRE OFF" in tray.toolTip()
+    assert tray.toolTip() == "WinOptiAI"
 
     tray.sre_action.toggle()
     tray.theme_action.trigger()
@@ -92,10 +92,11 @@ def test_new_pc_quick_check_and_sre_calibration(tmp_path: Path) -> None:
         progress_cb=lambda pct, _msg: prog_events.append(pct),
     )
     assert isinstance(report, QuickCheckReport)
-    assert len(report.items) == 5
+    assert len(report.items) == 6
     cats = [it.category for it in report.items]
     assert "Memoria y Guardia SRE" in cats
     assert "BIOS/OEM, Seguridad y Reinicio" in cats
+    assert "Aplicaciones e Inicio de Windows" in cats
     assert eng.config.last_quick_check_at != ""
     assert 100 in prog_events
 
@@ -135,16 +136,16 @@ def test_guided_tour_navigation_and_zero_clipped_buttons(
             qapp.processEvents()
         assert find_clipped_buttons(dlg) == []
 
-        # Walk through all 5 steps (Step 5 runs _sync_run -> renders 5 quick check cards)
-        for _ in range(4):
+        # Walk through all 7 steps (Step 7 runs _sync_run -> renders 6 quick check cards)
+        for _ in range(6):
             dlg._go_next()
             for _ in range(6):
                 qapp.processEvents()
             assert find_clipped_buttons(dlg) == []
 
-        assert tabs_visited == [0, 1, 2, 3, 0]
+        assert tabs_visited == [0, 1, 2, 3, 4, 5, 0]
         assert dlg._last_report is not None
-        assert len(dlg._last_report.items) == 5
+        assert len(dlg._last_report.items) == 6
 
         dlg._finish_tour()
         assert eng.config.onboarding_completed is True
@@ -205,7 +206,7 @@ def test_tour_dialog_deleted_before_async_check_finishes_does_not_raise(
     )
     dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     dlg.show()
-    for _ in range(4):
+    for _ in range(6):
         dlg._go_next()
     for _ in range(4):
         qapp.processEvents()

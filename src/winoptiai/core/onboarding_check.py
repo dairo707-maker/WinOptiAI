@@ -11,6 +11,8 @@ from typing import Callable
 
 import psutil
 
+from ..apps.app_manager import is_winget_available
+from ..apps.startup_manager import scan_startup_items
 from ..storage.onedrive_optimizer import discover_onedrive_roots
 from ..thermal_bios.bios_auditor import HardwareAuditReport, run_hardware_bios_audit
 from ..thermal_bios.thermal_controller import get_active_power_scheme
@@ -176,6 +178,43 @@ def run_new_pc_quick_check(
             recommendation="Usa Almacenamiento > Temporales o Arbol para un analisis completo.",
         )
     )
+
+    if progress_cb:
+        progress_cb(90, "Evaluando winget y programas de inicio de Windows...")
+    try:
+        winget_ok = is_winget_available()
+        startup_items = scan_startup_items()
+        enabled_cnt = sum(1 for it in startup_items if it.enabled)
+        sug_cnt = sum(
+            1 for it in startup_items if it.enabled and it.recommendation in ("PAUSAR", "DESACTIVAR")
+        )
+        app_status = "AVISO" if (sug_cnt > 0 or not winget_ok) else "OK"
+        app_rec = (
+            "Abre 'Inicio Windows' para pausar o desactivar entradas sugeridas de arranque."
+            if sug_cnt > 0
+            else ("Instala 'Instalador de aplicacion' (winget) para actualizar software en 1 clic." if not winget_ok else "")
+        )
+        items.append(
+            QuickCheckItem(
+                category="Aplicaciones e Inicio de Windows",
+                status=app_status,
+                summary=(
+                    f"winget: {'Disponible' if winget_ok else 'No detectado'} | "
+                    f"Inicio activo: {enabled_cnt}/{len(startup_items)} apps | "
+                    f"Sugeridas pausar/desactivar: {sug_cnt}"
+                ),
+                recommendation=app_rec,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        items.append(
+            QuickCheckItem(
+                category="Aplicaciones e Inicio de Windows",
+                status="INFO",
+                summary=f"Verificacion parcial de Aplicaciones / Inicio: {exc}",
+                recommendation="Revisa manualmente las pestanas 'Aplicaciones' e 'Inicio Windows'.",
+            )
+        )
 
     device_line = (
         f"{audit.manufacturer} {audit.model} | {audit.cpu_name} | "
