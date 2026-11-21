@@ -1,0 +1,1 @@
+CI fix for Windows headless runner 0xC0000142 race in test_shutdown_kills_app_children_but_keeps_protected
