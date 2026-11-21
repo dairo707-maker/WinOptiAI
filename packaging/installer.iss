@@ -1,10 +1,10 @@
 ; Inno Setup 6 script for WinOptiAI — Multilingual Dual-Mode Windows Installer Wizard
 #ifndef MyAppVersion
-  #define MyAppVersion "0.5.14"
+  #define MyAppVersion "0.6.0"
 #endif
 
 #define MyAppName "WinOptiAI"
-#define MyAppPublisher "Dairo (dairo707-maker) - WinOptiAI Open Source"
+#define MyAppPublisher "TRODAI (Dairo · dairo707-maker) - WinOptiAI Open Source"
 #define MyAppURL "https://github.com/dairo707-maker/WinOptiAI"
 #define MyAppExeName "WinOptiAI.exe"
 #define SourcePortableExe "..\dist\WinOptiAI-Portable.exe"

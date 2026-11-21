@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import os
 import sys
+import threading
 import time
 
 import psutil
@@ -57,11 +58,13 @@ from .dialogs.tour_dialog import QuickTourDialog
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .system_tray import WinOptiTray
 from .theme import build_obsidian_qss, get_palette
+from .views.apps_view import AppsView
 from .views.overview_view import OverviewView
 from .views.processes_view import ProcessesView
+from .views.startup_view import StartupView
 from .views.storage_view import StorageView
 from .views.thermal_bios_view import ThermalBiosView
-from .widgets import AdaptiveButton, NotebookCanvas, StatusTag
+from .widgets import AdaptiveButton, NotebookCanvas, SemaphoreDot, StatusTag
 from .workers import AsyncTask
 
 
@@ -100,6 +103,8 @@ class MainWindow(QMainWindow):
         self._tour_dialog: QuickTourDialog | None = None
         self._available_update: ReleaseInfo | None = None
         self._checking_updates = False
+        self._update_retry_count = 0
+        self._last_update_check_ok = False
         self._reported_error_keys: set[str] = set()
         self.unhandled_error.connect(self._on_unhandled_error, Qt.ConnectionType.QueuedConnection)
         if crash_guard is not None:
@@ -123,7 +128,7 @@ class MainWindow(QMainWindow):
         self.notif_center = NotificationCenter()
         self.session_mgr = SessionManager()
         self.advisor = PeriodicAdvisor(cooldown_seconds=7200)
-        self.telemetry_reader = PdhTelemetryReader()
+        self.telemetry_reader = PdhTelemetryReader(lazy_init=True)
         # v0.5.8: historial local acotado (1 punto/min, 7 dias) en metrics.sqlite.
         self.metrics_history = MetricsHistory(self.policy.app_dir)
         self._minute_agg = MinuteAggregator()
@@ -152,17 +157,23 @@ class MainWindow(QMainWindow):
 
         brand_box = QWidget()
         brand_layout = QHBoxLayout(brand_box)
-        brand_layout.setContentsMargins(16, 18, 16, 18)
+        brand_layout.setContentsMargins(16, 16, 16, 14)
         brand_layout.setSpacing(10)
         self.brand_icon = QLabel()
-        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["icon_color"], size=18))
+        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=22))
         brand_layout.addWidget(self.brand_icon)
 
+        brand_txt = QVBoxLayout()
+        brand_txt.setSpacing(0)
         brand_title = QLabel("WinOptiAI")
-        brand_title.setStyleSheet("font-size: 14px; font-weight: 600; letter-spacing: 0.2px;")
-        brand_layout.addWidget(brand_title)
+        brand_title.setStyleSheet("font-size: 14px; font-weight: 700; letter-spacing: 0.2px;")
+        brand_sub = QLabel("by TRODAI")
+        brand_sub.setObjectName("SectionLabel")
+        brand_txt.addWidget(brand_title)
+        brand_txt.addWidget(brand_sub)
+        brand_layout.addLayout(brand_txt)
         brand_layout.addStretch()
-        brand_layout.addWidget(StatusTag(f"v{__version__}", "neutral"))
+        brand_layout.addWidget(StatusTag(f"v{__version__}", "active"))
         sb_layout.addWidget(brand_box)
 
         self.nav_buttons: list[QPushButton] = []
@@ -171,6 +182,8 @@ class MainWindow(QMainWindow):
             ("storage", "nav_storage"),
             ("process", "nav_processes"),
             ("thermal", "nav_thermal"),
+            ("apps", "nav_apps"),
+            ("startup", "nav_startup"),
         ]
         for idx, (icon_name, tr_key) in enumerate(self._nav_spec):
             btn = QPushButton(f"  {tr(tr_key, lang)}")
@@ -311,10 +324,35 @@ class MainWindow(QMainWindow):
         tb_layout.addWidget(self.bell_btn)
         rc_layout.addWidget(top_bar)
 
+        # In-app dismissible update banner (v0.6.0) for guaranteed visibility across Focus Assist
+        self.update_banner = QWidget()
+        self.update_banner.setObjectName("UpdateBanner")
+        ub_layout = QHBoxLayout(self.update_banner)
+        ub_layout.setContentsMargins(20, 6, 20, 6)
+        ub_layout.setSpacing(10)
+        self.update_banner_dot = SemaphoreDot("active", theme_mode)
+        ub_layout.addWidget(self.update_banner_dot)
+        self.update_banner_lbl = QLabel("")
+        self.update_banner_lbl.setObjectName("MonoValue")
+        ub_layout.addWidget(self.update_banner_lbl, stretch=1)
+        self.update_banner_btn = QPushButton("Actualizar ahora")
+        self.update_banner_btn.setObjectName("PrimaryAction")
+        self.update_banner_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_banner_btn.clicked.connect(self._open_about_dialog)
+        ub_layout.addWidget(self.update_banner_btn)
+        self.update_banner_close_btn = QPushButton("Ocultar")
+        self.update_banner_close_btn.setObjectName("GhostAction")
+        self.update_banner_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_banner_close_btn.clicked.connect(lambda: self.update_banner.setVisible(False))
+        ub_layout.addWidget(self.update_banner_close_btn)
+        self.update_banner.setVisible(False)
+        rc_layout.addWidget(self.update_banner)
+
         # Stacked Views
         self.stack = QStackedWidget()
         self.overview_view = OverviewView(lang=lang)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
+        self.overview_view.jump_tab_requested.connect(self._switch_tab)
         self.overview_view.attach_metrics(self.metrics_history, lambda: self.policy.config.ram_threshold_gb)
         self.storage_view = StorageView(
             self.vault, self.backup_mgr, self.policy, self._run_async, self._set_status, lang=lang
@@ -335,11 +373,25 @@ class MainWindow(QMainWindow):
             lang=lang,
         )
         self.thermal_view.audit_log_updated.connect(self._on_thermal_audit_updated)
+        self.apps_view = AppsView(
+            self.vault, self.policy, self._run_async, self._set_status, lang=lang
+        )
+        self.apps_view.summary_changed.connect(
+            lambda txt, tone: self.overview_view.update_subsystem_semaphore("apps", txt, tone)
+        )
+        self.startup_view = StartupView(
+            self.backup_mgr, self.policy, self._run_async, self._set_status, lang=lang
+        )
+        self.startup_view.summary_changed.connect(
+            lambda txt, tone: self.overview_view.update_subsystem_semaphore("startup", txt, tone)
+        )
 
         self.stack.addWidget(self.overview_view)
         self.stack.addWidget(self.storage_view)
         self.stack.addWidget(self.processes_view)
         self.stack.addWidget(self.thermal_view)
+        self.stack.addWidget(self.apps_view)
+        self.stack.addWidget(self.startup_view)
         rc_layout.addWidget(self.stack, stretch=1)
         main_layout.addWidget(right_col, stretch=1)
 
@@ -380,10 +432,13 @@ class MainWindow(QMainWindow):
         self.advisor_timer.timeout.connect(self._run_periodic_advisor)
         self.advisor_timer.start(900_000)
 
-        # v0.5.13: automatic update check every 12 hours while open or in tray
+        # v0.5.13/v0.6.0: automatic update check every 12h + network backoff retry timer
         self.update_check_timer = QTimer(self)
         self.update_check_timer.timeout.connect(self._check_updates_background)
         self.update_check_timer.start(43_200_000)
+        self.update_retry_timer = QTimer(self)
+        self.update_retry_timer.setSingleShot(True)
+        self.update_retry_timer.timeout.connect(self._check_updates_background)
 
         # v0.5.1: latido del marcador de sesion (solo si el crash guard esta activo)
         self.heartbeat_timer = QTimer(self)
@@ -396,7 +451,10 @@ class MainWindow(QMainWindow):
             self.ui_tick_timer.start(1000)
             self.crash_guard.start_hang_watchdog()
 
-        QTimer.singleShot(80, self._phase2_warmup)
+        self._warmup_timer = QTimer(self)
+        self._warmup_timer.setSingleShot(True)
+        self._warmup_timer.timeout.connect(self._phase2_warmup)
+        self._warmup_timer.start(80)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -420,9 +478,11 @@ class MainWindow(QMainWindow):
         self._shutdown_done = True
         self._breadcrumb("Cierre total: cancelando tareas y procesos derivados")
         for t in (
+            self._warmup_timer,
             self.telemetry_timer,
             self.advisor_timer,
             self.update_check_timer,
+            self.update_retry_timer,
             self.heartbeat_timer,
             self.task_eta_timer,
         ):
@@ -469,6 +529,14 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.activateWindow()
         self.raise_()
+        if (
+            self.policy.config.auto_check_updates
+            and self._available_update is None
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+        ):
+            stale = (time.time() - float(self.policy.config.last_update_check_ts or 0.0)) > 21_600
+            if not self._last_update_check_ok or stale:
+                QTimer.singleShot(500, self._check_updates_background)
 
     def _quit_app(self) -> None:
         # v0.5.9: confirmar si hay consolas de mantenimiento (DISM/SFC/CHKDSK) que se interrumpiran.
@@ -503,6 +571,10 @@ class MainWindow(QMainWindow):
             btn.style().polish(btn)
         if index == 2:
             self.processes_view.refresh_all()
+        elif index == 4 and not self.apps_view.apps and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.apps_view.refresh_apps()
+        elif index == 5 and not self.startup_view.items and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.startup_view.refresh_startup()
 
     def _set_status(self, message: str) -> None:
         self.status_lbl.setText(message)
@@ -524,7 +596,7 @@ class MainWindow(QMainWindow):
         if self._notif_dialog is not None and self._notif_dialog.isVisible():
             self._notif_dialog.refresh()
         if tray_toast and not self.isVisible():
-            self.tray.showMessage(f"WinOptiAI - {title}", detail)
+            self.tray.show_toast(f"WinOptiAI - {title}", detail, kind="general")
 
     def _open_notifications_drawer(self) -> None:
         if self._notif_dialog is None:
@@ -594,10 +666,13 @@ class MainWindow(QMainWindow):
         self.root_canvas.set_theme_mode(mode)
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            app.setStyleSheet(build_obsidian_qss(mode))
+            qss = build_obsidian_qss(mode)
+            if app.styleSheet() != qss:
+                app.setStyleSheet(qss)
         apply_window_theme(int(self.winId()), dark=(mode != "light"))
 
-        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["icon_color"], size=18))
+        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=22))
+        self.update_banner_dot.set_tone("active", mode)
         self.bell_btn.setIcon(load_svg_icon("bell", color=pal["icon_color"], size=15))
         self.tour_btn.setText(f" {tr('btn_tour', lang)}")
         self.tour_btn.setIcon(load_svg_icon("overview", color=pal["icon_color"], size=13))
@@ -615,6 +690,8 @@ class MainWindow(QMainWindow):
         self.storage_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
         self.processes_view.apply_language_and_theme(lang, pal["icon_inverted"])
         self.thermal_view.apply_language_and_theme(lang, pal["icon_inverted"])
+        self.apps_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
+        self.startup_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
         self._sync_tray_state()
 
     def _open_about_dialog(self) -> None:
@@ -1002,9 +1079,17 @@ class MainWindow(QMainWindow):
         self._retired_workers.clear()
 
     def _phase2_warmup(self) -> None:
+        if getattr(self, "_shutdown_done", False):
+            return
         self._report_previous_dirty_exit()
         self._refresh_disk_stats()
         self._sample_telemetry()
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            threading.Thread(
+                target=self.telemetry_reader.ensure_initialized,
+                name="pdh-warmup",
+                daemon=True,
+            ).start()
         self._sync_active_task_indicators()
         self.overview_view.set_audit_rows(self.policy.read_recent_audit())
         self.thermal_view.refresh_audit()
@@ -1181,6 +1266,7 @@ class MainWindow(QMainWindow):
 
         def _err(_msg: str) -> None:
             self._checking_updates = False
+            self._schedule_update_retry()
 
         self._run_async(
             _probe,
@@ -1190,16 +1276,35 @@ class MainWindow(QMainWindow):
             on_error=_err,
         )
 
+    def _schedule_update_retry(self) -> None:
+        if self._update_retry_count >= 2 or getattr(self, "_shutdown_done", False):
+            return
+        delay_ms = 60_000 if self._update_retry_count == 0 else 300_000
+        self._update_retry_count += 1
+        self.update_retry_timer.start(delay_ms)
+
     def _handle_update_check_result(self, ok: bool, info: ReleaseInfo | None) -> bool:
-        """Update badges, tray menu, and trigger once-per-version notification when newer release exists."""
+        """Update badges, tray menu, in-app banner, and clickable toast when newer release exists."""
         if getattr(self, "_shutdown_done", False):
             return False
+        if not ok or info is None:
+            self._last_update_check_ok = False
+            self._schedule_update_retry()
+            return False
+
+        self._last_update_check_ok = True
+        self._update_retry_count = 0
         self.policy.config.last_update_check_ts = time.time()
-        if not ok or info is None or not info.update_available:
+        if not info.update_available:
+            self.update_banner.setVisible(False)
             self.policy.save_config()
             return False
 
         self._available_update = info
+        self.update_banner_lbl.setText(
+            f"Nueva actualizacion disponible: WinOptiAI {info.tag} (TRODAI) — clic en 'Actualizar ahora' para instalar."
+        )
+        self.update_banner.setVisible(True)
         self._refresh_about_badge()
         self._sync_tray_state()
 
@@ -1211,15 +1316,15 @@ class MainWindow(QMainWindow):
         self.policy.save_config()
         title = f"Nueva version WinOptiAI {info.tag}"
         detail = (
-            "Hay una actualizacion disponible en GitHub Releases. "
-            f"Haz clic en 'Nueva {info.tag}' o en el menu de la bandeja para instalarla."
+            "Hay una actualizacion oficial de TRODAI disponible en GitHub Releases. "
+            f"Haz clic aqui o en 'Nueva {info.tag}' para actualizar."
         )
         self.policy.record_audit_event("updater", "Actualizacion disponible", f"Release {info.tag} detectado")
         self.overview_view.set_audit_rows(self.policy.read_recent_audit())
         self._set_status(f"Actualizacion disponible: {info.tag}")
-        self._notify_user("SUGERENCIA", title, detail, action_tab=None, tray_toast=True)
-        if self.isVisible() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-            self.tray.showMessage(f"WinOptiAI - {title}", detail)
+        self._notify_user("SUGERENCIA", title, detail, action_tab=None, tray_toast=False)
+        if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.tray.show_toast(f"WinOptiAI - {title}", detail, kind="update")
         return True
 
     def _tray_toggle_sre(self, enabled: bool) -> None:

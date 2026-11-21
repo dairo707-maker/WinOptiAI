@@ -1,6 +1,6 @@
-"""Dual-theme design system: Obsidian Acrylic (Dark) & Alabaster Frost (Light).
+"""Dual-theme design system: TRODAI Obsidian Navy (Dark) & Crisp White (Light).
 
-Strict 0px corners, 1px hairline borders, embedded Instrument Sans + IBM Plex Mono.
+Strict 0px architectural corners, 1px hairline borders, Space Grotesk + JetBrains Mono.
 """
 
 from __future__ import annotations
@@ -13,73 +13,77 @@ from .. import get_base_dir
 
 DARK_PALETTE = {
     "mode": "dark",
-    "bg_window": "rgba(22, 22, 20, 224)",
-    "bg_sidebar": "rgba(26, 26, 23, 214)",
-    "bg_glass": "rgba(31, 31, 28, 190)",
-    "bg_glass_elevated": "rgba(39, 38, 34, 212)",
-    "bg_table": "rgba(24, 24, 21, 196)",
-    "bg_table_alt": "rgba(33, 32, 29, 170)",
-    "bg_header": "rgba(29, 28, 25, 232)",
-    "bg_menu": "#1C1C19",
-    "bg_hover": "rgba(234, 229, 218, 24)",
-    "bg_active": "rgba(234, 229, 218, 42)",
-    "border_hairline": "rgba(234, 229, 218, 52)",
-    "border_strong": "rgba(234, 229, 218, 110)",
-    "text_primary": "#F3EFE6",
-    "text_secondary": "#C2BCB0",
-    "text_muted": "#8C867A",
-    "primary_bg": "#EFEAE0",
-    "primary_fg": "#171714",
-    "primary_hover": "#FAF7F0",
-    "icon_color": "#EFEAE0",
-    "icon_inverted": "#171714",
-    "tag_ice": "#DFDAD0",
-    "tag_warn": "#D9A86C",
-    "tag_risk": "#CF7C7C",
-    "tag_ok": "#99BAAB",
-    "explorer_bg": "rgba(44, 108, 164, 72)",
-    "explorer_border": "rgba(147, 197, 253, 170)",
-    "explorer_hover": "rgba(44, 108, 164, 115)",
-    "explorer_icon": "#BAE6FD",
+    "bg_window": "rgba(10, 15, 29, 236)",
+    "bg_sidebar": "rgba(15, 22, 40, 228)",
+    "bg_glass": "rgba(15, 22, 40, 214)",
+    "bg_glass_elevated": "rgba(20, 29, 51, 232)",
+    "bg_table": "rgba(10, 15, 29, 218)",
+    "bg_table_alt": "rgba(20, 29, 51, 198)",
+    "bg_header": "rgba(15, 22, 40, 242)",
+    "bg_menu": "#0F1628",
+    "bg_hover": "rgba(14, 165, 233, 24)",
+    "bg_active": "rgba(14, 165, 233, 38)",
+    "border_hairline": "#1F2A44",
+    "border_strong": "#33415F",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#CBD5E1",
+    "text_muted": "#94A3B8",
+    "primary_bg": "#F8FAFC",
+    "primary_fg": "#0A0F1D",
+    "primary_hover": "#E2E8F0",
+    "icon_color": "#F8FAFC",
+    "icon_inverted": "#0A0F1D",
+    "accent": "#0EA5E9",
+    "accent_alt": "#3B82F6",
+    "tag_ice": "#0EA5E9",
+    "tag_warn": "#F59E0B",
+    "tag_risk": "#F87171",
+    "tag_ok": "#34D399",
+    "explorer_bg": "rgba(14, 165, 233, 38)",
+    "explorer_border": "#0EA5E9",
+    "explorer_hover": "rgba(14, 165, 233, 68)",
+    "explorer_icon": "#38BDF8",
 }
 
 LIGHT_PALETTE = {
     "mode": "light",
-    "bg_window": "rgba(245, 241, 231, 236)",
-    "bg_sidebar": "rgba(237, 232, 219, 228)",
-    "bg_glass": "rgba(253, 251, 246, 206)",
-    "bg_glass_elevated": "rgba(255, 253, 249, 236)",
-    "bg_table": "rgba(254, 252, 247, 220)",
-    "bg_table_alt": "rgba(242, 237, 226, 206)",
-    "bg_header": "rgba(232, 226, 212, 240)",
-    "bg_menu": "#FAF7F0",
-    "bg_hover": "rgba(38, 36, 32, 18)",
-    "bg_active": "rgba(38, 36, 32, 32)",
-    "border_hairline": "rgba(38, 36, 32, 62)",
-    "border_strong": "rgba(38, 36, 32, 125)",
-    "text_primary": "#1C1B18",
-    "text_secondary": "#46433C",
-    "text_muted": "#6E695E",
-    "primary_bg": "#1F1E1B",
-    "primary_fg": "#FAF7F0",
-    "primary_hover": "#34322D",
-    "icon_color": "#1F1E1B",
-    "icon_inverted": "#FAF7F0",
-    "tag_ice": "#3F3D37",
-    "tag_warn": "#9A5B13",
-    "tag_risk": "#991B1B",
-    "tag_ok": "#145A32",
-    "explorer_bg": "rgba(29, 78, 137, 36)",
-    "explorer_border": "rgba(29, 78, 137, 155)",
-    "explorer_hover": "rgba(29, 78, 137, 62)",
-    "explorer_icon": "#143D73",
+    "bg_window": "rgba(248, 250, 252, 244)",
+    "bg_sidebar": "rgba(238, 242, 247, 238)",
+    "bg_glass": "rgba(255, 255, 255, 238)",
+    "bg_glass_elevated": "rgba(238, 242, 247, 242)",
+    "bg_table": "rgba(255, 255, 255, 240)",
+    "bg_table_alt": "rgba(241, 245, 249, 230)",
+    "bg_header": "rgba(238, 242, 247, 246)",
+    "bg_menu": "#FFFFFF",
+    "bg_hover": "rgba(37, 99, 235, 18)",
+    "bg_active": "rgba(37, 99, 235, 28)",
+    "border_hairline": "#D5DCE6",
+    "border_strong": "#AEB8C7",
+    "text_primary": "#0A0F1D",
+    "text_secondary": "#334155",
+    "text_muted": "#4A5568",
+    "primary_bg": "#0A0F1D",
+    "primary_fg": "#F8FAFC",
+    "primary_hover": "#1E293B",
+    "icon_color": "#0A0F1D",
+    "icon_inverted": "#F8FAFC",
+    "accent": "#2563EB",
+    "accent_alt": "#3B82F6",
+    "tag_ice": "#2563EB",
+    "tag_warn": "#B45309",
+    "tag_risk": "#B91C1C",
+    "tag_ok": "#047857",
+    "explorer_bg": "rgba(37, 99, 235, 24)",
+    "explorer_border": "#3B82F6",
+    "explorer_hover": "rgba(37, 99, 235, 48)",
+    "explorer_icon": "#1D4ED8",
 }
 
 # Backward-compatible default reference
 PALETTE = DARK_PALETTE
 
-UI_FONT_FAMILY = "Instrument Sans"
-MONO_FONT_FAMILY = "IBM Plex Mono"
+UI_FONT_FAMILY = "Space Grotesk"
+MONO_FONT_FAMILY = "JetBrains Mono"
 
 
 def get_palette(mode: str = "dark") -> dict[str, str]:
@@ -87,7 +91,7 @@ def get_palette(mode: str = "dark") -> dict[str, str]:
 
 
 def register_embedded_fonts(app: QApplication) -> None:
-    """Load bundled OFL fonts (Instrument Sans + IBM Plex Mono) into Qt font database."""
+    """Load bundled OFL fonts (Space Grotesk + JetBrains Mono + fallbacks) into Qt font database."""
     fonts_dir = get_base_dir() / "assets" / "fonts"
     if not fonts_dir.exists():
         return
@@ -95,7 +99,9 @@ def register_embedded_fonts(app: QApplication) -> None:
     for font_file in sorted(fonts_dir.glob("*.ttf")):
         QFontDatabase.addApplicationFont(str(font_file))
 
-    base_font = QFont(UI_FONT_FAMILY, 10)
+    families = set(QFontDatabase.families())
+    chosen = UI_FONT_FAMILY if UI_FONT_FAMILY in families else "Instrument Sans"
+    base_font = QFont(chosen, 10)
     base_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(base_font)
 
@@ -122,12 +128,12 @@ def _rgba(hex_color: str, alpha: int) -> str:
 
 
 def build_obsidian_qss(mode: str = "dark") -> str:
-    """Return global QSS stylesheet enforcing 0px corners, 1px hairline borders, and glass surfaces."""
+    """Return global QSS stylesheet enforcing 0px TRODAI corners, 1px borders, and corporate palette."""
     p = get_palette(mode)
     return f"""
     * {{
         border-radius: 0px;
-        font-family: "{UI_FONT_FAMILY}", "Segoe UI", sans-serif;
+        font-family: "{UI_FONT_FAMILY}", "Instrument Sans", "Segoe UI", sans-serif;
         outline: none;
     }}
 
@@ -151,6 +157,11 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border-bottom: 1px solid {p["border_hairline"]};
     }}
 
+    QWidget#UpdateBanner {{
+        background-color: {_rgba(p["accent"], 26)};
+        border-bottom: 1px solid {_rgba(p["accent"], 120)};
+    }}
+
     QPushButton#ExplorerBtn {{
         background-color: {p["explorer_bg"]};
         border: 1px solid {p["explorer_border"]};
@@ -169,7 +180,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border: 1px solid {p["border_hairline"]};
         color: {p["text_primary"]};
         padding: 5px 10px;
-        font-family: "{MONO_FONT_FAMILY}", monospace;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
         font-size: 11px;
     }}
 
@@ -195,7 +206,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QLabel#PageTitle {{
-        font-size: 20px;
+        font-size: 19px;
         font-weight: 600;
         letter-spacing: -0.3px;
         color: {p["text_primary"]};
@@ -207,30 +218,30 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QLabel#SectionLabel {{
-        font-family: "{MONO_FONT_FAMILY}", monospace;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
         font-size: 10px;
         font-weight: 500;
-        letter-spacing: 1.2px;
+        letter-spacing: 1.1px;
         color: {p["text_muted"]};
     }}
 
     QLabel#MetricValue {{
-        font-family: "{MONO_FONT_FAMILY}", monospace;
-        font-size: 21px;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
+        font-size: 20px;
         font-weight: 500;
         color: {p["text_primary"]};
     }}
 
     QLabel#MetricValueCompact {{
-        font-family: "{MONO_FONT_FAMILY}", monospace;
-        font-size: 18px;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
+        font-size: 16px;
         font-weight: 500;
         color: {p["text_primary"]};
     }}
 
     QLabel#MonoValue {{
-        font-family: "{MONO_FONT_FAMILY}", monospace;
-        font-size: 12px;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
+        font-size: 11.5px;
         color: {p["text_primary"]};
     }}
 
@@ -239,8 +250,8 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border: 1px solid transparent;
         color: {p["text_secondary"]};
         text-align: left;
-        padding: 10px 14px;
-        font-size: 13px;
+        padding: 8px 12px;
+        font-size: 12.5px;
         font-weight: 500;
     }}
 
@@ -251,7 +262,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QPushButton#NavButton[active="true"] {{
         background-color: {p["bg_active"]};
-        border-left: 2px solid {p["tag_ice"]};
+        border-left: 2px solid {p["accent"]};
         border-top: 1px solid {p["border_hairline"]};
         border-bottom: 1px solid {p["border_hairline"]};
         color: {p["text_primary"]};
@@ -261,7 +272,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: {p["primary_bg"]};
         color: {p["primary_fg"]};
         border: 1px solid {p["primary_bg"]};
-        padding: 9px 18px;
+        padding: 8px 16px;
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.2px;
@@ -280,19 +291,19 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: {p["bg_glass_elevated"]};
         color: {p["text_primary"]};
         border: 1px solid {p["border_hairline"]};
-        padding: 7px 12px;
+        padding: 6px 11px;
         font-size: 12px;
         font-weight: 500;
     }}
 
     QPushButton#GhostAction:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["border_strong"]};
+        border-color: {p["accent"]};
     }}
 
     QPushButton#GhostAction[selected="true"] {{
         background-color: {p["bg_active"]};
-        border-color: {p["tag_ice"]};
+        border-color: {p["accent"]};
     }}
 
     /* v0.5.6: pestanas de modo (navegacion dentro de una vista): planas, subrayado al activarse. */
@@ -314,7 +325,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: {p["bg_active"]};
         color: {p["text_primary"]};
         border-color: {p["border_strong"]};
-        border-bottom: 2px solid {p["tag_ice"]};
+        border-bottom: 2px solid {p["accent"]};
         font-weight: 600;
     }}
 
@@ -374,12 +385,16 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         border-radius: 5px;
     }}
 
-    QComboBox {{
+    QComboBox, QLineEdit {{
         background-color: {p["bg_glass_elevated"]};
         color: {p["text_primary"]};
         border: 1px solid {p["border_hairline"]};
         padding: 6px 10px;
         font-size: 12px;
+    }}
+
+    QLineEdit:focus {{
+        border-color: {p["accent"]};
     }}
 
     QComboBox QAbstractItemView {{
@@ -403,11 +418,11 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QHeaderView::section {{
         background-color: {p["bg_header"]};
         color: {p["text_secondary"]};
-        font-family: "{MONO_FONT_FAMILY}", monospace;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
         font-size: 10px;
         font-weight: 500;
         letter-spacing: 0.8px;
-        padding: 8px 10px;
+        padding: 7px 9px;
         border: none;
         border-right: 1px solid {p["border_hairline"]};
         border-bottom: 1px solid {p["border_hairline"]};
@@ -421,7 +436,19 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QProgressBar::chunk {{
-        background-color: {p["tag_ice"]};
+        background-color: {p["accent"]};
+    }}
+
+    QProgressBar[tone="ok"]::chunk {{
+        background-color: {p["tag_ok"]};
+    }}
+
+    QProgressBar[tone="warn"]::chunk {{
+        background-color: {p["tag_warn"]};
+    }}
+
+    QProgressBar[tone="risk"]::chunk {{
+        background-color: {p["tag_risk"]};
     }}
 
     QCheckBox {{
@@ -438,13 +465,13 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QCheckBox::indicator:checked {{
-        background-color: {p["primary_bg"]};
-        border-color: {p["primary_bg"]};
+        background-color: {p["accent"]};
+        border-color: {p["accent"]};
     }}
 
     QCheckBox::indicator:indeterminate {{
         background-color: {p["border_strong"]};
-        border-color: {p["primary_bg"]};
+        border-color: {p["accent"]};
     }}
 
     QCheckBox::indicator {{
@@ -486,13 +513,34 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: {p["bg_active"]};
     }}
 
+    QTabWidget::pane {{
+        border: 1px solid {p["border_hairline"]};
+        background-color: transparent;
+    }}
+
+    QTabBar::tab {{
+        background-color: transparent;
+        color: {p["text_secondary"]};
+        border: 1px solid {p["border_hairline"]};
+        padding: 6px 12px;
+        font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
+        font-size: 11px;
+        margin-right: 4px;
+    }}
+
+    QTabBar::tab:selected {{
+        background-color: {p["bg_active"]};
+        color: {p["text_primary"]};
+        border-bottom: 2px solid {p["accent"]};
+    }}
+
     QToolTip {{
         background-color: {p["bg_menu"]};
         color: {p["text_primary"]};
-        border: 1px solid {p["border_strong"]};
+        border: 1px solid {p["accent"]};
         border-radius: 0px;
         padding: 8px 10px;
-        font-family: "Instrument Sans", "Segoe UI", sans-serif;
+        font-family: "{UI_FONT_FAMILY}", "Instrument Sans", "Segoe UI", sans-serif;
         font-size: 12px;
     }}
     """

@@ -16,6 +16,7 @@ from typing import Callable
 
 from ..core.safety_guard import is_protected_path
 from ..core.task_control import TaskCanceledError, TaskController, stop_point
+from ..core.usage_telemetry import file_last_used_ts
 from ..core.win32_bridge import attrs_skip_entry
 
 
@@ -87,13 +88,15 @@ TOP_FILES_GLOBAL = 100
 
 @dataclass(slots=True)
 class FolderNode:
-    """Tree node representing a folder's recursive byte usage."""
+    """Tree node representing a folder's recursive byte usage and dominant category."""
 
     name: str
     path: Path
     size_bytes: int = 0
     file_count: int = 0
     children: list[FolderNode] = field(default_factory=list)
+    last_used_ts: float = 0.0
+    dominant_category: str = "Otros"
 
 
 @dataclass(slots=True)
@@ -108,6 +111,7 @@ class FormatGroup:
     heaviest_bytes: int
     # v0.5.4: los archivos mas pesados de esta extension (hasta TOP_FILES_PER_EXTENSION), desc.
     top_files: list[tuple[Path, int]] = field(default_factory=list)
+    last_used_ts: float = 0.0
 
 
 @dataclass(slots=True)
@@ -117,6 +121,7 @@ class StorageHierarchyReport:
     root_node: FolderNode
     formats: list[FormatGroup]
     heaviest_files: list[tuple[Path, str, int]]
+    heaviest_last_used: dict[str, float] = field(default_factory=dict)
 
 
 def _categorize_ext(ext: str) -> str:
@@ -135,9 +140,10 @@ def analyze_storage_hierarchy(
     resolved = root.resolve()
     ext_totals: dict[str, int] = defaultdict(int)
     ext_counts: dict[str, int] = defaultdict(int)
+    ext_last_used: dict[str, float] = defaultdict(float)
     ext_heaviest: dict[str, tuple[Path, int]] = {}
-    heavy_heap: list[tuple[int, str, str]] = []
-    ext_tops: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    heavy_heap: list[tuple[int, str, str, float]] = []
+    ext_tops: dict[str, list[tuple[int, str, float]]] = defaultdict(list)
     top_entries: list[str] = []
     try:
         top_entries = [e.name for e in os.scandir(resolved)]
@@ -146,17 +152,18 @@ def analyze_storage_hierarchy(
     total_top = max(1, len(top_entries))
     done_top = 0
 
-    def _walk_dir(current: Path, depth: int) -> FolderNode:
+    def _walk_dir(current: Path, depth: int) -> tuple[FolderNode, dict[str, int]]:
         nonlocal done_top
         stop_point(controller, "Analisis de arbol cancelado por el usuario")
         node = FolderNode(name=current.name or str(current), path=current)
+        cat_bytes: dict[str, int] = defaultdict(int)
         if not current.exists() or is_protected_path(current):
-            return node
+            return node, cat_bytes
 
         try:
             entries = list(os.scandir(current))
         except OSError:
-            return node
+            return node, cat_bytes
 
         for entry in entries:
             if depth == 0:
@@ -173,29 +180,40 @@ def analyze_storage_hierarchy(
                 if is_dir:
                     if is_protected_path(ep):
                         continue
-                    child = _walk_dir(ep, depth + 1)
+                    child, child_cats = _walk_dir(ep, depth + 1)
                     node.size_bytes += child.size_bytes
                     node.file_count += child.file_count
+                    if child.last_used_ts > node.last_used_ts:
+                        node.last_used_ts = child.last_used_ts
+                    for ck, cv in child_cats.items():
+                        cat_bytes[ck] += cv
                     if depth < max_depth and child.size_bytes > 0:
                         node.children.append(child)
                 elif entry.is_file(follow_symlinks=False):
                     sz = int(st.st_size)
+                    ts = file_last_used_ts(st)
                     node.size_bytes += sz
                     node.file_count += 1
+                    if ts > node.last_used_ts:
+                        node.last_used_ts = ts
 
                     ext = ep.suffix.lower() or "(sin ext)"
+                    cat = _categorize_ext(ext)
+                    cat_bytes[cat] += sz
                     ext_totals[ext] += sz
                     ext_counts[ext] += 1
+                    if ts > ext_last_used[ext]:
+                        ext_last_used[ext] = ts
                     prev = ext_heaviest.get(ext)
                     if prev is None or sz > prev[1]:
                         ext_heaviest[ext] = (ep, sz)
                     # v0.5.3/v0.5.4: tops acotados (heaps) global y por extension.
                     eheap = ext_tops[ext]
                     if len(eheap) < TOP_FILES_PER_EXTENSION:
-                        heapq.heappush(eheap, (sz, entry.path))
+                        heapq.heappush(eheap, (sz, entry.path, ts))
                     elif sz > eheap[0][0]:
-                        heapq.heapreplace(eheap, (sz, entry.path))
-                    item = (sz, entry.path, ext)
+                        heapq.heapreplace(eheap, (sz, entry.path, ts))
+                    item = (sz, entry.path, ext, ts)
                     if len(heavy_heap) < TOP_FILES_GLOBAL:
                         heapq.heappush(heavy_heap, item)
                     elif sz > heavy_heap[0][0]:
@@ -203,18 +221,25 @@ def analyze_storage_hierarchy(
             except OSError:
                 continue
 
+        if cat_bytes:
+            node.dominant_category = max(cat_bytes.items(), key=lambda kv: kv[1])[0]
         node.children.sort(key=lambda c: c.size_bytes, reverse=True)
         # v0.5.3: conservar solo las subcarpetas mas pesadas (los totales ya estan sumados).
         # Un disco completo generaba cientos de miles de nodos retenidos en memoria.
         if len(node.children) > max_children:
             del node.children[max_children:]
-        return node
+        return node, cat_bytes
 
-    root_node = _walk_dir(resolved, 0)
+    root_node, _root_cats = _walk_dir(resolved, 0)
 
     formats: list[FormatGroup] = []
+    heaviest_ts: dict[str, float] = {}
     for ext, total in ext_totals.items():
         heavy_path, heavy_sz = ext_heaviest.get(ext, (None, 0))
+        top_list: list[tuple[Path, int]] = []
+        for sz, p, fts in sorted(ext_tops.get(ext, []), reverse=True):
+            top_list.append((Path(p), sz))
+            heaviest_ts[os.path.normcase(p)] = fts
         formats.append(
             FormatGroup(
                 extension=ext,
@@ -223,14 +248,19 @@ def analyze_storage_hierarchy(
                 total_bytes=total,
                 heaviest_file=heavy_path,
                 heaviest_bytes=heavy_sz,
-                top_files=[(Path(p), sz) for sz, p in sorted(ext_tops.get(ext, []), reverse=True)],
+                top_files=top_list,
+                last_used_ts=ext_last_used.get(ext, 0.0),
             )
         )
     formats.sort(key=lambda f: f.total_bytes, reverse=True)
-    all_heavy = [(Path(p), ext, sz) for sz, p, ext in sorted(heavy_heap, reverse=True)]
+    all_heavy: list[tuple[Path, str, int]] = []
+    for sz, p, ext, fts in sorted(heavy_heap, reverse=True):
+        all_heavy.append((Path(p), ext, sz))
+        heaviest_ts[os.path.normcase(p)] = fts
 
     return StorageHierarchyReport(
         root_node=root_node,
         formats=formats[:top_formats],
         heaviest_files=all_heavy[:100],
+        heaviest_last_used=heaviest_ts,
     )

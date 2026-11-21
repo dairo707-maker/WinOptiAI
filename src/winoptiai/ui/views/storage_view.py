@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QThreadPool, QUrl
+from PySide6.QtCore import QEvent, QPoint, Qt, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -40,6 +40,7 @@ from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
 from ...core.safety_guard import QUICK_HASH_MAX_BYTES, PreOpBackupManager, QuarantineVault, is_internal_app_path
 from ...core.sre_policy import SREPolicyEngine
+from ...core.usage_telemetry import format_last_used, parse_iso_timestamp
 from ...core.win32_bridge import (
     is_cloud_only_file,
     is_user_admin,
@@ -74,11 +75,12 @@ from ...storage.tree_analyzer import FolderNode, StorageHierarchyReport, analyze
 from ..fx import TrashColumnDelegate, UndoToast, fade_out_table_rows, pulse_widget, set_badge_text
 from ..svg_icons import load_svg_icon
 from ..theme import format_bytes, get_palette
-from ..treemap import TreemapWidget
+from ..treemap import LEGEND_ITEMS, TreemapWidget, treemap_category_colors
 from ..widgets import (
     ROLE_MOVE,
     ROLE_RESTORE,
     ROLE_RISK,
+    AdaptiveButton,
     FlowLayout,
     GlassPanel,
     NumericTableItem,
@@ -291,7 +293,10 @@ class StorageView(QWidget):
         self.rule_combo.currentIndexChanged.connect(self._preview_selected_group)
         dal.addWidget(self.rule_combo)
 
-        self.autoclean_btn = QPushButton("Autolimpiar Todos los Grupos -> Cuarentena")
+        self.autoclean_btn = AdaptiveButton("Autolimpiar Grupos -> Cuarentena")
+        self.autoclean_btn.set_variants(
+            ["Autolimpiar Grupos -> Cuarentena", "Autolimpiar -> Cuarentena", "Autolimpiar"]
+        )
         self.autoclean_btn.setObjectName(ROLE_MOVE)  # v0.5.6: una sola accion primaria por vista
         self.autoclean_btn.setToolTip(TOOLTIPS["storage_autoclean"])
         self.autoclean_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -375,7 +380,7 @@ class StorageView(QWidget):
 
         # Main workspace area: Table + Optional Duplicate Preview Pane
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         configure_sortable_table(self.table)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
@@ -425,7 +430,7 @@ class StorageView(QWidget):
         # Hierarchical Tree + Format Table splitter (for "tree" mode)
         self.tree_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.folder_tree = QTreeWidget()
-        self.folder_tree.setHeaderLabels(["CARPETA", "PESO", "ARCHIVOS", "%"])
+        self.folder_tree.setHeaderLabels(["CARPETA", "PESO", "ARCHIVOS", "%", "ULTIMO USO"])
         self.folder_tree.setAlternatingRowColors(True)
         self.folder_tree.setSortingEnabled(True)
         self._tree_nodes: dict[int, FolderNode] = {}
@@ -441,10 +446,13 @@ class StorageView(QWidget):
         thdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         thdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         thdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        thdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.tree_splitter.addWidget(self.folder_tree)
 
-        self.format_table = QTableWidget(0, 5)
-        self.format_table.setHorizontalHeaderLabels(["EXTENSION", "TIPO", "ARCHIVOS", "PESO TOTAL", "MAS PESADO"])
+        self.format_table = QTableWidget(0, 6)
+        self.format_table.setHorizontalHeaderLabels(
+            ["EXTENSION", "TIPO", "ARCHIVOS", "PESO TOTAL", "ULTIMO USO", "MAS PESADO"]
+        )
         configure_sortable_table(self.format_table)
         self.format_table.cellDoubleClicked.connect(lambda _r, _c: self._reveal_selected_item())
         self.format_table.itemSelectionChanged.connect(self._update_explorer_tooltip)
@@ -457,11 +465,12 @@ class StorageView(QWidget):
         fhdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         fhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         fhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        fhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        fhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        fhdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.tree_splitter.addWidget(self.format_table)
         self.tree_splitter.setSizes([500, 480])
 
-        # v0.5.4: modo Arbol en pestanas -> Mapa jerarquico | Carpetas y formatos | Archivos pesados
+        # v0.5.4/v0.6.0: modo Arbol en pestanas -> Mapa jerarquico moderno + ruta clicable
         self.tree_tabs = QTabWidget()
         self.tree_tabs.setDocumentMode(True)
 
@@ -470,19 +479,44 @@ class StorageView(QWidget):
         mlay.setContentsMargins(0, 8, 0, 0)
         mlay.setSpacing(6)
         crumb_row = QHBoxLayout()
+        crumb_row.setSpacing(6)
         self.map_up_btn = QPushButton("Subir")
         self.map_up_btn.setObjectName("GhostAction")
         self.map_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.map_up_btn.clicked.connect(lambda: self.treemap.go_up())
         crumb_row.addWidget(self.map_up_btn)
+        self.crumb_buttons_host = QWidget()
+        self.crumb_buttons_lay = QHBoxLayout(self.crumb_buttons_host)
+        self.crumb_buttons_lay.setContentsMargins(0, 0, 0, 0)
+        self.crumb_buttons_lay.setSpacing(4)
+        self._crumb_buttons: list[QPushButton] = []
+        crumb_row.addWidget(self.crumb_buttons_host)
         self.map_crumb_lbl = QLabel("")
         self.map_crumb_lbl.setObjectName("MonoValue")
         crumb_row.addWidget(self.map_crumb_lbl, stretch=1)
         mlay.addLayout(crumb_row)
+
         self.treemap = TreemapWidget(lambda: get_palette(self.policy.config.theme_mode))
         self.treemap.path_changed.connect(self._on_treemap_path_changed)
         self.treemap.reveal_requested.connect(self._reveal_path)
         mlay.addWidget(self.treemap, stretch=1)
+
+        # Leyenda cromatica compacta TRODAI del Treemap
+        self.treemap_legend_row = QHBoxLayout()
+        self.treemap_legend_row.setSpacing(10)
+        self._legend_swatches: list[tuple[QLabel, str]] = []
+        for cat_key, cat_lbl in LEGEND_ITEMS:
+            sw = QLabel("  ")
+            sw.setFixedSize(10, 10)
+            lbl = QLabel(cat_lbl)
+            lbl.setObjectName("PageSubtitle")
+            self._legend_swatches.append((sw, cat_key))
+            self.treemap_legend_row.addWidget(sw)
+            self.treemap_legend_row.addWidget(lbl)
+        self.treemap_legend_row.addStretch()
+        self._refresh_treemap_legend("dark")
+        mlay.addLayout(self.treemap_legend_row)
+
         self.tree_tabs.addTab(map_page, "Mapa jerarquico")
         self.tree_tabs.addTab(self.tree_splitter, "Carpetas y formatos")
 
@@ -501,7 +535,7 @@ class StorageView(QWidget):
         filt_row.addWidget(self.heavy_type_combo, stretch=1)
         hlay.addLayout(filt_row)
         self.heavy_tree = QTreeWidget()
-        self.heavy_tree.setHeaderLabels(["ARCHIVO", "PESO", "TIPO", "CARPETA"])
+        self.heavy_tree.setHeaderLabels(["ARCHIVO", "PESO", "TIPO", "ULTIMO USO", "CARPETA"])
         self.heavy_tree.setAlternatingRowColors(True)
         self.heavy_tree.setRootIsDecorated(True)
         self.heavy_tree.itemDoubleClicked.connect(lambda it, _c: self._reveal_heavy_item(it))
@@ -509,10 +543,11 @@ class StorageView(QWidget):
         self.heavy_tree.customContextMenuRequested.connect(self._show_heavy_menu)
         hh = self.heavy_tree.header()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        hh.resizeSection(0, 300)
+        hh.resizeSection(0, 260)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         hlay.addWidget(self.heavy_tree, stretch=1)
         self.heavy_hint_lbl = QLabel("Doble clic en un archivo: abrir su carpeta en el Explorador con el archivo seleccionado.")
         self.heavy_hint_lbl.setObjectName("PageSubtitle")
@@ -537,11 +572,11 @@ class StorageView(QWidget):
             return load_svg_icon("quarantine", color=get_palette(self.policy.config.theme_mode)["tag_warn"], size=16)
 
         self._trash_delegate = TrashColumnDelegate(_trash_icon, self._trash_enabled, self._on_trash_clicked, self.table)
-        self.table.setItemDelegateForColumn(3, self._trash_delegate)
+        self.table.setItemDelegateForColumn(4, self._trash_delegate)
         self._heavy_trash_delegate = TrashColumnDelegate(
             _trash_icon, self._heavy_trash_enabled, self._on_heavy_trash_clicked, self.heavy_tree
         )
-        self.heavy_tree.setItemDelegateForColumn(3, self._heavy_trash_delegate)
+        self.heavy_tree.setItemDelegateForColumn(4, self._heavy_trash_delegate)
         self._drop_targets = (self.mode_buttons["quarantine"], self.table.viewport())
         for target in self._drop_targets:
             target.setAcceptDrops(True)
@@ -559,6 +594,8 @@ class StorageView(QWidget):
         self.reveal_btn.setIcon(
             load_svg_icon("folder", color=get_palette(theme_mode)["explorer_icon"], size=16)
         )
+        self._refresh_treemap_legend(theme_mode)
+        self.treemap.update()
         for key, k_tr in (
             ("junk", "mode_junk"),
             ("duplicates", "mode_dups"),
@@ -587,8 +624,8 @@ class StorageView(QWidget):
         return sum(1 for r in range(self.table.rowCount()) if not self.table.isRowHidden(r))
 
     def _size_column(self) -> int:
-        # junk: RECUPERABLE (col 3); resto: DESPERDICIO / TAMANO (col 2)
-        return 3 if self.mode == "junk" else 2
+        # v0.6.0: RECUPERABLE / DESPERDICIO / TAMANO unificados en col 2 en los 5 modos
+        return 2
 
     def _selected_bytes(self, rows: set[int]) -> int:
         col = self._size_column()
@@ -685,12 +722,12 @@ class StorageView(QWidget):
         if mode == "junk":
             self.primary_btn.setText(" Analizar Temporales")
             self.secondary_btn.setText("Limpiar Seleccionados")
-            self._configure_columns(["CATEGORIA", "OBJETIVO", "ARCHIVOS", "RECUPERABLE"])
+            self._configure_columns(["CATEGORIA", "ARCHIVOS", "RECUPERABLE", "ULTIMO USO", "OBJETIVO"])
             self._render_junk()
         elif mode == "duplicates":
             self.primary_btn.setText(" Elegir Carpeta y Buscar")
             self.secondary_btn.setText("Cuarentena Seleccionado")
-            self._configure_columns(["COPIAS", "TAMANO UNIT.", "DESPERDICIO", "ARCHIVO PRINCIPAL Y COPIAS"])
+            self._configure_columns(["COPIAS", "TAMANO UNIT.", "DESPERDICIO", "ULTIMO USO", "ARCHIVO PRINCIPAL Y COPIAS"])
             self._render_duplicates()
         elif mode == "tree":
             self.primary_btn.setText(" Elegir Carpeta / Disco")
@@ -699,17 +736,17 @@ class StorageView(QWidget):
         elif mode == "orphans":
             self.primary_btn.setText(" Detectar Huerfanos")
             self.secondary_btn.setText("Enviar a Cuarentena")
-            self._configure_columns(["TIPO", "ESTADO", "TAMANO", "RUTA DETECTADA"])
+            self._configure_columns(["TIPO", "ESTADO", "TAMANO", "ULTIMO USO", "RUTA DETECTADA"])
             self._render_orphans()
         elif mode == "onedrive":
             self._refresh_onedrive_status()
             self._on_onedrive_scope_changed()
-            self._configure_columns(["ORIGEN", "MOTIVO", "TAMANO", "RUTA EN ONEDRIVE"])
+            self._configure_columns(["ORIGEN", "MOTIVO", "TAMANO", "ULTIMO USO", "RUTA EN ONEDRIVE"])
             self._render_onedrive()
         else:
             self.primary_btn.setText(" Actualizar Boveda")
             self.secondary_btn.setText("Restaurar Seleccionado")
-            self._configure_columns(["FECHA", "CATEGORIA", "TAMANO", "RUTA ORIGINAL"])
+            self._configure_columns(["FECHA", "CATEGORIA", "TAMANO", "ULTIMO USO", "RUTA ORIGINAL"])
             self._render_quarantine()
         self._sync_select_all_state()
 
@@ -1111,12 +1148,14 @@ class StorageView(QWidget):
         total = 0
         for row, tgt in enumerate(self.junk_targets):
             total += tgt.reclaimable_bytes
+            ts = float(getattr(tgt, "last_used_ts", 0.0))
             c0 = QTableWidgetItem(tgt.category)
             c0.setData(Qt.ItemDataRole.UserRole + 1, row)
             self.table.setItem(row, 0, c0)
-            self.table.setItem(row, 1, QTableWidgetItem(f"{tgt.label} ({tgt.path})"))
-            self.table.setItem(row, 2, NumericTableItem(str(tgt.file_count), tgt.file_count))
-            self.table.setItem(row, 3, NumericTableItem(format_bytes(tgt.reclaimable_bytes), tgt.reclaimable_bytes))
+            self.table.setItem(row, 1, NumericTableItem(str(tgt.file_count), tgt.file_count))
+            self.table.setItem(row, 2, NumericTableItem(format_bytes(tgt.reclaimable_bytes), tgt.reclaimable_bytes))
+            self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
+            self.table.setItem(row, 4, QTableWidgetItem(f"{tgt.label} ({tgt.path})"))
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Objetivos analizados: {len(self.junk_targets)} | Recuperable seguro: {format_bytes(total)}"
@@ -1137,6 +1176,7 @@ class StorageView(QWidget):
         wasted = 0
         for row, grp in enumerate(self.dup_groups):
             wasted += grp.wasted_bytes
+            ts = float(getattr(grp, "last_used_ts", 0.0))
             joined = " | ".join(str(p) for p in grp.paths[:3])
             if len(grp.paths) > 3:
                 joined += f" (+{len(grp.paths) - 3})"
@@ -1147,7 +1187,8 @@ class StorageView(QWidget):
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, NumericTableItem(format_bytes(grp.size_bytes), grp.size_bytes))
             self.table.setItem(row, 2, NumericTableItem(format_bytes(grp.wasted_bytes), grp.wasted_bytes))
-            self.table.setItem(row, 3, QTableWidgetItem(joined))
+            self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
+            self.table.setItem(row, 4, QTableWidgetItem(joined))
         self.table.setSortingEnabled(True)
         protected_dirs = getattr(self.dup_groups, "protected_dirs", 0)
         structural = sum(1 for g in self.dup_groups if getattr(g, "protected_reason", ""))
@@ -1317,9 +1358,42 @@ class StorageView(QWidget):
         self._render_tree()
 
     # ------------------------------------------------------------------ v0.5.4: mapa y pesados
+    def _refresh_treemap_legend(self, theme_mode: str) -> None:
+        dark = theme_mode != "light"
+        for sw, cat_key in getattr(self, "_legend_swatches", []):
+            fill, border = treemap_category_colors(cat_key, dark)
+            sw.setStyleSheet(
+                f"background-color: {fill.name()}; border: 1px solid {border.name()};"
+            )
+
     def _on_treemap_path_changed(self, crumb: str) -> None:
         self.map_crumb_lbl.setText(crumb)
         self.map_up_btn.setEnabled(self.treemap.can_go_up())
+        # Reconstruir migas clicables solo cuando cambia el stack
+        while self._crumb_buttons:
+            btn = self._crumb_buttons.pop()
+            self.crumb_buttons_lay.removeWidget(btn)
+            btn.deleteLater()
+        nodes = self.treemap.stack_nodes()
+        if not nodes:
+            self.map_crumb_lbl.setVisible(True)
+            return
+        self.map_crumb_lbl.setVisible(False)
+        for idx, node in enumerate(nodes[-3:]):
+            actual_idx = max(0, len(nodes) - 3) + idx
+            prefix = "> " if idx > 0 else ""
+            short_name = node.name if len(node.name) <= 18 else (node.name[:15] + "...")
+            b = QPushButton(f"{prefix}{short_name}")
+            b.setObjectName("GhostAction")
+            b.setProperty("selected", actual_idx == len(nodes) - 1)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(str(node.path))
+            if actual_idx < len(nodes) - 1:
+                b.clicked.connect(lambda _=False, d=actual_idx: QTimer.singleShot(0, lambda: self.treemap.jump_to_depth(d)))
+            else:
+                b.setEnabled(False)
+            self._crumb_buttons.append(b)
+            self.crumb_buttons_lay.addWidget(b)
 
     def _reveal_path(self, path_str: str) -> None:
         if path_str and reveal_in_explorer(Path(path_str)):
@@ -1356,11 +1430,15 @@ class StorageView(QWidget):
         return list(fmts)
 
     def _make_heavy_file_item(self, path: Path, size: int, category: str) -> QTreeWidgetItem:
-        it = NumericTreeItem([path.name, format_bytes(size), category, str(path.parent)])
+        ts = 0.0
+        if self.tree_report:
+            ts = float(getattr(self.tree_report, "heaviest_last_used", {}).get(_norm(path), 0.0))
+        it = NumericTreeItem([path.name, format_bytes(size), category, format_last_used(ts), str(path.parent)])
         it.setData(1, Qt.ItemDataRole.UserRole, float(size))
+        it.setData(3, Qt.ItemDataRole.UserRole, ts)
         it.setData(0, Qt.ItemDataRole.UserRole + 1, str(path))
         it.setToolTip(0, str(path))
-        it.setToolTip(3, str(path.parent))
+        it.setToolTip(4, str(path.parent))
         return it
 
     def _render_heavy_files(self) -> None:
@@ -1374,10 +1452,12 @@ class StorageView(QWidget):
         if view == "group":
             groups = []
             for fg in fmts:
+                fts = float(getattr(fg, "last_used_ts", 0.0))
                 grp = NumericTreeItem(
-                    [f"{fg.extension}  ({fg.file_count} archivos)", format_bytes(fg.total_bytes), fg.category, ""]
+                    [f"{fg.extension}  ({fg.file_count} archivos)", format_bytes(fg.total_bytes), fg.category, format_last_used(fts), ""]
                 )
                 grp.setData(1, Qt.ItemDataRole.UserRole, float(fg.total_bytes))
+                grp.setData(3, Qt.ItemDataRole.UserRole, fts)
                 grp.setFirstColumnSpanned(False)
                 grp.addChildren([self._make_heavy_file_item(p, sz, fg.category) for p, sz in fg.top_files])
                 groups.append(grp)
@@ -1432,11 +1512,15 @@ class StorageView(QWidget):
     def _make_tree_item(self, node: FolderNode) -> NumericTreeItem:
         total = max(1, self.tree_report.root_node.size_bytes) if self.tree_report else 1
         pct = (node.size_bytes / total) * 100.0
-        item = NumericTreeItem([node.name, format_bytes(node.size_bytes), str(node.file_count), f"{pct:.1f}%"])
+        ts = float(getattr(node, "last_used_ts", 0.0))
+        item = NumericTreeItem(
+            [node.name, format_bytes(node.size_bytes), str(node.file_count), f"{pct:.1f}%", format_last_used(ts)]
+        )
         item.setData(0, Qt.ItemDataRole.UserRole + 1, str(node.path))
         item.setData(1, Qt.ItemDataRole.UserRole, float(node.size_bytes))
         item.setData(2, Qt.ItemDataRole.UserRole, float(node.file_count))
         item.setData(3, Qt.ItemDataRole.UserRole, float(pct))
+        item.setData(4, Qt.ItemDataRole.UserRole, ts)
         key = len(self._tree_nodes)
         self._tree_nodes[key] = node
         item.setData(0, Qt.ItemDataRole.UserRole + 2, key)
@@ -1495,14 +1579,16 @@ class StorageView(QWidget):
         self.format_table.setSortingEnabled(False)
         self.format_table.setRowCount(len(fmts))
         for r, fg in enumerate(fmts):
+            fts = float(getattr(fg, "last_used_ts", 0.0))
             c0 = QTableWidgetItem(fg.extension)
             c0.setData(Qt.ItemDataRole.UserRole + 1, r)
             self.format_table.setItem(r, 0, c0)
             self.format_table.setItem(r, 1, QTableWidgetItem(fg.category))
             self.format_table.setItem(r, 2, NumericTableItem(str(fg.file_count), fg.file_count))
             self.format_table.setItem(r, 3, NumericTableItem(format_bytes(fg.total_bytes), fg.total_bytes))
+            self.format_table.setItem(r, 4, NumericTableItem(format_last_used(fts), fts))
             heavy_txt = f"{fg.heaviest_file.name} ({format_bytes(fg.heaviest_bytes)})" if fg.heaviest_file else "N/D"
-            self.format_table.setItem(r, 4, QTableWidgetItem(heavy_txt))
+            self.format_table.setItem(r, 5, QTableWidgetItem(heavy_txt))
         self.format_table.setSortingEnabled(True)
 
         self.summary_lbl.setText(
@@ -1526,13 +1612,15 @@ class StorageView(QWidget):
         total = 0
         for row, item in enumerate(self.orphans):
             total += item.size_bytes
+            ts = float(getattr(item, "last_used_ts", 0.0)) or parse_iso_timestamp(item.last_modified)
             state = item.confidence if not item.in_use_by else f"EN USO ({item.in_use_by})"
             c0 = QTableWidgetItem(item.kind)
             c0.setData(Qt.ItemDataRole.UserRole + 1, row)
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(state))
             self.table.setItem(row, 2, NumericTableItem(format_bytes(item.size_bytes), item.size_bytes))
-            self.table.setItem(row, 3, QTableWidgetItem(str(item.path)))
+            self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
+            self.table.setItem(row, 4, QTableWidgetItem(str(item.path)))
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Artefactos huerfanos detectados: {len(self.orphans)} | Tamano total: {format_bytes(total)}"
@@ -1549,12 +1637,14 @@ class StorageView(QWidget):
         total = 0
         for row, rec in enumerate(items):
             total += rec.size_bytes
+            ts = parse_iso_timestamp(rec.quarantined_at)
             c0 = QTableWidgetItem(rec.quarantined_at[:10])
             c0.setData(Qt.ItemDataRole.UserRole + 1, rec.item_id)
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(rec.category))
             self.table.setItem(row, 2, NumericTableItem(format_bytes(rec.size_bytes), rec.size_bytes))
-            self.table.setItem(row, 3, QTableWidgetItem(rec.original_path))
+            self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
+            self.table.setItem(row, 4, QTableWidgetItem(rec.original_path))
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"Elementos respaldados en Cuarentena: {len(items)} | Espacio en boveda: {format_bytes(total)}"
@@ -2123,6 +2213,7 @@ class StorageView(QWidget):
         total = 0
         for row, item in enumerate(self.onedrive_items):
             total += item.size_bytes
+            ts = float(getattr(item, "last_used_ts", 0.0)) or parse_iso_timestamp(item.last_modified)
             origin_txt = "LOCAL SSD" if item.scope == "LOCAL_HYDRATED" else (
                 "NUBE DUP" if item.scope == "CLOUD_DUPLICATE" else "NUBE PESADO"
             )
@@ -2131,7 +2222,8 @@ class StorageView(QWidget):
             self.table.setItem(row, 0, c0)
             self.table.setItem(row, 1, QTableWidgetItem(f"{item.reason} ({item.last_modified})"))
             self.table.setItem(row, 2, NumericTableItem(format_bytes(item.size_bytes), item.size_bytes))
-            self.table.setItem(row, 3, QTableWidgetItem(item.location))
+            self.table.setItem(row, 3, NumericTableItem(format_last_used(ts), ts))
+            self.table.setItem(row, 4, QTableWidgetItem(item.location))
         self.table.setSortingEnabled(True)
         self.summary_lbl.setText(
             f"OneDrive: {len(self.onedrive_items)} candidatos | Espacio recuperable: {format_bytes(total)}"

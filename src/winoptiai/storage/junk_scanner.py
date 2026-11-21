@@ -20,6 +20,7 @@ from ..core.task_control import (
     new_session_id,
     stop_point,
 )
+from ..core.usage_telemetry import file_last_used_ts
 from ..core.win32_bridge import (
     attrs_skip_entry,
     get_locking_processes,
@@ -43,6 +44,7 @@ class JunkTarget:
     file_count: int = 0
     reclaimable_bytes: int = 0
     locked_skipped: int = 0
+    last_used_ts: float = 0.0
     _cached_eligible: list[tuple[Path, int]] = field(default_factory=list, repr=False)
     _scanned_at: float = field(default=0.0, repr=False)
 
@@ -113,6 +115,7 @@ def _scan_eligible_with_sizes(
 
     cutoff = now_ts - (target.min_age_days * 86400)
     eligible: list[tuple[Path, int]] = []
+    latest_ts = 0.0
     stack: list[Path] = [target.path]
     mei_dir = _live_meipass_dir()
     visited = 0
@@ -140,7 +143,10 @@ def _scan_eligible_with_sizes(
                         stack.append(ep)
                     elif entry.is_file(follow_symlinks=False):
                         visited += 1
-                        if st.st_mtime <= cutoff:
+                        ts = file_last_used_ts(st)
+                        if ts > latest_ts:
+                            latest_ts = ts
+                        if target.min_age_days <= 0 or st.st_mtime <= cutoff:
                             eligible.append((ep, int(st.st_size)))
                         if visited % 1000 == 0:
                             stop_point(controller, "Analisis cancelado por el usuario")
@@ -148,6 +154,7 @@ def _scan_eligible_with_sizes(
                                 progress_cb(12, f"Indexando {target.label} ({len(eligible):,} elegibles)...")
         except OSError:
             continue
+    target.last_used_ts = latest_ts
     return eligible
 
 

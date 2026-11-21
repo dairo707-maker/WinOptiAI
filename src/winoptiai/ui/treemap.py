@@ -1,9 +1,10 @@
-"""Mapa jerarquico (treemap) de carpetas, estilo Obsidian Acrylic (v0.5.4).
+"""Mapa jerarquico (treemap) moderno TRODAI de alta opacidad y navegacion fluida.
 
-- Rectangulos rectos con lineas hairline de 1 px y tonos monocromo (sin colores saturados).
-- Dos niveles visibles: cada subcarpeta muestra en su interior sus propias subcarpetas.
-- Clic: entrar en la carpeta. Boton "Subir": volver. Doble clic / menu: abrir en el Explorador.
-- El espacio de los archivos sueltos de la carpeta actual se dibuja como bloque propio.
+- Fondo solido opaco (Obsidian Navy #0A0F1D en oscuro, Slate #EEF2F7 en claro) para eliminar
+  la transparencia lavada sobre la grilla.
+- Paleta arquitectonica de alta opacidad por categoria dominante y peso.
+- Cabeceras de carpeta definidas en el primer nivel, borde 2px TRODAI Cyan/Blue en hover y
+  ruta interactiva navegable (stack_nodes / jump_to_depth).
 """
 
 from __future__ import annotations
@@ -15,12 +16,50 @@ from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QVariantAnimation, 
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
+from ..core.usage_telemetry import format_last_used
 from ..storage.tree_analyzer import FolderNode
-from .theme import format_bytes
+from .theme import MONO_FONT_FAMILY, UI_FONT_FAMILY, format_bytes
 
-MIN_LABEL_W = 70.0
+MIN_LABEL_W = 68.0
 MIN_LABEL_H = 34.0
 MAX_TILES = 60
+
+# (fill_dark, border_dark, fill_light, border_light, legend_label)
+_CATEGORY_STYLE: dict[str, tuple[str, str, str, str, str]] = {
+    "Video": ("#15375C", "#0EA5E9", "#BFDBFE", "#2563EB", "Video"),
+    "Modelos IA / Binarios": ("#232959", "#6366F1", "#C7D2FE", "#4F46E5", "IA / Bin"),
+    "Documentos": ("#123E38", "#10B981", "#A7F3D0", "#059669", "Docs"),
+    "Datos y Codigo": ("#16403B", "#14B8A6", "#99F6E4", "#0D9488", "Datos / Code"),
+    "Archivos Comprimidos": ("#453013", "#F59E0B", "#FDE68A", "#D97706", "Comprimidos"),
+    "Instaladores y Ejecutables": ("#462A16", "#FB923C", "#FED7AA", "#EA580C", "Instaladores"),
+    "Imagenes": ("#47212C", "#F43F5E", "#FECDD3", "#E11D48", "Imagenes"),
+    "Audio": ("#3C234B", "#A855F7", "#E9D5FF", "#9333EA", "Audio"),
+    "Correo (Outlook)": ("#1E3A5F", "#38BDF8", "#BAE6FD", "#0284C7", "Correo"),
+    "Maquinas virtuales": ("#3A2449", "#8B5CF6", "#DDD6FE", "#7C3AED", "VM / ISO"),
+    "Registros y temporales": ("#333845", "#94A3B8", "#E2E8F0", "#64748B", "Logs / Temp"),
+    "Otros": ("#17233E", "#3B82F6", "#CBD5E1", "#475569", "Otros"),
+}
+
+LEGEND_ITEMS: list[tuple[str, str]] = [
+    ("Video", "Video"),
+    ("Modelos IA / Binarios", "IA / Binarios"),
+    ("Documentos", "Documentos"),
+    ("Archivos Comprimidos", "Comprimidos"),
+    ("Imagenes", "Imagenes"),
+    ("Otros", "Otros / Mixto"),
+]
+
+
+def treemap_category_colors(category: str, dark: bool) -> tuple[QColor, QColor]:
+    """Return high-opacity architectural (fill, border) QColors for a semantic category."""
+    style = _CATEGORY_STYLE.get(category, _CATEGORY_STYLE["Otros"])
+    fill_hex = style[0] if dark else style[2]
+    border_hex = style[1] if dark else style[3]
+    fill = QColor(fill_hex)
+    fill.setAlpha(242)
+    border = QColor(border_hex)
+    border.setAlpha(210)
+    return fill, border
 
 
 @dataclass
@@ -30,6 +69,8 @@ class Tile:
     depth: int
     label: str
     size: int
+    category: str = "Otros"
+    last_used_ts: float = 0.0
 
 
 def squarify(sizes: list[float], rect: QRectF) -> list[QRectF]:
@@ -86,7 +127,7 @@ def squarify(sizes: list[float], rect: QRectF) -> list[QRectF]:
 
 
 class TreemapWidget(QWidget):
-    """Treemap navegable de un arbol ``FolderNode``."""
+    """Treemap navegable de alta opacidad y estetica TRODAI sobre ``FolderNode``."""
 
     path_changed = Signal(str)
     reveal_requested = Signal(str)
@@ -116,12 +157,27 @@ class TreemapWidget(QWidget):
     def current(self) -> FolderNode | None:
         return self._stack[-1] if self._stack else None
 
+    def stack_nodes(self) -> list[FolderNode]:
+        return list(self._stack)
+
+    def _path_of(self, tile: Tile) -> str:
+        """Resolve the filesystem path string associated with a treemap tile."""
+        if tile.node is not None:
+            return str(tile.node.path)
+        return str(self.current.path) if self.current is not None else ""
+
     def can_go_up(self) -> bool:
         return len(self._stack) > 1
 
     def go_up(self) -> None:
         if self.can_go_up():
             self._stack.pop()
+            self._relayout()
+
+    def jump_to_depth(self, depth_idx: int) -> None:
+        """Jump directly to an ancestor folder in the active drill-down stack."""
+        if 0 <= depth_idx < len(self._stack) - 1:
+            self._stack = self._stack[: depth_idx + 1]
             self._relayout()
 
     def enter(self, node: FolderNode) -> None:
@@ -132,7 +188,7 @@ class TreemapWidget(QWidget):
             self._animate_zoom(start)
 
     def _animate_zoom(self, start: QRectF | None) -> None:
-        """v0.5.9: acercamiento breve (180 ms) desde el bloque pulsado hasta toda el area."""
+        """Acercamiento breve (180 ms) desde el bloque pulsado hasta toda el area."""
         from .fx import anims_on
 
         if start is None or start.isEmpty() or not anims_on():
@@ -161,12 +217,29 @@ class TreemapWidget(QWidget):
         return " / ".join(n.name for n in self._stack)
 
     # ------------------------------------------------------------------ layout
-    def _entries(self, node: FolderNode) -> list[tuple[FolderNode | None, int, str]]:
+    def _entries(self, node: FolderNode) -> list[tuple[FolderNode | None, int, str, str, float]]:
         kids = [c for c in node.children if c.size_bytes > 0][:MAX_TILES]
-        entries: list[tuple[FolderNode | None, int, str]] = [(c, c.size_bytes, c.name) for c in kids]
+        entries: list[tuple[FolderNode | None, int, str, str, float]] = [
+            (
+                c,
+                c.size_bytes,
+                c.name,
+                getattr(c, "dominant_category", "Otros"),
+                float(getattr(c, "last_used_ts", 0.0)),
+            )
+            for c in kids
+        ]
         loose = node.size_bytes - sum(c.size_bytes for c in node.children)
         if loose > node.size_bytes * 0.005 and loose > 0:
-            entries.append((None, loose, "(archivos en esta carpeta)"))
+            entries.append(
+                (
+                    None,
+                    loose,
+                    "(archivos en esta carpeta)",
+                    getattr(node, "dominant_category", "Otros"),
+                    float(getattr(node, "last_used_ts", 0.0)),
+                )
+            )
         entries.sort(key=lambda e: e[1], reverse=True)
         return entries
 
@@ -175,20 +248,21 @@ class TreemapWidget(QWidget):
         self._hover = None
         cur = self.current
         if cur is not None and self.width() > 4 and self.height() > 4:
-            area = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+            area = QRectF(self.rect()).adjusted(4, 4, -4, -4)
             entries = self._entries(cur)
             rects = squarify([float(e[1]) for e in entries], area)
-            for (node, size, label), r in zip(entries, rects):
-                if r.isEmpty():
+            for (node, size, label, cat, ts), raw_r in zip(entries, rects):
+                r = raw_r.adjusted(1.5, 1.5, -1.5, -1.5)
+                if r.width() <= 1 or r.height() <= 1:
                     continue
-                self._tiles.append(Tile(r, node, 1, label, size))
-                # segundo nivel dentro del bloque (sin texto si no cabe)
-                if node is not None and node.children and r.width() > 60 and r.height() > 50:
-                    inner = r.adjusted(3, 18, -3, -3)
+                self._tiles.append(Tile(r, node, 1, label, size, cat, ts))
+                if node is not None and node.children and r.width() > 68 and r.height() > 54:
+                    inner = r.adjusted(4, 22, -4, -4)
                     sub = self._entries(node)
-                    for (snode, ssize, slabel), sr in zip(sub, squarify([float(e[1]) for e in sub], inner)):
-                        if not sr.isEmpty():
-                            self._tiles.append(Tile(sr, snode, 2, slabel, ssize))
+                    for (snode, ssize, slabel, scat, sts), sr_raw in zip(sub, squarify([float(e[1]) for e in sub], inner)):
+                        sr = sr_raw.adjusted(1.0, 1.0, -1.0, -1.0)
+                        if sr.width() > 1 and sr.height() > 1:
+                            self._tiles.append(Tile(sr, snode, 2, slabel, ssize, scat, sts))
         self.path_changed.emit(self.breadcrumb())
         self.update()
 
@@ -199,7 +273,7 @@ class TreemapWidget(QWidget):
     # ------------------------------------------------------------------ hit testing
     def tile_at(self, pos: QPoint) -> Tile | None:
         hit: Tile | None = None
-        for t in self._tiles:  # los de nivel 2 se agregan despues -> ganan
+        for t in self._tiles:  # nivel 2 se agrega despues -> gana si existe
             if t.rect.contains(pos.x(), pos.y()):
                 hit = t
         return hit
@@ -217,12 +291,18 @@ class TreemapWidget(QWidget):
         pal = self._palette_fn()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        dark = QColor(pal.get("text_primary", "#F3EFE6")).lightness() > 128
-        base = QColor(pal.get("text_primary", "#F3EFE6"))
-        line = QColor(pal.get("text_muted", "#8C867A"))
-        line.setAlpha(150)
-        txt = QColor(pal.get("text_primary", "#F3EFE6"))
-        muted = QColor(pal.get("text_muted", "#8C867A"))
+        dark = pal.get("mode", "dark") != "light"
+
+        # Fondo solido opaco propio para eliminar la transparencia lavada sobre la grilla
+        canvas_bg = QColor("#0A0F1D" if dark else "#EEF2F7")
+        canvas_border = QColor(pal.get("border_strong", "#33415F"))
+        p.fillRect(self.rect(), canvas_bg)
+        p.setPen(QPen(canvas_border, 1))
+        p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+        txt = QColor("#F8FAFC" if dark else "#0A0F1D")
+        muted = QColor("#CBD5E1" if dark else "#334155")
+        accent = QColor(pal.get("accent", "#0EA5E9"))
 
         if not self._tiles:
             p.setPen(muted)
@@ -231,7 +311,6 @@ class TreemapWidget(QWidget):
             return
 
         if self._zoom_from is not None and self._zoom_t < 1.0:
-            # Interpolar del bloque pulsado al area completa (solo durante la animacion)
             full = QRectF(self.rect())
             t = self._zoom_t
             target = QRectF(
@@ -242,67 +321,93 @@ class TreemapWidget(QWidget):
             )
             p.translate(target.x(), target.y())
             p.scale(target.width() / max(1.0, full.width()), target.height() / max(1.0, full.height()))
+
         total = max(1, self.current.size_bytes if self.current else 1)
-        mono = QFont("IBM Plex Mono", 8)
-        ui = QFont("Instrument Sans", 9)
+        mono = QFont(MONO_FONT_FAMILY, 8)
+        ui = QFont(UI_FONT_FAMILY, 9, QFont.Weight.DemiBold)
         fm_ui = QFontMetrics(ui)
+        fm_mono = QFontMetrics(mono)
         level1 = [t for t in self._tiles if t.depth == 1]
-        for idx, t in enumerate(self._tiles):
-            fill = QColor(base)
-            if t.depth == 1:
-                share = t.size / total
-                # tono monocromo mas intenso cuanto mas pesa (acotado para que el texto siga legible)
-                fill.setAlpha(int(16 + 42 * min(1.0, share * 2.5)) if dark else int(12 + 38 * min(1.0, share * 2.5)))
-                if t.node is None:
-                    fill.setAlpha(10)
-            else:
-                fill.setAlpha(14 if (idx % 2) else 22)
-            if self._hover is not None and (t is self._hover):
-                fill.setAlpha(min(255, fill.alpha() + 45))
+
+        hovered_top = self._top_level_of(self._hover) if self._hover is not None else None
+
+        # Nivel 1: bloques opacos por categoria + peso, con barra de cabecera definida
+        for t in level1:
+            base_fill, base_border = treemap_category_colors(t.category, dark)
+            share = min(1.0, (t.size / total) * 2.2)
+            fill = base_fill.lighter(112 + int(10 * share)) if dark else base_fill.darker(102 + int(6 * share))
+            fill.setAlpha(248)
+            if t.node is None:
+                fill = QColor("#141D33" if dark else "#E2E8F0")
+                fill.setAlpha(238)
+            is_top_hover = hovered_top is t and self._hover is t
+            if hovered_top is t:
+                fill = fill.lighter(118) if dark else fill.darker(107)
             p.fillRect(t.rect, fill)
-            pen = QPen(line if t.depth == 1 else QColor(line.red(), line.green(), line.blue(), 70))
-            pen.setWidth(1)
-            p.setPen(pen)
+
+            nested = t.node is not None and bool(t.node.children) and t.rect.width() > 68 and t.rect.height() > 54
+            if nested:
+                hdr_rect = QRectF(t.rect.x(), t.rect.y(), t.rect.width(), 20.0)
+                hdr_fill = fill.lighter(120) if dark else fill.darker(108)
+                hdr_fill.setAlpha(255)
+                p.fillRect(hdr_rect, hdr_fill)
+
+            border_col = accent if is_top_hover else base_border
+            p.setPen(QPen(border_col, 2 if is_top_hover else 1))
             p.drawRect(t.rect.adjusted(0, 0, -1, -1))
 
-        fm_mono = QFontMetrics(mono)
+        # Nivel 2: subcarpetas nitidas y legibles dentro del bloque padre
+        for idx, t in enumerate(self._tiles):
+            if t.depth != 2:
+                continue
+            sub_fill, sub_border = treemap_category_colors(t.category, dark)
+            shade = sub_fill.lighter(126 if (idx % 2 == 0) else 114) if dark else sub_fill.lighter(110 if (idx % 2 == 0) else 104)
+            shade.setAlpha(232)
+            if t is self._hover:
+                shade = shade.lighter(122) if dark else shade.darker(110)
+            p.fillRect(t.rect, shade)
+            sub_border.setAlpha(220 if t is self._hover else 135)
+            p.setPen(QPen(accent if t is self._hover else sub_border, 2 if t is self._hover else 1))
+            p.drawRect(t.rect.adjusted(0, 0, -1, -1))
+
+        # Textos nivel 1
         for t in level1:
             r = t.rect
-            if r.width() < MIN_LABEL_W or r.height() < MIN_LABEL_H * 0.6:
+            if r.width() < MIN_LABEL_W or r.height() < MIN_LABEL_H * 0.65:
                 continue
-            stat_txt = f"{format_bytes(t.size)}  {t.size * 100.0 / total:.1f}%"
-            stat_w = fm_mono.horizontalAdvance(stat_txt) + 10
-            nested = t.node is not None and t.node.children and r.height() > 50
-            # Encabezado: nombre a la izquierda y peso a la derecha si cabe en la misma linea.
-            same_line = nested and r.width() > stat_w + 80
-            name_w = int(r.width() - 10 - (stat_w if same_line else 0))
+            stat_txt = f"{format_bytes(t.size)} · {t.size * 100.0 / total:.1f}%"
+            stat_w = fm_mono.horizontalAdvance(stat_txt) + 12
+            nested = t.node is not None and bool(t.node.children) and r.width() > 68 and r.height() > 54
+            same_line = nested and r.width() > stat_w + 85
+            name_w = int(r.width() - 12 - (stat_w if same_line else 0))
             p.setFont(ui)
             p.setPen(txt)
             name = fm_ui.elidedText(t.label, Qt.TextElideMode.ElideRight, max(10, name_w))
-            p.drawText(QRectF(r.x() + 5, r.y() + 2, name_w, 15), Qt.AlignmentFlag.AlignLeft, name)
+            p.drawText(QRectF(r.x() + 6, r.y() + 2, name_w, 16), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
             p.setFont(mono)
             p.setPen(muted)
             if same_line:
-                p.drawText(QRectF(r.right() - stat_w, r.y() + 3, stat_w - 5, 14), Qt.AlignmentFlag.AlignRight, stat_txt)
+                p.drawText(QRectF(r.right() - stat_w, r.y() + 2, stat_w - 6, 16), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, stat_txt)
             elif r.height() >= MIN_LABEL_H and not nested:
-                p.drawText(QRectF(r.x() + 5, r.y() + 17, r.width() - 10, 14), Qt.AlignmentFlag.AlignLeft, stat_txt)
+                p.drawText(QRectF(r.x() + 6, r.y() + 19, r.width() - 12, 14), Qt.AlignmentFlag.AlignLeft, stat_txt)
 
-        # Etiquetas del segundo nivel cuando el bloque es suficientemente grande.
-        small_ui = QFont("Instrument Sans", 8)
+        # Textos nivel 2
+        small_ui = QFont(UI_FONT_FAMILY, 8, QFont.Weight.Medium)
         fm_small = QFontMetrics(small_ui)
         for t in self._tiles:
             r = t.rect
-            if t.depth != 2 or r.width() < 90 or r.height() < 32:
+            if t.depth != 2 or r.width() < 84 or r.height() < 32:
                 continue
             p.setFont(small_ui)
-            p.setPen(muted)
+            p.setPen(txt)
             p.drawText(
-                QRectF(r.x() + 4, r.y() + 2, r.width() - 8, 13),
+                QRectF(r.x() + 5, r.y() + 2, r.width() - 10, 14),
                 Qt.AlignmentFlag.AlignLeft,
-                fm_small.elidedText(t.label, Qt.TextElideMode.ElideRight, int(r.width() - 8)),
+                fm_small.elidedText(t.label, Qt.TextElideMode.ElideRight, int(r.width() - 10)),
             )
             p.setFont(mono)
-            p.drawText(QRectF(r.x() + 4, r.y() + 15, r.width() - 8, 13), Qt.AlignmentFlag.AlignLeft, format_bytes(t.size))
+            p.setPen(muted)
+            p.drawText(QRectF(r.x() + 5, r.y() + 16, r.width() - 10, 13), Qt.AlignmentFlag.AlignLeft, format_bytes(t.size))
         p.end()
 
     # ------------------------------------------------------------------ interaction
@@ -315,58 +420,67 @@ class TreemapWidget(QWidget):
             total = max(1, self.current.size_bytes if self.current else 1)
             where = str(t.node.path) if t.node is not None else str(self.current.path if self.current else "")
             hint = "Clic: entrar | Doble clic: Explorador" if (t.node and t.node.children) else "Doble clic: Explorador"
+            used_txt = format_last_used(t.last_used_ts) if t.last_used_ts else "Sin registro"
             QToolTip.showText(
                 event.globalPosition().toPoint(),
-                f"{t.label}\n{format_bytes(t.size)} ({t.size * 100.0 / total:.1f}% de la vista)\n{where}\n{hint}",
+                f"{t.label} [{t.category}]\n"
+                f"{format_bytes(t.size)} ({t.size * 100.0 / total:.1f}% de la vista) | Ultimo uso: {used_txt}\n"
+                f"{where}\n{hint}",
                 self,
             )
         else:
             QToolTip.hideText()
 
-    def leaveEvent(self, _event) -> None:  # noqa: N802
-        self._hover = None
-        self.update()
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+        super().leaveEvent(event)
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() != Qt.MouseButton.LeftButton:
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.BackButton:
+            self.go_up()
             return
-        t = self.tile_at(event.position().toPoint())
-        if t is None or t.node is None:
-            return
-        # entrar en el bloque de primer nivel (o en el sub-bloque si tiene hijos)
-        top = self._top_level_of(t)
-        if top is not None and top.node is not None and top.node.children:
-            self.enter(top.node)
+        if event.button() == Qt.MouseButton.LeftButton:
+            t = self.tile_at(event.position().toPoint())
+            top = self._top_level_of(t) if t is not None else None
+            if top is not None and top.node is not None and top.node.children:
+                self.enter(top.node)
+                return
+        super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        t = self.tile_at(event.position().toPoint())
-        path = self._path_of(t)
-        if path:
-            self.reveal_requested.emit(path)
-
-    def _path_of(self, t: Tile | None) -> str:
-        if t is None:
-            return ""
-        if t.node is not None:
-            return str(t.node.path)
-        return str(self.current.path) if self.current else ""
+        if event.button() == Qt.MouseButton.LeftButton:
+            t = self.tile_at(event.position().toPoint())
+            target = (
+                t.node.path
+                if (t and t.node is not None)
+                else (self.current.path if self.current is not None else None)
+            )
+            if target is not None:
+                self.reveal_requested.emit(str(target))
+                return
+        super().mouseDoubleClickEvent(event)
 
     def _show_menu(self, pos: QPoint) -> None:
         t = self.tile_at(pos)
         menu = QMenu(self)
-        path = self._path_of(t) or (str(self.current.path) if self.current else "")
-        if path:
-            act = QAction("Ver en el Explorador de Windows", menu)
-            act.triggered.connect(lambda: self.reveal_requested.emit(path))
-            menu.addAction(act)
         if t is not None and t.node is not None and t.node.children:
-            act_in = QAction("Entrar en esta carpeta", menu)
-            node = t.node
-            act_in.triggered.connect(lambda: self.enter(node))
+            act_in = QAction(f"Entrar en '{t.label}'", menu)
+            act_in.triggered.connect(lambda _=False, n=t.node: self.enter(n))
             menu.addAction(act_in)
         if self.can_go_up():
             act_up = QAction("Subir un nivel", menu)
             act_up.triggered.connect(self.go_up)
             menu.addAction(act_up)
-        if not menu.isEmpty():
+        target = (
+            t.node.path
+            if (t and t.node is not None)
+            else (self.current.path if self.current is not None else None)
+        )
+        if target is not None:
+            act_exp = QAction("Ver en el Explorador de Windows", menu)
+            act_exp.triggered.connect(lambda _=False, p=str(target): self.reveal_requested.emit(p))
+            menu.addAction(act_exp)
+        if menu.actions():
             menu.exec(self.mapToGlobal(pos))

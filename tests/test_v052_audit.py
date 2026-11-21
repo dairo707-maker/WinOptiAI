@@ -107,7 +107,8 @@ def test_scan_finishing_in_other_mode_does_not_overwrite_table(qapp: QApplicatio
     ]
     view._on_dups_scanned(groups)  # duplicates scan completes while user is in Huerfanos
     assert view.table.rowCount() == 1
-    assert view.table.item(0, 3).text() == str(tmp_path / "o.tmp")
+    assert view.table.item(0, 3).text() == "Sin registro"
+    assert view.table.item(0, 4).text() == str(tmp_path / "o.tmp")
     assert view.dup_groups == groups  # data kept for when the user returns
 
     view._switch_mode("duplicates")

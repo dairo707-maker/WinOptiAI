@@ -27,6 +27,54 @@ TOOLTIPS: dict[str, str] = {
         "Mejora: baja temperatura y ruido del ventilador o libera Turbo maximo para IA local.\n"
         "Seguridad: crea respaldo del plan de energia antes de cada ajuste; nunca flashea BIOS."
     ),
+    "nav_apps": (
+        "Administrador de aplicaciones del usuario: inventario, ultimo uso real, actualizador winget y desinstalador.\n"
+        "Mejora: actualiza software desactualizado en 1 clic o desinstala programas olvidados limpiando residuos.\n"
+        "Seguridad: protege Windows, antivirus, drivers y WinOptiAI; los restos opcionales van a Cuarentena."
+    ),
+    "nav_startup": (
+        "Gestor de aplicaciones que arrancan con Windows con sugerencia inteligente tipo semaforo.\n"
+        "Mejora: acelera el encendido y reduce RAM consumida al iniciar pausando apps que casi no usas.\n"
+        "Seguridad: desactivacion 100% reversible (StartupApproved) y respaldo previo; nunca quita antivirus/drivers."
+    ),
+    "apps_scan": (
+        "Escanea el Registro de Windows y cruza la fecha de ultimo uso real (BAM/Prefetch) de cada app.\n"
+        "Mejora: identifica programas olvidados que ocupan disco sin usarse.\n"
+        "Seguridad: operacion 100% de solo lectura."
+    ),
+    "apps_check_updates": (
+        "Consulta el repositorio oficial winget para detectar versiones nuevas de tus programas.\n"
+        "Mejora: mantiene tus apps seguras y actualizadas sin buscar instaladores manuales.\n"
+        "Seguridad: consulta sin instalar cambios automaticos."
+    ),
+    "apps_upgrade": (
+        "Actualiza silenciosamente la aplicacion seleccionada usando Microsoft winget.\n"
+        "Mejora: corrige fallos de seguridad y obtiene la ultima version oficial en 1 clic.\n"
+        "Seguridad: solo actua sobre apps no protegidas elegidas por ti."
+    ),
+    "apps_uninstall": (
+        "Lanza el desinstalador oficial (o winget) del programa seleccionado y ofrece limpiar restos en AppData.\n"
+        "Mejora: recupera espacio de aplicaciones que ya no necesitas.\n"
+        "Seguridad: pide confirmacion y los restos opcionales se mueven a Cuarentena reversible."
+    ),
+    "startup_scan": (
+        "Inspecciona el Registro Run, carpetas Inicio, memoria RAM actual y frecuencia real de uso.\n"
+        "Mejora: clasifica en semaforo (Mantener / Pausar / Desactivar) que frena tu encendido.\n"
+        "Seguridad: analisis de solo lectura."
+    ),
+    "startup_apply_smart": (
+        "Desactiva de forma reversible solo las entradas marcadas en rojo (DESACTIVAR: sin uso reciente o bloatware).\n"
+        "Mejora: aligera el arranque de Windows en 1 clic manteniendo intactos drivers y seguridad.\n"
+        "Seguridad: guarda respaldo previo y puedes reactivarlas cuando quieras."
+    ),
+    "startup_disable": (
+        "Pausa o desactiva en StartupApproved las entradas seleccionadas para que no arranquen solas.\n"
+        "Mejora: ahorra RAM desde que enciendes el equipo.\n"
+        "Seguridad: 100% reversible."
+    ),
+    "startup_enable": (
+        "Reactiva las entradas de inicio seleccionadas para que vuelvan a abrirse al iniciar sesion."
+    ),
     "btn_tour": (
         "Abre el tour guiado de 5 pasos y ejecuta una prueba rapida segura de este equipo.\n"
         "Mejora: calibra el umbral SRE y comprueba salud S.M.A.R.T., sensores y reinicios pendientes.\n"
@@ -315,6 +363,22 @@ SECTION_BENEFITS: dict[str, dict[str, str]] = {
         ),
         "safety": "Respalda tu plan de energia (.pow) antes de cambiar perfiles y bloquea DISM si ya hay otro activo.",
     },
+    "apps": {
+        "title": "Que mejora esta vista (Administrador de Aplicaciones)",
+        "improves": (
+            "Detecta aplicaciones olvidadas segun su fecha real de ultimo uso, verifica nuevas versiones "
+            "mediante Microsoft winget y desinstala programas con opcion segura de limpiar restos."
+        ),
+        "safety": "Protege componentes de Windows, antivirus, drivers y WinOptiAI; restos opcionales van a Cuarentena.",
+    },
+    "startup": {
+        "title": "Que mejora esta vista (Inicio Inteligente de Windows)",
+        "improves": (
+            "Acelera el inicio de sesion y reduce la RAM ocupada al encender analizando que apps "
+            "realmente usas y cuales solo consumen recursos en segundo plano."
+        ),
+        "safety": "Usa StartupApproved de Windows (100% reversible con 1 clic) y respalda cada cambio.",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -414,20 +478,43 @@ MANUAL_SECTIONS: list[dict[str, str]] = [
         ),
     },
     {
+        "id": "apps",
+        "title": "7. Aplicaciones y winget",
+        "body": (
+            "OBJETIVO: Mantener tu software al dia y eliminar programas que no usas sin dejar residuos.\n\n"
+            "- Inventario con Ultimo Uso: lee Registro de Windows junto con BAM/Prefetch para mostrar cuando "
+            "abriste realmente cada aplicacion por ultima vez.\n"
+            "- Buscar Actualizaciones (winget): detecta versiones oficiales disponibles y permite actualizar "
+            "de forma silenciosa en 1 clic.\n"
+            "- Desinstalar y Limpiar Restos: ejecuta el desinstalador nativo (o winget) y luego ofrece revisar "
+            "carpetas residuales en AppData para moverlas de forma reversible a Cuarentena."
+        ),
+    },
+    {
+        "id": "startup",
+        "title": "8. Inicio Inteligente",
+        "body": (
+            "OBJETIVO: Lograr un arranque rapido y sin carga innecesaria segun tus habitos reales.\n\n"
+            "- Semaforo Inteligente:\n"
+            "  * MANTENER (verde): seguridad, antivirus, drivers de hardware, OneDrive o herramientas recientes.\n"
+            "  * PAUSAR (ambar): apps de uso moderado o con consumo alto de RAM (>120 MB) que conviene abrir a mano.\n"
+            "  * DESACTIVAR (rojo): apps opcionales de ocio/updaters o programas sin uso en >30 dias.\n"
+            "- Reversibilidad total: los cambios usan StartupApproved (igual que el Administrador de Tareas) "
+            "y siempre guardan respaldo previo en Backups."
+        ),
+    },
+    {
         "id": "shortcuts",
-        "title": "7. Atajos, Seguridad y Soporte",
+        "title": "9. Atajos, Seguridad y Soporte",
         "body": (
             "ATAJOS UTILES:\n"
             "- Doble clic en cualquier fila de Almacenamiento: abre la carpeta en el Explorador de Windows.\n"
             "- Tecla Supr en tablas elegibles: mueve a Boveda de Cuarentena al instante con aviso 'Deshacer'.\n"
-            "- Boton 'Tour y Prueba Rapida': vuelve a correr el tour y la verificacion de hardware en cualquier PC.\n\n"
+            "- Semaforo en Resumen: haz clic en RAM, Disco, Termica, Apps o Inicio para ir directo a cada vista.\n\n"
             "ACTUALIZACIONES Y ERRORES:\n"
-            "- Auto-actualizador: revisa silenciosamente GitHub Releases al iniciar y cada 12 h, avisando una sola "
-            "vez por version nueva y verificando SHA-256 antes de instalar.\n"
-            "- SmartScreen en PCs nuevos: al ser open source sin certificado comercial, elige 'Mas informacion -> "
-            "Ejecutar de todas formas' tras validar SHA256SUMS.txt.\n"
-            "- Diagnostico y Reporte de Errores: CrashGuard guarda crash.log localmente; nunca envia nada sin tu "
-            "revision previa anonimizada hacia GitHub Issues."
+            "- Auto-actualizador TRODAI: revisa GitHub Releases al iniciar (con reintento automatico si tarda "
+            "el Wi-Fi) y cada 12 h; muestra aviso en ventana y globo clicable verificando SHA-256.\n"
+            "- Diagnostico y Reporte: CrashGuard guarda crash.log localmente; nunca envia datos sin tu aprobacion."
         ),
     },
 ]

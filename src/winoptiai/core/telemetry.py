@@ -7,6 +7,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 import json
 import subprocess
+import threading
 
 import psutil
 
@@ -43,18 +44,31 @@ class LiveSystemTelemetry:
 class PdhTelemetryReader:
     """Zero-overhead Windows PDH English-counter reader (language-independent)."""
 
-    def __init__(self) -> None:
+    def __init__(self, lazy_init: bool = False) -> None:
+        self._lock = threading.Lock()
+        self._initialized = False
         self._pdh = None
         self._query = wintypes.HANDLE()
         self._handles: dict[str, wintypes.HANDLE] = {}
         self._last_elevated_cpu_temp: float | None = None
         self._last_elevated_nvme_temp: float | None = None
 
-        if IS_WINDOWS:
+        if not lazy_init:
+            self.ensure_initialized()
+
+    def ensure_initialized(self) -> None:
+        """Initialize Windows PDH counters once (safe to call from a background thread)."""
+        if self._initialized or not IS_WINDOWS:
+            return
+        with self._lock:
+            if self._initialized:
+                return
             try:
-                self._pdh = ctypes.WinDLL("pdh.dll")
-                rc = self._pdh.PdhOpenQueryW(None, 0, ctypes.byref(self._query))
+                pdh = ctypes.WinDLL("pdh.dll")
+                query = wintypes.HANDLE()
+                rc = pdh.PdhOpenQueryW(None, 0, ctypes.byref(query))
                 if rc == 0:
+                    handles: dict[str, wintypes.HANDLE] = {}
                     counters = {
                         "utility": r"\Processor Information(_Total)\% Processor Utility",
                         "freq": r"\Processor Information(_Total)\Processor Frequency",
@@ -62,11 +76,16 @@ class PdhTelemetryReader:
                     }
                     for key, path in counters.items():
                         ch = wintypes.HANDLE()
-                        if self._pdh.PdhAddEnglishCounterW(self._query, path, 0, ctypes.byref(ch)) == 0:
-                            self._handles[key] = ch
-                    self._pdh.PdhCollectQueryData(self._query)
+                        if pdh.PdhAddEnglishCounterW(query, path, 0, ctypes.byref(ch)) == 0:
+                            handles[key] = ch
+                    pdh.PdhCollectQueryData(query)
+                    self._pdh = pdh
+                    self._query = query
+                    self._handles = handles
             except OSError:
                 self._pdh = None
+            finally:
+                self._initialized = True
 
     def _read_double(self, key: str) -> float | None:
         if not self._pdh or key not in self._handles:
@@ -106,17 +125,20 @@ class PdhTelemetryReader:
         freq_mhz = 0.0
         turbo_pct = 100.0
 
-        if self._pdh and self._query:
-            self._pdh.PdhCollectQueryData(self._query)
-            u = self._read_double("utility")
-            f = self._read_double("freq")
-            p = self._read_double("perf")
-            if u is not None and u >= 0.0:
-                utility = min(100.0, round(u, 1))
-            if f is not None and f > 0.0:
-                freq_mhz = round(f, 0)
-            if p is not None and p > 0.0:
-                turbo_pct = round(p, 0)
+        if self._initialized and self._pdh and self._query and self._lock.acquire(blocking=False):
+            try:
+                self._pdh.PdhCollectQueryData(self._query)
+                u = self._read_double("utility")
+                f = self._read_double("freq")
+                p = self._read_double("perf")
+                if u is not None and u >= 0.0:
+                    utility = min(100.0, round(u, 1))
+                if f is not None and f > 0.0:
+                    freq_mhz = round(f, 0)
+                if p is not None and p > 0.0:
+                    turbo_pct = round(p, 0)
+            finally:
+                self._lock.release()
 
         if freq_mhz <= 0.0:
             cf = psutil.cpu_freq()

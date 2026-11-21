@@ -78,6 +78,7 @@ class ProcessEntry:
     cpu_pct: float
     role: str        # "AGENTE_IA" | "SISTEMA" | "SEGUNDO_PLANO" | "ZOMBI_MCP" | "USUARIO"
     ecoqos_eligible: bool
+    started_ts: float = 0.0
 
 
 @dataclass(slots=True)
@@ -124,6 +125,10 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
                 cpu_pct = round(float(cached.cpu_percent(interval=None) or 0.0), 1)
             mem = proc.info.get("memory_info")
             ram_mb = round((mem.rss if mem else 0) / (1024 * 1024), 1)
+            try:
+                started_ts = float(proc.create_time() or 0.0)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                started_ts = 0.0
             lname = name.lower()
 
             if lname in PROTECTED_PROCESS_NAMES:
@@ -147,6 +152,7 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
                     cpu_pct=cpu_pct,
                     role=role,
                     ecoqos_eligible=eligible,
+                    started_ts=started_ts,
                 )
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):

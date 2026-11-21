@@ -34,6 +34,7 @@ import webbrowser
 
 from ..core.safety_guard import PreOpBackupManager, default_app_data_dir, is_protected_path
 from ..core.task_control import TaskCanceledError, TaskController, stop_point
+from ..core.usage_telemetry import file_last_used_ts, parse_iso_timestamp
 from ..core.win32_bridge import (
     IS_WINDOWS,
     attrs_is_cloud_only,
@@ -86,6 +87,7 @@ class OneDriveCandidate:
     web_url: str = ""
     cloud_hash: str = ""
     group_key: str = ""
+    last_used_ts: float = 0.0
 
 
 @dataclass(slots=True)
@@ -247,6 +249,7 @@ def scan_local_onedrive_candidates(
                             last_modified=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"),
                             reason=f"En disco ({days_idle}d sin uso)",
                             local_path=ep,
+                            last_used_ts=file_last_used_ts(st),
                         )
                     )
 
@@ -626,6 +629,7 @@ def scan_cloud_onedrive(
             if size < min_bytes:
                 continue
             parent_path = str((item.get("parentReference") or {}).get("path") or "").replace("/drive/root:", "OneDrive:")
+            raw_dt = str(item.get("lastModifiedDateTime") or "")
             results.append(
                 OneDriveCandidate(
                     item_id=str(item.get("id") or ""),
@@ -633,9 +637,10 @@ def scan_cloud_onedrive(
                     name=str(item.get("name") or ""),
                     location=f"{parent_path}/{item.get('name', '')}".strip("/"),
                     size_bytes=size,
-                    last_modified=_format_graph_iso_date(str(item.get("lastModifiedDateTime") or "")),
+                    last_modified=_format_graph_iso_date(raw_dt),
                     reason="Archivo pesado en la nube",
                     web_url=str(item.get("webUrl") or ""),
+                    last_used_ts=parse_iso_timestamp(raw_dt),
                 )
             )
         results.sort(key=lambda c: c.size_bytes, reverse=True)
@@ -667,6 +672,7 @@ def scan_cloud_onedrive(
                 parent_path = str((dup.get("parentReference") or {}).get("path") or "").replace(
                     "/drive/root:", "OneDrive:"
                 )
+                raw_dt = str(dup.get("lastModifiedDateTime") or "")
                 results.append(
                     OneDriveCandidate(
                         item_id=str(dup.get("id") or ""),
@@ -674,11 +680,12 @@ def scan_cloud_onedrive(
                         name=str(dup.get("name") or ""),
                         location=f"{parent_path}/{dup.get('name', '')}".strip("/"),
                         size_bytes=size,
-                        last_modified=_format_graph_iso_date(str(dup.get("lastModifiedDateTime") or "")),
+                        last_modified=_format_graph_iso_date(raw_dt),
                         reason=f"Duplicado exacto de '{keep_name}'",
                         web_url=str(dup.get("webUrl") or ""),
                         cloud_hash=digest,
                         group_key=f"{size}:{digest[:10]}",
+                        last_used_ts=parse_iso_timestamp(raw_dt),
                     )
                 )
         results.sort(key=lambda c: c.size_bytes, reverse=True)

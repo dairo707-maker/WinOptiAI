@@ -20,6 +20,7 @@ from blake3 import blake3
 
 from ..core.safety_guard import QuarantineVault, is_protected_path, is_safe_to_touch_file
 from ..core.task_control import TaskCanceledError, TaskController, stop_point
+from ..core.usage_telemetry import file_last_used_ts
 from .program_guard import find_mirrored_parents, is_program_dir_name, program_dir_reason
 from ..core.win32_bridge import (
     attrs_skip_entry,
@@ -41,6 +42,7 @@ class DuplicateGroup:
     wasted_bytes: int
     # v0.5.9: motivo por el que el grupo NO debe tocarse (p. ej. "carpeta copiada"); "" = seguro
     protected_reason: str = ""
+    last_used_ts: float = 0.0
 
 
 class DuplicateResults(list):
@@ -302,12 +304,21 @@ def _find_duplicates_impl(
 
         if len(distinct_paths) >= 2:
             wasted = size * (len(distinct_paths) - 1)
+            last_used = 0.0
+            for dp in distinct_paths:
+                try:
+                    ts = file_last_used_ts(dp.stat())
+                    if ts > last_used:
+                        last_used = ts
+                except OSError:
+                    continue
             groups.append(
                 DuplicateGroup(
                     digest=digest,
                     size_bytes=size,
                     paths=distinct_paths,
                     wasted_bytes=wasted,
+                    last_used_ts=last_used,
                 )
             )
 

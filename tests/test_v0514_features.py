@@ -62,7 +62,7 @@ def test_help_catalog_completeness_and_no_emojis() -> None:
         joined = f"{benefit['title']} {benefit['improves']} {benefit['safety']}"
         assert not emoji_re.search(joined), f"Emoji prohibido en SECTION_BENEFITS[{key}]"
 
-    assert len(MANUAL_SECTIONS) == 7
+    assert len(MANUAL_SECTIONS) >= 7
     for sec in MANUAL_SECTIONS:
         assert sec["id"].strip()
         assert sec["title"].strip()

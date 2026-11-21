@@ -18,6 +18,7 @@ import time
 from typing import Callable
 
 from ..core.safety_guard import QuarantineVault, is_protected_path
+from ..core.usage_telemetry import file_last_used_ts
 from ..core.win32_bridge import (
     IS_WINDOWS,
     attrs_skip_entry,
@@ -80,6 +81,7 @@ class OrphanCandidate:
     last_modified: str
     in_use_by: str = ""
     is_dir: bool = False
+    last_used_ts: float = 0.0
 
 
 def _get_installed_program_tokens() -> set[str]:
@@ -179,7 +181,8 @@ def scan_orphan_artifacts(
                 if dname in {".venv", "venv", "node_modules"}:
                     dpath = current / dname
                     try:
-                        mtime = dpath.stat().st_mtime
+                        dst = dpath.stat()
+                        mtime = dst.st_mtime
                     except OSError:
                         continue
                     if mtime <= cutoff_stale:
@@ -193,6 +196,7 @@ def scan_orphan_artifacts(
                                     size_bytes=size,
                                     last_modified=datetime.fromtimestamp(mtime).strftime("%Y-%m-%d"),
                                     is_dir=True,
+                                    last_used_ts=file_last_used_ts(dst),
                                 )
                             )
                     dirs.remove(dname)
@@ -217,6 +221,7 @@ def scan_orphan_artifacts(
                             size_bytes=st.st_size,
                             last_modified=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"),
                             in_use_by=", ".join(str(x["app_name"]) for x in lockers),
+                            last_used_ts=file_last_used_ts(st),
                         )
                     )
                 elif current == downloads and ext in INSTALLER_EXTENSIONS and st.st_mtime <= cutoff_installer:
@@ -229,6 +234,7 @@ def scan_orphan_artifacts(
                             size_bytes=st.st_size,
                             last_modified=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"),
                             in_use_by=", ".join(str(x["app_name"]) for x in lockers),
+                            last_used_ts=file_last_used_ts(st),
                         )
                     )
 
@@ -254,7 +260,8 @@ def scan_orphan_artifacts(
                 if any(tok in installed_tokens for tok in parts):
                     continue
                 try:
-                    mtime = entry.stat().st_mtime
+                    est = entry.stat()
+                    mtime = est.st_mtime
                 except OSError:
                     continue
                 if mtime > cutoff_stale:
@@ -270,6 +277,7 @@ def scan_orphan_artifacts(
                         size_bytes=size,
                         last_modified=datetime.fromtimestamp(mtime).strftime("%Y-%m-%d"),
                         is_dir=True,
+                        last_used_ts=file_last_used_ts(est),
                     )
                 )
 

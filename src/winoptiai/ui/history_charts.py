@@ -38,6 +38,7 @@ from ..core.metrics_history import (
     freed_cumulative_series,
 )
 from .theme import MONO_FONT_FAMILY, UI_FONT_FAMILY
+from .widgets import semaphore_hex
 
 EVENT_GLYPHS = {EVENT_BOOST: "B", EVENT_CLEAN: "L", EVENT_PURGE: "D", EVENT_ERROR: "E"}
 EVENT_NAMES = {
@@ -238,11 +239,13 @@ class TimeSeriesChart(QWidget):
             w = fm.horizontalAdvance(lab)
             p.drawText(QRectF(ram_band.right() - w - 6, y - 14, w + 2, 12), Qt.AlignmentFlag.AlignRight, lab)
 
-        # Series
+        # Series (Cyber Cyan / Governance Blue en paleta TRODAI)
+        ram_col = QColor(pal.get("accent", "#0EA5E9"))
+        cpu_col = QColor(pal.get("accent_alt", "#3B82F6"))
         segments = self._segments()
         for seg in segments:
-            self._draw_series(p, seg, ram_band, lambda s: s.ram_free_gb / ram_max, txt, fill=True)
-            self._draw_series(p, seg, cpu_band, lambda s: s.cpu_pct / 100.0, txt, fill=True)
+            self._draw_series(p, seg, ram_band, lambda s: s.ram_free_gb / ram_max, ram_col, fill=True)
+            self._draw_series(p, seg, cpu_band, lambda s: s.cpu_pct / 100.0, cpu_col, fill=True)
 
         # Marcadores de eventos
         p.setFont(mono)
@@ -417,7 +420,8 @@ class FreedSpaceChart(QWidget):
             p.setPen(muted)
             p.drawText(QRectF(0, y - 7, self.LEFT - 6, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, format_mb(mb))
 
-        # Capas apiladas de abajo hacia arriba (escalonadas: el acumulado sube en cada evento)
+        # Capas apiladas de abajo hacia arriba (escalonadas: tono acento TRODAI)
+        area_col = QColor(pal.get("accent", txt.name()))
         lower = [0.0] * len(points)
         for kind in FREED_KINDS:
             upper = [lower[i] + points[i][1][kind] for i in range(len(points))]
@@ -441,8 +445,8 @@ class FreedSpaceChart(QWidget):
                 if i > 0:
                     path.lineTo(x, y_for(lower[i - 1]))
             path.closeSubpath()
-            p.fillPath(path, _with_alpha(txt, FREED_ALPHAS[kind]))
-            p.setPen(QPen(_with_alpha(txt, 230), 1))
+            p.fillPath(path, _with_alpha(area_col, FREED_ALPHAS[kind]))
+            p.setPen(QPen(_with_alpha(area_col, 230), 1))
             edge = QPainterPath(top_pts[0])
             for pt in top_pts[1:]:
                 edge.lineTo(pt)
@@ -674,8 +678,8 @@ class _FreedLegend(QWidget):
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
         pal = self._palette_fn()
-        txt = QColor(pal.get("text_primary", "#F3EFE6"))
-        sec = QColor(pal.get("text_secondary", "#C2BCB0"))
+        txt = QColor(pal.get("accent", pal.get("text_primary", "#0EA5E9")))
+        sec = QColor(pal.get("text_secondary", "#CBD5E1"))
         p = QPainter(self)
         p.setFont(QFont(UI_FONT_FAMILY, 8))
         rects, _ = self._layout(self.width())
@@ -686,4 +690,112 @@ class _FreedLegend(QWidget):
             p.drawRect(sw.adjusted(0.5, 0.5, -0.5, -0.5))
             p.setPen(sec)
             p.drawText(QRectF(rect.left() + 16, rect.top(), rect.width() - 16, rect.height()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        p.end()
+
+
+class SystemGaugesWidget(QWidget):
+    """Medidores visuales radiales (RAM %, Disco %, CPU %) + estado semaforo global TRODAI."""
+
+    def __init__(self, palette_fn: Callable[[], dict[str, str]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._palette_fn = palette_fn
+        self._ram_pct = 0
+        self._ram_tone = "ok"
+        self._disk_pct = 0
+        self._disk_tone = "ok"
+        self._cpu_pct = 0
+        self._cpu_tone = "ok"
+        self._health_label = "OPTIMO"
+        self._health_tone = "ok"
+        self.setMinimumSize(185, 160)
+
+    def update_values(
+        self,
+        ram_pct: int,
+        ram_tone: str,
+        disk_pct: int,
+        disk_tone: str,
+        cpu_pct: int,
+        cpu_tone: str,
+        health_label: str,
+        health_tone: str,
+    ) -> None:
+        self._ram_pct = max(0, min(100, int(ram_pct)))
+        self._ram_tone = ram_tone
+        self._disk_pct = max(0, min(100, int(disk_pct)))
+        self._disk_tone = disk_tone
+        self._cpu_pct = max(0, min(100, int(cpu_pct)))
+        self._cpu_tone = cpu_tone
+        self._health_label = health_label
+        self._health_tone = health_tone
+        self.update()
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
+        pal = self._palette_fn()
+        mode = pal.get("mode", "dark")
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        w, h = float(self.width()), float(self.height())
+        border_col = QColor(pal.get("border_hairline", "#1F2A44"))
+        bg_col = QColor(pal.get("bg_table", "#0A0F1D"))
+        txt_col = QColor(pal.get("text_primary", "#F8FAFC"))
+        muted_col = QColor(pal.get("text_muted", "#94A3B8"))
+        track_col = _with_alpha(QColor(pal.get("border_strong", "#33415F")), 125)
+
+        p.fillRect(self.rect(), bg_col)
+        p.setPen(QPen(border_col, 1))
+        p.drawRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0))
+
+        # Cabecera semaforo global
+        h_col = QColor(semaphore_hex(self._health_tone, mode))
+        p.setFont(QFont(MONO_FONT_FAMILY, 8, QFont.Weight.DemiBold))
+        p.fillRect(QRectF(10, 10, 8, 8), h_col)
+        p.setPen(muted_col)
+        p.drawText(QRectF(24, 6, w - 34, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "SALUD")
+        p.setPen(h_col)
+        p.drawText(QRectF(10, 6, w - 20, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._health_label)
+
+        # Barras de semaforo visuales para 3 recursos clave + arcos compactos
+        gauges = [
+            ("RAM", self._ram_pct, self._ram_tone),
+            ("DISCO", self._disk_pct, self._disk_tone),
+            ("CPU", self._cpu_pct, self._cpu_tone),
+        ]
+        avail_h = max(90.0, h - 34.0)
+        if w >= 190 and avail_h >= 145:
+            # Vista con 2 arcos arriba + 1 abajo centrados
+            arc_d = min(56.0, (w - 32.0) / 2.2, (avail_h - 32.0) / 2.2)
+            positions = [
+                (w * 0.28 - arc_d / 2, 32.0),
+                (w * 0.72 - arc_d / 2, 32.0),
+                (w * 0.50 - arc_d / 2, 34.0 + arc_d + 18.0),
+            ]
+            for (label, pct, tone), (gx, gy) in zip(gauges, positions):
+                arc_r = QRectF(gx, gy, arc_d, arc_d)
+                tone_col = QColor(semaphore_hex(tone, mode))
+                p.setPen(QPen(track_col, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+                p.drawArc(arc_r, 90 * 16, -360 * 16)
+                p.setPen(QPen(tone_col, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+                p.drawArc(arc_r, 90 * 16, -int((pct / 100.0) * 360 * 16))
+                p.setFont(QFont(MONO_FONT_FAMILY, 9, QFont.Weight.Medium))
+                p.setPen(txt_col)
+                p.drawText(arc_r, Qt.AlignmentFlag.AlignCenter, f"{pct}%")
+                p.setFont(QFont(MONO_FONT_FAMILY, 7.5))
+                p.setPen(muted_col)
+                p.drawText(QRectF(gx - 8, gy + arc_d + 1, arc_d + 16, 13), Qt.AlignmentFlag.AlignCenter, label)
+        else:
+            # Respaldo compacto por barras si la ventana es muy baja
+            y = 34.0
+            row_step = avail_h / 3.0
+            for label, pct, tone in gauges:
+                tone_col = QColor(semaphore_hex(tone, mode))
+                p.setFont(QFont(MONO_FONT_FAMILY, 8))
+                p.setPen(txt_col)
+                p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignLeft, label)
+                p.setPen(tone_col)
+                p.drawText(QRectF(10, y, w - 20, 14), Qt.AlignmentFlag.AlignRight, f"{pct}%")
+                p.fillRect(QRectF(10, y + 17, w - 20, 5), track_col)
+                p.fillRect(QRectF(10, y + 17, (w - 20) * (pct / 100.0), 5), tone_col)
+                y += row_step
         p.end()

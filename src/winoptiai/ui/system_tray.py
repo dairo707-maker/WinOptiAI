@@ -1,13 +1,15 @@
-"""Minimalist System Tray integration (high-contrast adaptive icon & live mode checkmarks)."""
+"""Minimalist TRODAI System Tray integration (octagonal high-contrast icon, active mode checkmarks, clickable toasts)."""
 
 from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import QByteArray, QPointF, Qt
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
 
+from .. import get_base_dir
 from ..core.win32_bridge import is_windows_taskbar_light_theme
 
 
@@ -17,16 +19,33 @@ _THERMAL_SHORT_LABELS: dict[str, str] = {
     "ai_local": "IA Maxima",
 }
 
+_FALLBACK_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+    '<g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="4">'
+    '<polygon points="50,10 78,20 90,40 80,46 80,64 50,90 20,64 20,46 10,40 22,20"/>'
+    '<polygon points="40,56 60,56 66,72 34,72"/>'
+    '<path d="M30 42 L42 42"/><path d="M58 42 L70 42"/>'
+    "</g></svg>"
+)
+
+
+def _favicon_svg_template() -> str:
+    svg_path = get_base_dir() / "assets" / "icons" / "trodai_favicon.svg"
+    if svg_path.exists():
+        return svg_path.read_text(encoding="utf-8")
+    return _FALLBACK_FAVICON_SVG
+
 
 def build_high_contrast_tray_icon(light_taskbar: bool | None = None) -> QIcon:
-    """Render crisp multi-size 0px geometric tray badge visible on both Light & Dark Windows 11 trays."""
+    """Render crisp multi-size TRODAI Hexa-Vault octagonal badge visible on Light & Dark Windows 11 trays."""
     is_light = is_windows_taskbar_light_theme() if light_taskbar is None else light_taskbar
     icon = QIcon()
 
-    bg_color = QColor("#11161F") if is_light else QColor("#181E29")
-    rim_color = QColor("#2C3848") if is_light else QColor("#D8E0EA")
-    ink_color = QColor("#F8FAFC") if is_light else QColor("#F1F5F9")
-    accent_color = QColor("#6E92B5") if is_light else QColor("#8EB3D6")
+    bg_color = QColor("#0A0F1D")
+    rim_color = QColor("#3B82F6") if is_light else QColor("#60A5FA")
+    stroke_color = "#0EA5E9" if not is_light else "#38BDF8"
+    svg_data = _favicon_svg_template().replace("currentColor", stroke_color).encode("utf-8")
+    renderer = QSvgRenderer(QByteArray(svg_data))
 
     for sz in (16, 20, 24, 32):
         pm = QPixmap(sz, sz)
@@ -34,39 +53,35 @@ def build_high_contrast_tray_icon(light_taskbar: bool | None = None) -> QIcon:
         painter = QPainter(pm)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        # Solid high-contrast architectural plate so frosted flyouts never wash out the icon
-        painter.fillRect(0, 0, sz, sz, bg_color)
-        rim_pen = QPen(rim_color, max(1, sz // 16))
-        painter.setPen(rim_pen)
-        painter.drawRect(0, 0, sz - 1, sz - 1)
+        # Solid high-contrast TRODAI Obsidian Navy octagonal container
+        c = max(2.0, sz * 0.16)
+        s = float(sz - 1)
+        oct_pts = QPolygonF(
+            [
+                QPointF(c, 0),
+                QPointF(s - c, 0),
+                QPointF(s, c),
+                QPointF(s, s - c),
+                QPointF(s - c, s),
+                QPointF(c, s),
+                QPointF(0, s - c),
+                QPointF(0, c),
+            ]
+        )
+        painter.setPen(QPen(rim_color, max(1, sz // 16)))
+        painter.setBrush(bg_color)
+        painter.drawPolygon(oct_pts)
 
-        pad = max(2, round(sz * 0.19))
-        stroke = max(1, round(sz * 0.09))
-        pen = QPen(ink_color, stroke)
-        painter.setPen(pen)
-        outer_w = sz - (pad * 2) - 1
-        painter.drawRect(pad, pad, outer_w, outer_w)
-
-        split_x = round(sz * 0.44)
-        split_y = round(sz * 0.44)
-        painter.drawLine(pad, split_y, sz - pad - 1, split_y)
-        painter.drawLine(split_x, split_y, split_x, sz - pad - 1)
-
-        # Crisp filled accent block in lower-right quadrant
-        inner_off = max(2, round(sz * 0.09))
-        ax = split_x + inner_off
-        ay = split_y + inner_off
-        aw = (sz - pad - inner_off) - ax
-        ah = (sz - pad - inner_off) - ay
-        if aw >= 2 and ah >= 2:
-            painter.fillRect(ax, ay, aw, ah, accent_color)
+        # Inner Hexa-Vault Sentinel simplified marks
+        pad = max(2.0, sz * 0.15)
+        renderer.render(painter, oct_pts.boundingRect().adjusted(pad, pad, -pad, -pad))
         painter.end()
         icon.addPixmap(pm)
     return icon
 
 
 class WinOptiTray(QSystemTrayIcon):
-    """High-contrast tray icon showing active thermal/SRE/theme modes & quick controls."""
+    """High-contrast TRODAI tray icon showing active modes, updates, and clickable notifications."""
 
     def __init__(
         self,
@@ -85,6 +100,8 @@ class WinOptiTray(QSystemTrayIcon):
         super().__init__(build_high_contrast_tray_icon(), parent)
         self._last_taskbar_light: bool | None = None
         self._on_show = on_show
+        self._on_open_updates = on_open_updates
+        self._last_toast_kind = "general"
 
         menu = QMenu()
         self.status_action = QAction("Estado: En reposo", menu)
@@ -132,7 +149,7 @@ class WinOptiTray(QSystemTrayIcon):
             self.sre_action.setEnabled(False)
         menu.addAction(self.sre_action)
 
-        self.theme_action = QAction("Tema Claro (Alabaster)", menu)
+        self.theme_action = QAction("Tema Claro (Crisp White)", menu)
         self.theme_action.setCheckable(True)
         self.theme_action.setChecked(initial_theme == "light")
         if on_toggle_theme is not None:
@@ -150,6 +167,7 @@ class WinOptiTray(QSystemTrayIcon):
         self._menu = menu
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
+        self.messageClicked.connect(self._on_message_clicked)
 
         self.sync_state(
             thermal_key=initial_thermal,
@@ -157,6 +175,11 @@ class WinOptiTray(QSystemTrayIcon):
             theme_mode=initial_theme,
             task_summary="",
         )
+
+    def show_toast(self, title: str, detail: str, kind: str = "general", msecs: int = 8000) -> None:
+        """Display a Windows toast remembering intent so clicking it jumps to the right action."""
+        self._last_toast_kind = kind
+        self.showMessage(title, detail, QSystemTrayIcon.MessageIcon.Information, msecs)
 
     def refresh_theme_icon(self) -> None:
         is_light = is_windows_taskbar_light_theme()
@@ -210,7 +233,7 @@ class WinOptiTray(QSystemTrayIcon):
         )
         t_lbl = _THERMAL_SHORT_LABELS.get(active_therm, active_therm)
         sre_lbl = "SRE ON" if self.sre_action.isChecked() else "SRE OFF"
-        self.setToolTip(f"WinOptiAI | Termica: {t_lbl} | {sre_lbl}")
+        self.setToolTip(f"WinOptiAI · by TRODAI | Termica: {t_lbl} | {sre_lbl}")
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
@@ -218,3 +241,9 @@ class WinOptiTray(QSystemTrayIcon):
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
             self._on_show()
+
+    def _on_message_clicked(self) -> None:
+        if self._last_toast_kind == "update" and self._on_open_updates is not None:
+            self._on_open_updates()
+            return
+        self._on_show()

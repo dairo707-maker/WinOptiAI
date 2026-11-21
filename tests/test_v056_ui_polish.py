@@ -72,7 +72,7 @@ def test_no_clipped_buttons_in_any_view_at_minimum_size(qapp: QApplication, tmp_
         win.show()
         _pump(qapp, 10)
         problems: list[tuple[str, tuple]] = []
-        for i in range(4):
+        for i in range(6):
             win._switch_tab(i)
             _pump(qapp)
             problems += [(f"tab{i}", p) for p in find_clipped_buttons(win)]

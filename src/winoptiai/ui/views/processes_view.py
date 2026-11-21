@@ -26,6 +26,7 @@ from ...ai_optimizer.process_manager import (
 )
 from ...core.i18n import tr
 from ...core.sre_policy import SREPolicyEngine
+from ...core.usage_telemetry import format_last_used_time
 from ..svg_icons import load_svg_icon
 from ...core.help_catalog import TOOLTIPS
 from ..widgets import (
@@ -118,10 +119,10 @@ class ProcessesView(QWidget):
         sre_layout.addWidget(self.refresh_btn)
         root.addWidget(sre_panel)
 
-        # Active top processes table (sortable by PID, Name, Class, CPU%, RAM, EcoQoS)
-        self.proc_table = QTableWidget(0, 6)
+        # Active top processes table (sortable by PID, Name, Class, CPU%, RAM, EcoQoS, Last Used)
+        self.proc_table = QTableWidget(0, 7)
         self.proc_table.setHorizontalHeaderLabels(
-            ["PID", "PROCESO", "CLASIFICACION", "CPU (%)", "RAM (MB)", "ECOQOS"]
+            ["PID", "PROCESO", "CLASIFICACION", "CPU (%)", "RAM (MB)", "ECOQOS", "ULTIMO USO"]
         )
         configure_sortable_table(self.proc_table)
         hdr = self.proc_table.horizontalHeader()
@@ -131,6 +132,7 @@ class ProcessesView(QWidget):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         root.addWidget(self.proc_table, stretch=3)
 
         # Orphan AI / MCP workers panel
@@ -191,6 +193,7 @@ class ProcessesView(QWidget):
         self.proc_table.setSortingEnabled(False)
         self.proc_table.setRowCount(len(entries))
         for r, item in enumerate(entries):
+            ts = float(getattr(item, "started_ts", 0.0))
             self.proc_table.setItem(r, 0, NumericTableItem(str(item.pid), item.pid))
             self.proc_table.setItem(r, 1, QTableWidgetItem(item.name))
             self.proc_table.setItem(r, 2, QTableWidgetItem(item.role))
@@ -199,6 +202,7 @@ class ProcessesView(QWidget):
             self.proc_table.setItem(
                 r, 5, QTableWidgetItem("ELEGIBLE" if item.ecoqos_eligible else "PROTEGIDO")
             )
+            self.proc_table.setItem(r, 6, NumericTableItem(format_last_used_time(ts), ts))
         self.proc_table.setSortingEnabled(True)
 
     def _render_zombies(self, items: list[ZombieWorker]) -> None:

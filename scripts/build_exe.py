@@ -46,39 +46,64 @@ def _draw_brand_emblem(
     y0: int,
     size: int,
     *,
-    bg: tuple[int, int, int, int] = (15, 20, 27, 255),
-    rim: tuple[int, int, int, int] = (118, 146, 176, 255),
-    ink: tuple[int, int, int, int] = (244, 247, 250, 255),
-    accent: tuple[int, int, int, int] = (142, 179, 214, 255),
+    bg: tuple[int, int, int, int] = (10, 15, 29, 255),
+    rim: tuple[int, int, int, int] = (59, 130, 246, 255),
+    accent: tuple[int, int, int, int] = (14, 165, 233, 255),
 ) -> None:
-    """Draw the sharp 0px WinOptiAI architectural emblem at (x0, y0, size)."""
-    draw.rectangle([x0, y0, x0 + size - 1, y0 + size - 1], fill=bg, outline=rim, width=max(1, size // 16))
-    pad = max(2, round(size * 0.19))
-    stroke = max(1, round(size * 0.085))
-    bx0, by0 = x0 + pad, y0 + pad
-    bx1, by1 = x0 + size - pad - 1, y0 + size - pad - 1
-    draw.rectangle([bx0, by0, bx1, by1], outline=ink, width=stroke)
+    """Draw the official TRODAI Hexa-Vault Sentinel octagonal app emblem at (x0, y0, size)."""
+    def _pt(nx: float, ny: float, inset: float = 0.0, scale: float = 1.0) -> tuple[float, float]:
+        px = x0 + (nx * scale + inset) * (size - 1) / 100.0
+        py = y0 + (ny * scale + inset) * (size - 1) / 100.0
+        return (px, py)
 
-    split_x = x0 + round(size * 0.44)
-    split_y = y0 + round(size * 0.44)
-    draw.line([(bx0, split_y), (bx1, split_y)], fill=ink, width=stroke)
-    draw.line([(split_x, split_y), (split_x, by1)], fill=ink, width=stroke)
+    # Outer octagonal container (#0A0F1D)
+    outer_oct = [_pt(x, y) for x, y in ((16, 0), (84, 0), (100, 16), (100, 84), (84, 100), (16, 100), (0, 84), (0, 16))]
+    draw.polygon(outer_oct, fill=bg)
 
-    inner_off = max(2, round(size * 0.09))
-    ax0, ay0 = split_x + inner_off, split_y + inner_off
-    ax1, ay1 = bx1 - inner_off, by1 - inner_off
-    if ax1 > ax0 and ay1 > ay0:
-        draw.rectangle([ax0, ay0, ax1, ay1], fill=accent)
+    # Inner octagonal border (#3B82F6)
+    inner_oct = [_pt(x, y) for x, y in ((19, 5), (81, 5), (95, 19), (95, 81), (81, 95), (19, 95), (5, 81), (5, 19))]
+    rim_w = max(1, round(size * 0.025))
+    draw.line([*inner_oct, inner_oct[0]], fill=rim, width=rim_w)
+
+    # Inner TRODAI Hexa-Vault Sentinel strokes (#0EA5E9)
+    k = 0.66
+    off = 17.0
+    sw = max(1, round(size * (0.055 if size <= 24 else 0.042)))
+
+    if size <= 24:
+        shield = [_pt(x, y, off, k) for x, y in ((50, 10), (78, 20), (90, 40), (80, 46), (80, 64), (50, 90), (20, 64), (20, 46), (10, 40), (22, 20))]
+        draw.line([*shield, shield[0]], fill=accent, width=sw)
+        muzzle = [_pt(x, y, off, k) for x, y in ((40, 56), (60, 56), (66, 72), (34, 72))]
+        draw.line([*muzzle, muzzle[0]], fill=accent, width=sw)
+        draw.line([_pt(30, 42, off, k), _pt(42, 42, off, k)], fill=accent, width=sw)
+        draw.line([_pt(58, 42, off, k), _pt(70, 42, off, k)], fill=accent, width=sw)
+        return
+
+    shield = [_pt(x, y, off, k) for x, y in ((50, 8), (70, 14), (88, 30), (82, 40), (80, 66), (50, 92), (20, 66), (18, 40), (12, 30), (30, 14))]
+    draw.line([*shield, shield[0]], fill=accent, width=sw)
+    draw.line([_pt(30, 14, off, k), _pt(24, 36, off, k), _pt(18, 40, off, k)], fill=accent, width=sw)
+    draw.line([_pt(70, 14, off, k), _pt(76, 36, off, k), _pt(82, 40, off, k)], fill=accent, width=sw)
+    draw.line([_pt(38, 22, off, k), _pt(50, 28, off, k), _pt(62, 22, off, k)], fill=accent, width=sw)
+    draw.line([_pt(42, 30, off, k), _pt(50, 34, off, k), _pt(58, 30, off, k)], fill=accent, width=sw)
+    eye_l = [_pt(x, y, off, k) for x, y in ((32, 46), (38, 42), (44, 46), (38, 50))]
+    eye_r = [_pt(x, y, off, k) for x, y in ((56, 46), (62, 42), (68, 46), (62, 50))]
+    draw.line([*eye_l, eye_l[0]], fill=accent, width=sw)
+    draw.line([*eye_r, eye_r[0]], fill=accent, width=sw)
+    muzzle = [_pt(x, y, off, k) for x, y in ((40, 56), (60, 56), (66, 74), (34, 74))]
+    draw.line([*muzzle, muzzle[0]], fill=accent, width=sw)
+    nose = [_pt(x, y, off, k) for x, y in ((45, 60), (55, 60), (53, 65), (47, 65))]
+    draw.line([*nose, nose[0]], fill=accent, width=max(1, sw - 1))
+    draw.line([_pt(50, 65, off, k), _pt(50, 74, off, k)], fill=accent, width=sw)
 
 
 def generate_app_icon() -> Path:
-    """Generate high-contrast multi-resolution geometric 0px Windows .ico matching brand.svg."""
+    """Generate high-contrast multi-resolution TRODAI octagonal .ico matching Hexa-Vault Sentinel."""
     ico_path = ASSETS / "icons" / "winoptiai.ico"
     sizes = [256, 128, 64, 48, 32, 16]
     images: list[Image.Image] = []
 
     for sz in sizes:
-        img = Image.new("RGBA", (sz, sz), (15, 20, 27, 255))
+        img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         _draw_brand_emblem(draw, 0, 0, sz)
         images.append(img)
@@ -93,35 +118,35 @@ def generate_app_icon() -> Path:
 
 
 def generate_installer_wizard_images() -> tuple[Path, Path]:
-    """Generate custom 0px Obsidian Acrylic BMP banners for Inno Setup WizardImageFile & WizardSmallImageFile."""
+    """Generate custom 0px TRODAI Obsidian Navy BMP banners for Inno Setup WizardImageFile & WizardSmallImageFile."""
     large_path = ASSETS / "icons" / "wizard_large.bmp"
     small_path = ASSETS / "icons" / "wizard_small.bmp"
 
-    # Left sidebar graphic (164x314)
-    large = Image.new("RGB", (164, 314), (12, 16, 22))
+    # Left sidebar graphic (164x314) in TRODAI Obsidian Navy (#0A0F1D) + Blueprint grid
+    large = Image.new("RGB", (164, 314), (10, 15, 29))
     ld = ImageDraw.Draw(large)
     for gy in range(28, 314, 28):
-        ld.line([(0, gy), (163, gy)], fill=(23, 29, 39), width=1)
+        ld.line([(0, gy), (163, gy)], fill=(19, 30, 54), width=1)
     for gx in range(28, 164, 28):
-        ld.line([(gx, 0), (gx, 313)], fill=(20, 26, 35), width=1)
-    ld.rectangle([0, 0, 163, 313], outline=(48, 60, 76), width=1)
+        ld.line([(gx, 0), (gx, 313)], fill=(19, 30, 54), width=1)
+    ld.rectangle([0, 0, 163, 313], outline=(51, 65, 95), width=1)
 
-    emblem_rgba = Image.new("RGBA", (84, 84), (15, 20, 27, 255))
-    _draw_brand_emblem(ImageDraw.Draw(emblem_rgba), 0, 0, 84)
-    large.paste(emblem_rgba.convert("RGB"), (40, 72))
+    emblem_rgba = Image.new("RGBA", (88, 88), (10, 15, 29, 255))
+    _draw_brand_emblem(ImageDraw.Draw(emblem_rgba), 0, 0, 88)
+    large.paste(emblem_rgba.convert("RGB"), (38, 68))
 
-    # Minimalist geometric accent bar below emblem
-    ld.rectangle([40, 174, 123, 177], fill=(142, 179, 214))
-    ld.rectangle([40, 184, 96, 186], fill=(95, 114, 138))
+    # Minimalist TRODAI Cyber Cyan & Governance Blue accent bars below emblem
+    ld.rectangle([38, 174, 125, 177], fill=(14, 165, 233))
+    ld.rectangle([38, 184, 98, 186], fill=(59, 130, 246))
     large.save(large_path, format="BMP")
 
     # Header badge graphic (55x58) replacing default optical-disc icon
-    small = Image.new("RGB", (55, 58), (15, 20, 27))
+    small = Image.new("RGB", (55, 58), (10, 15, 29))
     sd = ImageDraw.Draw(small)
-    emblem_sm = Image.new("RGBA", (42, 42), (15, 20, 27, 255))
+    emblem_sm = Image.new("RGBA", (42, 42), (10, 15, 29, 255))
     _draw_brand_emblem(ImageDraw.Draw(emblem_sm), 0, 0, 42)
     small.paste(emblem_sm.convert("RGB"), (6, 8))
-    sd.rectangle([0, 0, 54, 57], outline=(62, 78, 98), width=1)
+    sd.rectangle([0, 0, 54, 57], outline=(59, 130, 246), width=1)
     small.save(small_path, format="BMP")
 
     return large_path, small_path

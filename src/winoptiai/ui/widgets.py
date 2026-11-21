@@ -190,7 +190,7 @@ def find_clipped_buttons(root: QWidget) -> list[tuple[str, int, int]]:
 
 
 class NotebookCanvas(QWidget):
-    """Stationery desk notebook paper canvas with crumpled paper texture & pencil grid."""
+    """TRODAI architectural blueprint canvas (Obsidian Navy #0A0F1D / Crisp White #F8FAFC)."""
 
     def __init__(self, theme_mode: str = "dark", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -209,66 +209,25 @@ class NotebookCanvas(QWidget):
         if key in self._paper_cache:
             return self._paper_cache[key]
 
-        import random
-
         pix = QPixmap(w, h)
         is_light = self._theme_mode == "light"
-        base_bg = QColor(244, 239, 228, 240) if is_light else QColor(23, 23, 21, 232)
+        base_bg = QColor(248, 250, 252, 246) if is_light else QColor(10, 15, 29, 242)
         pix.fill(base_bg)
 
         p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rng = random.Random(202603)
-
-        # Subtle multi-faceted paper creases (shadow + paper-ridge highlight gradients)
-        for _ in range(18):
-            cx = rng.uniform(0, w)
-            cy = rng.uniform(0, h)
-            dx = rng.uniform(110, 320)
-            dy = rng.uniform(-160, 160)
-            nx = -dy * 0.18
-            ny = dx * 0.18
-
-            grad = QLinearGradient(cx, cy, cx + nx, cy + ny)
-            if is_light:
-                grad.setColorAt(0.0, QColor(125, 114, 94, 0))
-                grad.setColorAt(0.42, QColor(125, 114, 94, 18))
-                grad.setColorAt(0.50, QColor(255, 253, 247, 36))
-                grad.setColorAt(0.62, QColor(125, 114, 94, 12))
-                grad.setColorAt(1.0, QColor(125, 114, 94, 0))
-            else:
-                grad.setColorAt(0.0, QColor(0, 0, 0, 0))
-                grad.setColorAt(0.42, QColor(0, 0, 0, 34))
-                grad.setColorAt(0.50, QColor(236, 230, 216, 13))
-                grad.setColorAt(0.62, QColor(0, 0, 0, 22))
-                grad.setColorAt(1.0, QColor(0, 0, 0, 0))
-
-            poly = QPolygonF(
-                [
-                    QPointF(cx - dx, cy - dy),
-                    QPointF(cx + dx, cy + dy),
-                    QPointF(cx + dx + nx, cy + dy + ny),
-                    QPointF(cx - dx + nx, cy - dy + ny),
-                ]
-            )
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(grad)
-            p.drawPolygon(poly)
-
-            # Fine crisp fold ridge line
-            ridge_color = QColor(115, 104, 86, 20) if is_light else QColor(235, 228, 212, 14)
-            p.setPen(QPen(ridge_color, 1))
-            p.drawLine(QPointF(cx - dx * 0.7, cy - dy * 0.7), QPointF(cx + dx * 0.7, cy + dy * 0.7))
-
-        # Organic paper fiber flecks
-        fiber_color = QColor(110, 102, 88, 20) if is_light else QColor(225, 218, 204, 14)
-        p.setPen(QPen(fiber_color, 1))
-        for _ in range(420):
-            fx = rng.randint(0, w)
-            fy = rng.randint(0, h)
-            p.drawLine(fx, fy, fx + rng.randint(-3, 3), fy + rng.randint(-2, 2))
-
+        # Subtle TRODAI architectural gradient glow in top-right corner
+        grad = QLinearGradient(0, 0, w, h)
+        if is_light:
+            grad.setColorAt(0.0, QColor(255, 255, 255, 45))
+            grad.setColorAt(0.55, QColor(238, 242, 247, 15))
+            grad.setColorAt(1.0, QColor(59, 130, 246, 12))
+        else:
+            grad.setColorAt(0.0, QColor(14, 165, 233, 12))
+            grad.setColorAt(0.45, QColor(15, 22, 40, 0))
+            grad.setColorAt(1.0, QColor(59, 130, 246, 14))
+        p.fillRect(0, 0, w, h, grad)
         p.end()
+
         if len(self._paper_cache) > 6:
             self._paper_cache.clear()
         self._paper_cache[key] = pix
@@ -281,15 +240,15 @@ class NotebookCanvas(QWidget):
         painter.drawPixmap(0, 0, self._get_paper_pixmap(rect.width(), rect.height()))
 
         if self._theme_mode == "light":
-            minor_grid = QColor(126, 118, 102, 34)
-            major_grid = QColor(112, 104, 88, 54)
-            margin_color = QColor(172, 84, 74, 74)
-            tick_color = QColor(58, 54, 48, 85)
+            minor_grid = QColor(59, 130, 246, 15)
+            major_grid = QColor(37, 99, 235, 26)
+            axis_color = QColor(37, 99, 235, 45)
+            tick_color = QColor(37, 99, 235, 110)
         else:
-            minor_grid = QColor(228, 222, 208, 18)
-            major_grid = QColor(228, 222, 208, 32)
-            margin_color = QColor(196, 128, 116, 48)
-            tick_color = QColor(228, 222, 208, 70)
+            minor_grid = QColor(59, 130, 246, 18)
+            major_grid = QColor(14, 165, 233, 28)
+            axis_color = QColor(14, 165, 233, 46)
+            tick_color = QColor(14, 165, 233, 120)
 
         step = 24
         for idx, x in enumerate(range(step, rect.width(), step), start=1):
@@ -299,14 +258,13 @@ class NotebookCanvas(QWidget):
             painter.setPen(QPen(major_grid if idx % 5 == 0 else minor_grid, 1))
             painter.drawLine(0, y, rect.width(), y)
 
-        # Double stationery notebook vertical margin line after sidebar
-        painter.setPen(QPen(margin_color, 1))
-        painter.drawLine(252, 0, 252, rect.height())
-        painter.drawLine(256, 0, 256, rect.height())
+        # Architectural blueprint registration seam after sidebar
+        painter.setPen(QPen(axis_color, 1))
+        painter.drawLine(248, 0, 248, rect.height())
 
-        # Architectural corner registration ticks
+        # Polygonal 0px corner registration ticks
         painter.setPen(QPen(tick_color, 1))
-        painter.drawLine(rect.width() - 18, 10, rect.width() - 8, 10)
+        painter.drawLine(rect.width() - 20, 10, rect.width() - 10, 10)
         painter.drawLine(rect.width() - 10, 10, rect.width() - 10, 20)
         painter.end()
         super().paintEvent(event)
@@ -369,15 +327,56 @@ class GlassPanel(QFrame):
         self.setObjectName("GlassPanelElevated" if elevated else "GlassPanel")
 
 
+def semaphore_hex(tone: str, theme_mode: str = "dark") -> str:
+    """Return high-contrast readable semaphore color (no neon) for TRODAI dark/light modes."""
+    dark = theme_mode != "light"
+    mapping = {
+        "ok": "#34D399" if dark else "#047857",
+        "warn": "#F59E0B" if dark else "#B45309",
+        "risk": "#F87171" if dark else "#B91C1C",
+        "active": "#0EA5E9" if dark else "#2563EB",
+        "neutral": "#94A3B8" if dark else "#4A5568",
+    }
+    return mapping.get(tone, mapping["neutral"])
+
+
+class SemaphoreDot(QWidget):
+    """Polygonal 0px geometric traffic-light indicator (ok / warn / risk / active / neutral)."""
+
+    def __init__(self, tone: str = "neutral", theme_mode: str = "dark", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._tone = tone
+        self._theme_mode = theme_mode
+        self.setFixedSize(11, 11)
+
+    def set_tone(self, tone: str, theme_mode: str | None = None) -> None:
+        self._tone = tone
+        if theme_mode is not None:
+            self._theme_mode = theme_mode
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        c = QColor(semaphore_hex(self._tone, self._theme_mode))
+        glow = QColor(c)
+        glow.setAlpha(70)
+        painter.fillRect(0, 0, 10, 10, glow)
+        painter.fillRect(2, 2, 6, 6, c)
+        painter.setPen(QPen(c, 1))
+        painter.drawRect(0, 0, 9, 9)
+        painter.end()
+
+
 class StatusTag(QLabel):
-    """Minimalist custom inline tag badge (0px, 1px hairline border, IBM Plex Mono)."""
+    """Minimalist TRODAI inline tag badge (0px, 1px border, JetBrains Mono)."""
 
     TONES = {
-        "neutral": ("#9BA3AE", "rgba(155, 163, 174, 65)", "rgba(155, 163, 174, 16)"),
-        "active": ("#94A3B8", "rgba(148, 163, 184, 95)", "rgba(148, 163, 184, 24)"),
-        "ok": ("#3D8B68", "rgba(61, 139, 104, 90)", "rgba(61, 139, 104, 20)"),
-        "warn": ("#B47B2B", "rgba(180, 123, 43, 95)", "rgba(180, 123, 43, 20)"),
-        "risk": ("#B44C4C", "rgba(180, 76, 76, 95)", "rgba(180, 76, 76, 22)"),
+        "neutral": ("#94A3B8", "rgba(148, 163, 184, 75)", "rgba(148, 163, 184, 18)"),
+        "active": ("#0EA5E9", "rgba(14, 165, 233, 115)", "rgba(14, 165, 233, 24)"),
+        "ok": ("#10B981", "rgba(16, 185, 129, 110)", "rgba(16, 185, 129, 22)"),
+        "warn": ("#D97706", "rgba(217, 119, 6, 115)", "rgba(217, 119, 6, 22)"),
+        "risk": ("#DC2626", "rgba(220, 38, 38, 115)", "rgba(220, 38, 38, 22)"),
     }
 
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None) -> None:
@@ -391,7 +390,7 @@ class StatusTag(QLabel):
         self.setStyleSheet(
             f"""
             QLabel {{
-                font-family: "{MONO_FONT_FAMILY}", monospace;
+                font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
                 font-size: 9px;
                 font-weight: 500;
                 letter-spacing: 0.9px;
@@ -405,7 +404,7 @@ class StatusTag(QLabel):
 
 
 class SharpMetricCell(GlassPanel):
-    """Single clean telemetry block with icon, micro-label, monospace figure, and 3px bar."""
+    """Clean TRODAI telemetry block with semaphore signal, monospace figure, and tone-colored bar."""
 
     def __init__(
         self,
@@ -413,35 +412,43 @@ class SharpMetricCell(GlassPanel):
         icon_name: str,
         parent: QWidget | None = None,
         compact: bool = False,
+        ultra_compact: bool = False,
     ) -> None:
         super().__init__(elevated=False, parent=parent)
         self._icon_name = icon_name
+        self._theme_mode = "dark"
         layout = QVBoxLayout(self)
-        # v0.5.8: modo compacto (Resumen) para dejar altura al historial grafico.
-        vpad = 10 if compact else 14
-        layout.setContentsMargins(16, vpad, 16, vpad)
-        layout.setSpacing(4 if compact else 8)
+        if ultra_compact:
+            layout.setContentsMargins(12, 8, 12, 8)
+            layout.setSpacing(3)
+        else:
+            vpad = 10 if compact else 14
+            layout.setContentsMargins(16, vpad, 16, vpad)
+            layout.setSpacing(4 if compact else 8)
 
         header = QHBoxLayout()
-        header.setSpacing(8)
+        header.setSpacing(6 if ultra_compact else 8)
         self.icon_lbl = QLabel()
-        self.icon_lbl.setPixmap(load_svg_pixmap(icon_name, color=get_palette("dark")["text_secondary"], size=14))
+        self.icon_lbl.setPixmap(load_svg_pixmap(icon_name, color=get_palette("dark")["text_secondary"], size=13 if ultra_compact else 14))
         header.addWidget(self.icon_lbl)
+
+        self.semaphore = SemaphoreDot("neutral", "dark")
+        header.addWidget(self.semaphore)
 
         self.title_lbl = QLabel(title.upper())
         self.title_lbl.setObjectName("SectionLabel")
         header.addWidget(self.title_lbl)
         header.addStretch()
 
-        self.tag = StatusTag("LECTURA", "neutral")
+        self.tag = StatusTag("OK", "neutral")
         header.addWidget(self.tag)
         layout.addLayout(header)
 
         self.value_lbl = QLabel("--")
-        self.value_lbl.setObjectName("MetricValueCompact" if compact else "MetricValue")
+        self.value_lbl.setObjectName("MetricValueCompact" if (compact or ultra_compact) else "MetricValue")
         layout.addWidget(self.value_lbl)
 
-        self.sub_lbl = QLabel("Sincronizando telemetria")
+        self.sub_lbl = QLabel("Sincronizando")
         self.sub_lbl.setObjectName("PageSubtitle")
         layout.addWidget(self.sub_lbl)
 
@@ -452,8 +459,10 @@ class SharpMetricCell(GlassPanel):
         layout.addWidget(self.bar)
 
     def refresh_theme(self, mode: str) -> None:
+        self._theme_mode = mode
         color = get_palette(mode)["text_secondary"]
         self.icon_lbl.setPixmap(load_svg_pixmap(self._icon_name, color=color, size=14))
+        self.semaphore.set_tone(self.semaphore._tone, mode)
 
     def set_title(self, title: str) -> None:
         self.title_lbl.setText(title.upper())
@@ -469,6 +478,11 @@ class SharpMetricCell(GlassPanel):
         self.value_lbl.setText(value_text)
         self.sub_lbl.setText(subtitle)
         self.bar.setValue(max(0, min(100, percent)))
+        if self.bar.property("tone") != tone:
+            self.bar.setProperty("tone", tone)
+            self.bar.style().unpolish(self.bar)
+            self.bar.style().polish(self.bar)
+        self.semaphore.set_tone(tone, self._theme_mode)
         self.tag.set_tone(tag_text, tone)
 
 

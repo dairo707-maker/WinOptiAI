@@ -2,6 +2,25 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.0] - 2026-11-20
+
+### Agregado y Redisenado (Identidad Corporativa TRODAI + 6 Pestanas)
+- **Identidad Grafica Corporativa TRODAI (`theme.py`, `widgets.py`, `system_tray.py`, `build_exe.py`, `assets/icons/`):**
+  - **WinOptiAI · by TRODAI** adopta oficialmente el isotipo **Hexa-Vault Sentinel** (`brand.svg`, `trodai_favicon.svg`, `winoptiai.ico`, icono octogonal de bandeja de alto contraste y banners `wizard_large.bmp` / `wizard_small.bmp` del instalador Inno Setup).
+  - Nueva paleta corporativa **Obsidian Navy (`#0A0F1D`) / Crisp White (`#F8FAFC`)** con acentos **Cyber Cyan (`#0EA5E9`)** y **Governance Blue (`#3B82F6`)**, mas tipografias embebidas **`Space Grotesk`** + **`JetBrains Mono`** y lienzo Blueprint arquitectonico `0px`.
+- **Primera Pagina (`Resumen`) Sin Scroll, Semáforos Visuales y Mas Graficas (`overview_view.py`, `history_charts.py`):**
+  - Eliminado el scroll vertical a `980x650` mediante cabecera eficiente, **4 tarjetas KPI en una sola fila** con señales **Semaforo** (verde/ambar/rojo legible sin neon) y tira compacta clicable **`SEMAFORO` (`RAM · Disco · Termica · Apps · Inicio`)**.
+  - Nuevo panel **`SystemGaugesWidget`** con 3 medidores radiales (`RAM %`, `Disco C: %`, `CPU %`) y estado global junto al historial `24 h / 7 d` en `Cyber Cyan` / `Governance Blue`.
+- **Administrador de Aplicaciones (`apps/app_manager.py`, `ui/views/apps_view.py`):**
+  - Inventario combinado **Registro + `winget`** con fecha de **`ULTIMO USO`** real, verificacion de nuevas versiones (`Buscar Actualizaciones`), actualizacion en 1 clic (`winget upgrade`), desinstalacion segura protegiendo OS/antivirus/WinOptiAI y limpieza opcional de restos en `AppData` hacia Cuarentena.
+- **Inicio de Windows Inteligente (`apps/startup_manager.py`, `ui/views/startup_view.py`):**
+  - Escaneo de entradas `Run`, carpetas `Startup` y `StartupApproved` cruzado con telemetria real BAM/Prefetch/RAM (`core/usage_telemetry.py`) para emitir sugerencias semaforo (`MANTENER`, `PAUSAR`, `DESACTIVAR`) y aplicar cambios **100% reversibles**.
+- **Columna `ULTIMO USO` en Todas las Tablas y Nuevo Treemap Moderno Opaco (`treemap.py`, `storage_view.py`, `processes_view.py`):**
+  - Columna **`ULTIMO USO`** cronologicamente ordenable (`Hoy`, `Ayer`, `Hace N d`, fecha ISO) en los 6 modos de Almacenamiento (`table`, `folder_tree`, `format_table`, `heavy_tree`), Procesos, Aplicaciones e Inicio.
+  - `TreemapWidget` redisenado con fondo solido opaco, paleta arquitectonica de alta opacidad por categoria dominante, cabeceras nitidas, hover `2px` en `Cyber Cyan` y migas de ruta clicables (`jump_to_depth`).
+- **Notificaciones de Actualizacion Endurecidas (`main_window.py`, `system_tray.py`):**
+  - Reintento automatico si falla la red al arrancar (`+60 s`, `+5 min` y al restaurar desde bandeja), banner in-app descartable en ventana principal y globo de Windows clicable (`messageClicked`) directo al actualizador.
+
 ## [0.5.14] - 2026-11-19
 
 ### Agregado

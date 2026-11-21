@@ -36,7 +36,7 @@ from ...thermal_bios.thermal_controller import (
 )
 from ..svg_icons import load_svg_icon
 from ...core.help_catalog import TOOLTIPS
-from ..widgets import FlowLayout, GlassPanel, SectionBenefitStrip, StatusTag, configure_sortable_table
+from ..widgets import FlowLayout, GlassPanel, SectionBenefitStrip, SemaphoreDot, StatusTag, configure_sortable_table, semaphore_hex
 
 
 # Acciones que lanzan una consola PowerShell elevada desacoplada (seguimiento informativo).
@@ -107,6 +107,9 @@ class ThermalBiosView(QWidget):
         rt_layout = QHBoxLayout(rt_panel)
         rt_layout.setContentsMargins(14, 10, 14, 10)
         rt_layout.setSpacing(12)
+
+        self.rt_sem = SemaphoreDot("neutral", self.policy.config.theme_mode)
+        rt_layout.addWidget(self.rt_sem)
 
         self.rt_cpu_lbl = QLabel("CPU: --% | Frecuencia: -- GHz | Turbo: --%")
         self.rt_cpu_lbl.setObjectName("MonoValue")
@@ -228,8 +231,11 @@ class ThermalBiosView(QWidget):
             nvme_str = f" / NVMe {live.nvme_temp_c:.0f} C" if live.nvme_temp_c is not None else ""
             tone = "risk" if live.cpu_temp_c >= 85 else ("warn" if live.cpu_temp_c >= 72 else "ok")
             self.rt_temp_tag.set_tone(f"CPU {live.cpu_temp_c:.1f} C{nvme_str}", tone)
+            self.rt_sem.set_tone(tone, self.policy.config.theme_mode)
         else:
+            load_tone = "risk" if live.cpu_utility_pct >= 90 else ("warn" if live.cpu_utility_pct >= 70 else "ok")
             self.rt_temp_tag.set_tone("ACPI PROTEGIDO (UAC)", "neutral")
+            self.rt_sem.set_tone(load_tone, self.policy.config.theme_mode)
 
     def _on_probe_temps(self) -> None:
         self.uac_temp_btn.setEnabled(False)
@@ -424,8 +430,17 @@ class ThermalBiosView(QWidget):
         self._release_cell_widgets()
         self.rec_table.setRowCount(len(pending))
         for r, item in enumerate(pending):
+            from PySide6.QtGui import QColor
+
             self.rec_table.setItem(r, 0, QTableWidgetItem(item["area"]))
-            self.rec_table.setItem(r, 1, QTableWidgetItem(item["estado"]))
+            st_txt = str(item["estado"])
+            st_item = QTableWidgetItem(st_txt)
+            up = st_txt.upper()
+            st_tone = "risk" if any(k in up for k in ("CRIT", "ALERT", "FALL", "VENC", "DESACT", "PELIGR")) else (
+                "ok" if any(k in up for k in ("OK", "SALUD", "ACTIVO", "OPTIM")) else "warn"
+            )
+            st_item.setForeground(QColor(semaphore_hex(st_tone, self.policy.config.theme_mode)))
+            self.rec_table.setItem(r, 1, st_item)
             self.rec_table.setItem(r, 2, QTableWidgetItem(item.get("reinicio", "NO (inmediato)")))
             self.rec_table.setItem(r, 3, QTableWidgetItem(item["detalle"]))
 
