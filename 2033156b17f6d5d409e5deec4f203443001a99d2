@@ -1,0 +1,5 @@
+Verificacion v0.6.3 (Claude Code, 21/11/2026):
+- uv run --no-sync pytest: suite completa aprobada (incluye tests/test_v063_usage_updates_watch.py, 10 pruebas).
+- ULTIMO USO auditado contra el registro real (UserAssist + JumplistData): 21 falsos "Hoy" eliminados; Chrome/Edge/Office/Teams/Stata/Zoom con fechas reales.
+- winget detecto 45 actualizaciones (~3 s). No se ejecuto una actualizacion real durante las pruebas.
+- Vigia diario no corre bajo pytest (PYTEST_CURRENT_TEST).
