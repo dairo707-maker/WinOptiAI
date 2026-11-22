@@ -1,0 +1,4 @@
+Verificacion v0.6.5 (Claude Code, 22/11/2026):
+- uv run --no-sync pytest: 177 aprobadas, 2 omitidas (capturas nativas de pestanas, solo con plataforma real).
+- Capturas: pestanas oscuro/claro (franja blanca reproducida con el QSS anterior), dialogos ES/PT, menu de Aplicaciones, iconos (105/118 apps).
+- Sensores: script verificado sin elevar (llega integro y escribe JSON); la ruta con UAC real queda para prueba del propietario.
