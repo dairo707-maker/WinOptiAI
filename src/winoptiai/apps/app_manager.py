@@ -86,6 +86,33 @@ def is_protected_application(name: str, publisher: str = "", install_location: s
     return ""
 
 
+_DRIVE_FIXED = 3
+_DRIVE_REMOVABLE = 2
+
+
+def is_local_disk_path(path: str) -> bool:
+    """v0.6.5 (seguridad): solo rutas absolutas en discos locales.
+
+    Rechaza rutas de red UNC (que empiezan por dos barras), rutas de dispositivo y unidades
+    de red mapeadas: con ellas, pedir un icono o listar la carpeta haria que Windows se conecte a ese
+    servidor y le entregue las credenciales de red del usuario (fuga NTLM).
+    """
+    raw = (path or "").strip()
+    if len(raw) < 3 or raw.startswith(("\\\\", "//")):
+        return False
+    if not (raw[0].isalpha() and raw[1] == ":" and raw[2] in ("\\", "/")):
+        return False
+    if not IS_WINDOWS:
+        return True
+    try:
+        import ctypes
+
+        kind = ctypes.windll.kernel32.GetDriveTypeW(f"{raw[0]}:\\")
+    except (OSError, AttributeError):
+        return False
+    return kind in (_DRIVE_FIXED, _DRIVE_REMOVABLE)
+
+
 def parse_display_icon(display_icon: str) -> str:
     """Ruta de archivo de ``DisplayIcon`` (comillas e indice ',0' fuera); '' si no es .exe/.ico/.dll."""
     raw = os.path.expandvars((display_icon or "").strip())
@@ -100,6 +127,8 @@ def parse_display_icon(display_icon: str) -> str:
             raw = head
     raw = raw.strip().strip("'")
     if Path(raw).suffix.lower() not in (".exe", ".ico", ".dll"):
+        return ""
+    if not is_local_disk_path(raw):
         return ""
     return raw
 
@@ -165,7 +194,7 @@ def _app_paths_map() -> dict[str, str]:
                         val, _ = winreg.QueryValueEx(k, "")
                 except OSError:
                     continue
-                path = parse_display_icon(str(val or ""))
+                path = parse_display_icon(str(val or ""))  # ya descarta rutas de red
                 stem = Path(name).stem.lower()
                 if path and stem not in _APP_PATHS_CACHE and os.path.isfile(path):
                     _APP_PATHS_CACHE[stem] = path
@@ -174,14 +203,14 @@ def _app_paths_map() -> dict[str, str]:
 
 def guess_app_icon_path(app: "InstalledApp") -> str:
     """Archivo para el icono: DisplayIcon, icono MSI, .exe de su carpeta o App Paths."""
-    if app.icon_path and os.path.isfile(app.icon_path):
+    if app.icon_path and is_local_disk_path(app.icon_path) and os.path.isfile(app.icon_path):
         return app.icon_path
     subkey = app.app_id.split(":", 1)[-1]
     msi = _msi_product_icon(subkey)
     if msi:
         return msi
     loc = (app.install_location or "").strip().strip('"')
-    if len(loc) < 4 or not os.path.isdir(loc):
+    if len(loc) < 4 or not is_local_disk_path(loc) or not os.path.isdir(loc):
         words = [w for w in re.split(r"[^a-z0-9]+", app.name.lower()) if len(w) >= 4]
         paths = _app_paths_map()
         for w in words:

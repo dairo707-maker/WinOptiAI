@@ -11,7 +11,7 @@ from PySide6.QtCore import QFileInfo, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QFileIconProvider
 
-from ..apps.app_manager import InstalledApp, guess_app_icon_path
+from ..apps.app_manager import InstalledApp, guess_app_icon_path, is_local_disk_path
 from ..core.win32_bridge import is_cloud_only_file
 
 ICON_PX = 16
@@ -57,7 +57,7 @@ def icon_for_path(path: str, dpr: float = 1.0) -> QIcon:
         return cached
     icon = QIcon()
     try:
-        if not is_cloud_only_file(path):
+        if is_local_disk_path(path) and not is_cloud_only_file(path):
             if not _provider:
                 _provider.append(QFileIconProvider())
             icon = _soften(_provider[0].icon(QFileInfo(path)), dpr)

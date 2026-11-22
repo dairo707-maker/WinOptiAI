@@ -210,3 +210,36 @@ def test_temperature_messages_are_honest():
     assert (cpu, nvme) == (52.4, 39) and "CPU 52 C" in msg
     # Valor fijo sin sentido de algunas placas: se descarta
     assert interpret_temperature_probe({"cpu": -273.1, "nvme": None})[0] is None
+
+
+# ---------------------------------------------------------------- seguridad (revision automatica)
+def test_icons_never_touch_network_paths():
+    from winoptiai.apps.app_manager import guess_app_icon_path, is_local_disk_path
+
+    for bad in (r"\\servidor\share\app.exe", "//servidor/share/app.exe", r"\\?\C:\x\app.exe",
+                r"\\.\pipe\x", "app.exe", "C:app.exe", ""):
+        assert not is_local_disk_path(bad), bad
+    assert is_local_disk_path(sys.executable)
+    assert parse_display_icon(r'"\\atacante\x\icon.ico",0') == ""
+    app = InstalledApp(app_id="u", name="Red", version="1", install_location=r"\\atacante\carpeta")
+    assert guess_app_icon_path(app) == ""
+
+
+def test_elevated_probe_refuses_redirected_or_existing_targets():
+    script = build_temperature_probe_script(r"C:\Temp\x\out.json")
+    assert "CreateNew" in script and "ReparsePoint" in script
+    assert "Set-Content" not in script
+
+
+def test_probe_writes_into_private_random_folder(tmp_path):
+    import subprocess
+
+    out = tmp_path / "r.json"
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                    _encode_ps(build_temperature_probe_script(str(out)))], capture_output=True, timeout=90)
+    assert out.exists() and out.read_text(encoding="utf-8-sig").startswith("{")
+    # Si el archivo ya existe (posible trampa), no se sobrescribe
+    out.write_text("trampa", encoding="utf-8")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                    _encode_ps(build_temperature_probe_script(str(out)))], capture_output=True, timeout=90)
+    assert out.read_text(encoding="utf-8") == "trampa"

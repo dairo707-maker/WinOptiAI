@@ -164,7 +164,12 @@ TEMP_PROBE_UAC_WAIT_S = 120  # tiempo para aceptar el aviso de UAC
 
 
 def build_temperature_probe_script(out_file: str) -> str:
-    """Script PowerShell que escribe {cpu, nvme, error} en ``out_file`` (siempre lo escribe)."""
+    """Script PowerShell que escribe {cpu, nvme, error} en ``out_file``.
+
+    v0.6.5 (seguridad): el proceso elevado NO escribe si la carpeta destino es un punto de
+    reanalisis (junction/symlink) ni si el archivo ya existe (FileMode.CreateNew), para que otro
+    proceso del usuario no pueda desviar la escritura con permisos de administrador.
+    """
     safe = out_file.replace("'", "''")
     return (
         "$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'; $cpu=$null; $nvme=$null; $err=''; "
@@ -174,8 +179,11 @@ def build_temperature_probe_script(out_file: str) -> str:
         "try { $d=Get-PhysicalDisk | Where-Object { $_.MediaType -eq 'SSD' -or $_.BusType -eq 'NVMe' } | "
         "Select-Object -First 1 | Get-StorageReliabilityCounter -ErrorAction Stop; "
         "if($d -and $d.Temperature){ $nvme=[double]$d.Temperature } } catch { if(-not $err){ $err=$_.Exception.Message } }; "
-        f"[PSCustomObject]@{{cpu=$cpu;nvme=$nvme;error=$err}} | ConvertTo-Json -Compress | "
-        f"Set-Content -LiteralPath '{safe}' -Encoding UTF8"
+        f"$out='{safe}'; $json=[PSCustomObject]@{{cpu=$cpu;nvme=$nvme;error=$err}} | ConvertTo-Json -Compress; "
+        "$dir=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($out)) -Force; "
+        "if(($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0){ "
+        "$fs=[IO.File]::Open($out,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); "
+        "try { $b=[Text.Encoding]::UTF8.GetBytes($json); $fs.Write($b,0,$b.Length) } finally { $fs.Dispose() } }"
     )
 
 
@@ -233,15 +241,18 @@ def probe_elevated_temperatures() -> tuple[float | None, float | None, str]:
     """
     if not IS_WINDOWS:
         return None, None, "Solo Windows"
-    import os
     import tempfile
-    import time
     from pathlib import Path
 
     from .win32_bridge import is_user_admin
 
-    out_file = Path(tempfile.gettempdir()) / f"winoptiai_temps_{os.getpid()}_{int(time.time())}.json"
-    out_file.unlink(missing_ok=True)
+    import shutil
+    import uuid
+
+    # Carpeta nueva con nombre aleatorio (mkdtemp la crea solo para este usuario) y archivo uuid4:
+    # nada predecible que otro proceso pueda preparar como junction antes de la escritura elevada.
+    work_dir = Path(tempfile.mkdtemp(prefix="winoptiai_temps_"))
+    out_file = work_dir / f"{uuid.uuid4().hex}.json"
     encoded = _encode_ps(build_temperature_probe_script(str(out_file)))
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     stderr_txt = ""
@@ -262,6 +273,7 @@ def probe_elevated_temperatures() -> tuple[float | None, float | None, str]:
     except subprocess.TimeoutExpired:
         stderr_txt = ""
     except OSError as exc:
+        shutil.rmtree(work_dir, ignore_errors=True)
         return None, None, f"Error leyendo sensores: {exc}"
     data = None
     try:
@@ -270,5 +282,5 @@ def probe_elevated_temperatures() -> tuple[float | None, float | None, str]:
     except (OSError, json.JSONDecodeError):
         data = None
     finally:
-        out_file.unlink(missing_ok=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
     return interpret_temperature_probe(data if isinstance(data, dict) else None, stderr_txt)
