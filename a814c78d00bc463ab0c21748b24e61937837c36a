@@ -1,0 +1,6 @@
+Verificacion v0.6.4 (Claude Code, 22/11/2026):
+- uv run --no-sync pytest: suite completa aprobada (incluye tests/test_v064_upgrade_reliability.py, 9).
+- Prueba real 21/11: Antigravity IDE 2.7.0 -> 2.8.0 desde la App (v0.6.3). Linea de tiempo: busqueda 7 s;
+  Delivery Optimization atascado 60 s (0x80D02002) y WinINet 10 s; preparacion Inno 4m40s; copia de ~40.000
+  archivos 11 min (antivirus). v0.6.3 corto winget a los 240 s; el instalador termino bien solo.
+- Antigravity 2.8.0 abre con el workspace del usuario y responde.
