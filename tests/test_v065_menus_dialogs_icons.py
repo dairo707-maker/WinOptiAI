@@ -192,11 +192,11 @@ def test_app_icon_loads_and_caches(qapp):
 
 # ---------------------------------------------------------------- sensores UAC
 def test_temperature_script_survives_encoding():
-    script = build_temperature_probe_script("C:\\Temp\\o'k.json")
-    assert "$cpu=$null" in script and "$tz=Get-CimInstance" in script  # variables intactas
-    assert "'C:\\Temp\\o''k.json'" in script  # comilla simple escapada
-    decoded = base64.b64decode(_encode_ps(script)).decode("utf-16-le")
-    assert decoded == script
+    for mode in ("exit", "stdout"):
+        script = build_temperature_probe_script(mode)
+        assert "$cpu=$null" in script and "$tz=Get-CimInstance" in script  # variables intactas
+        decoded = base64.b64decode(_encode_ps(script)).decode("utf-16-le")
+        assert decoded == script
 
 
 def test_temperature_messages_are_honest():
@@ -225,21 +225,32 @@ def test_icons_never_touch_network_paths():
     assert guess_app_icon_path(app) == ""
 
 
-def test_elevated_probe_refuses_redirected_or_existing_targets():
-    script = build_temperature_probe_script(r"C:\Temp\x\out.json")
-    assert "CreateNew" in script and "ReparsePoint" in script
-    assert "Set-Content" not in script
+def test_elevated_probe_writes_no_files():
+    """El proceso elevado no escribe archivos: nada que otro proceso pueda desviar (junction)."""
+    for mode in ("exit", "stdout"):
+        script = build_temperature_probe_script(mode)
+        for forbidden in ("Set-Content", "Out-File", "IO.File", "New-Item", "-LiteralPath"):
+            assert forbidden not in script, (mode, forbidden)
 
 
-def test_probe_writes_into_private_random_folder(tmp_path):
+def test_probe_exit_code_roundtrip():
+    from winoptiai.core.telemetry import PROBE_EXIT_BASE, decode_probe_exit_code
+
+    assert decode_probe_exit_code(PROBE_EXIT_BASE + 523 * 1000 + 39) == {"cpu": 52.3, "nvme": 39.0}
+    assert decode_probe_exit_code(PROBE_EXIT_BASE + 2047 * 1000 + 255) == {"cpu": None, "nvme": None}
+    for not_probe in (None, 0, 1, 1223, -1):  # UAC cancelado, error, etc.
+        assert decode_probe_exit_code(not_probe) is None
+
+
+def test_probe_runs_and_returns_by_exit_code_and_stdout():
+    import json as _json
     import subprocess
 
-    out = tmp_path / "r.json"
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-                    _encode_ps(build_temperature_probe_script(str(out)))], capture_output=True, timeout=90)
-    assert out.exists() and out.read_text(encoding="utf-8-sig").startswith("{")
-    # Si el archivo ya existe (posible trampa), no se sobrescribe
-    out.write_text("trampa", encoding="utf-8")
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-                    _encode_ps(build_temperature_probe_script(str(out)))], capture_output=True, timeout=90)
-    assert out.read_text(encoding="utf-8") == "trampa"
+    from winoptiai.core.telemetry import decode_probe_exit_code
+
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                        _encode_ps(build_temperature_probe_script("exit"))], capture_output=True, timeout=90)
+    assert decode_probe_exit_code(r.returncode) is not None
+    r2 = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                         _encode_ps(build_temperature_probe_script("stdout"))], capture_output=True, text=True, timeout=90)
+    assert set(_json.loads(r2.stdout)) >= {"cpu", "nvme"}

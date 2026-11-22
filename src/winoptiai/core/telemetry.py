@@ -163,15 +163,21 @@ class PdhTelemetryReader:
 TEMP_PROBE_UAC_WAIT_S = 120  # tiempo para aceptar el aviso de UAC
 
 
-def build_temperature_probe_script(out_file: str) -> str:
-    """Script PowerShell que escribe {cpu, nvme, error} en ``out_file``.
+PROBE_EXIT_BASE = 1_000_000  # codigo de salida = BASE + cpu_decimas*1000 + nvme (sin archivos)
+PROBE_NO_CPU = 2047
+PROBE_NO_NVME = 255
 
-    v0.6.5 (seguridad): el proceso elevado NO escribe si la carpeta destino es un punto de
-    reanalisis (junction/symlink) ni si el archivo ya existe (FileMode.CreateNew), para que otro
-    proceso del usuario no pueda desviar la escritura con permisos de administrador.
+
+def build_temperature_probe_script(mode: str = "exit") -> str:
+    """Script PowerShell de la sonda termica. NO escribe archivos.
+
+    v0.6.5 (seguridad): antes el proceso elevado escribia un JSON en una carpeta del usuario, y otro
+    proceso podia desviar esa escritura (junction/symlink) con permisos de administrador. Ahora:
+    - ``mode="exit"`` (via UAC): devuelve las lecturas codificadas en el CODIGO DE SALIDA, que el
+      lanzador no elevado lee con ``Start-Process -PassThru``.
+    - ``mode="stdout"`` (la app ya es administradora): imprime el JSON por la salida estandar.
     """
-    safe = out_file.replace("'", "''")
-    return (
+    body = (
         "$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'; $cpu=$null; $nvme=$null; $err=''; "
         "try { $tz=Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | "
         "Select-Object -First 1; if($tz){ $cpu=[math]::Round(($tz.CurrentTemperature/10.0)-273.15,1) } } "
@@ -179,12 +185,28 @@ def build_temperature_probe_script(out_file: str) -> str:
         "try { $d=Get-PhysicalDisk | Where-Object { $_.MediaType -eq 'SSD' -or $_.BusType -eq 'NVMe' } | "
         "Select-Object -First 1 | Get-StorageReliabilityCounter -ErrorAction Stop; "
         "if($d -and $d.Temperature){ $nvme=[double]$d.Temperature } } catch { if(-not $err){ $err=$_.Exception.Message } }; "
-        f"$out='{safe}'; $json=[PSCustomObject]@{{cpu=$cpu;nvme=$nvme;error=$err}} | ConvertTo-Json -Compress; "
-        "$dir=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($out)) -Force; "
-        "if(($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0){ "
-        "$fs=[IO.File]::Open($out,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); "
-        "try { $b=[Text.Encoding]::UTF8.GetBytes($json); $fs.Write($b,0,$b.Length) } finally { $fs.Dispose() } }"
     )
+    if mode == "stdout":
+        return body + "[Console]::Out.Write(([PSCustomObject]@{cpu=$cpu;nvme=$nvme;error=$err} | ConvertTo-Json -Compress))"
+    return body + (
+        f"$c={PROBE_NO_CPU}; if($cpu -ne $null -and $cpu -ge 0 -and $cpu -le 200){{ $c=[int][math]::Round($cpu*10) }}; "
+        f"$n={PROBE_NO_NVME}; if($nvme -ne $null -and $nvme -ge 0 -and $nvme -le 200){{ $n=[int][math]::Round($nvme) }}; "
+        f"exit ({PROBE_EXIT_BASE} + $c*1000 + $n)"
+    )
+
+
+def decode_probe_exit_code(code: int | None) -> dict | None:
+    """Codigo de salida de la sonda elevada -> {'cpu', 'nvme'}; None si no es un resultado de la sonda."""
+    if code is None or code < PROBE_EXIT_BASE:
+        return None
+    rest = code - PROBE_EXIT_BASE
+    c, n = divmod(rest, 1000)
+    if c > PROBE_NO_CPU or n > PROBE_NO_NVME:
+        return None
+    return {
+        "cpu": None if c == PROBE_NO_CPU else round(c / 10.0, 1),
+        "nvme": None if n == PROBE_NO_NVME else float(n),
+    }
 
 
 def _encode_ps(script: str) -> str:
@@ -235,52 +257,44 @@ def interpret_temperature_probe(data: dict | None, launcher_stderr: str = "") ->
 def probe_elevated_temperatures() -> tuple[float | None, float | None, str]:
     """Lectura puntual de temperatura ACPI (CPU) y S.M.A.R.T. (NVMe/SSD) con permisos de administrador.
 
-    v0.6.5: antes el script iba entre comillas dobles y la PowerShell externa reemplazaba $cpu, $tz,
-    $d... por vacio: la ventana elevada recibia un script roto y la app decia 'UAC cancelada' aunque
-    se aceptara. Ahora va codificado (-EncodedCommand) y, si la app ya es administradora, sin UAC.
+    v0.6.5: el script va codificado (-EncodedCommand; antes la PowerShell externa borraba $cpu, $tz...
+    y se informaba 'UAC cancelada' aunque se aceptara). El resultado vuelve por el codigo de salida
+    (via UAC) o por stdout (si la app ya es administradora): ningun proceso elevado escribe archivos.
     """
     if not IS_WINDOWS:
         return None, None, "Solo Windows"
-    import tempfile
-    from pathlib import Path
-
     from .win32_bridge import is_user_admin
 
-    import shutil
-    import uuid
-
-    # Carpeta nueva con nombre aleatorio (mkdtemp la crea solo para este usuario) y archivo uuid4:
-    # nada predecible que otro proceso pueda preparar como junction antes de la escritura elevada.
-    work_dir = Path(tempfile.mkdtemp(prefix="winoptiai_temps_"))
-    out_file = work_dir / f"{uuid.uuid4().hex}.json"
-    encoded = _encode_ps(build_temperature_probe_script(str(out_file)))
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     stderr_txt = ""
+    data: dict | None = None
     try:
         if is_user_admin():
-            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                   _encode_ps(build_temperature_probe_script("stdout"))]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=no_window)
+            try:
+                parsed = json.loads((res.stdout or "").strip() or "null")
+                data = parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                data = None
         else:
+            encoded = _encode_ps(build_temperature_probe_script("exit"))
             launcher = (
-                "$ProgressPreference='SilentlyContinue'; Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait "
-                f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}'"
+                "$ProgressPreference='SilentlyContinue'; "
+                "$p=Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
+                f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}'; "
+                "if($p){ [Console]::Out.Write($p.ExitCode) }"
             )
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", launcher]
             res = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=TEMP_PROBE_UAC_WAIT_S, creationflags=no_window
             )
+            out = (res.stdout or "").strip()
+            data = decode_probe_exit_code(int(out)) if out.lstrip("-").isdigit() else None
         stderr_txt = (res.stderr or "").strip()
     except subprocess.TimeoutExpired:
         stderr_txt = ""
     except OSError as exc:
-        shutil.rmtree(work_dir, ignore_errors=True)
         return None, None, f"Error leyendo sensores: {exc}"
-    data = None
-    try:
-        if out_file.exists():
-            data = json.loads(out_file.read_text(encoding="utf-8-sig") or "null")
-    except (OSError, json.JSONDecodeError):
-        data = None
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
-    return interpret_temperature_probe(data if isinstance(data, dict) else None, stderr_txt)
+    return interpret_temperature_probe(data, stderr_txt)
