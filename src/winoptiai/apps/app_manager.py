@@ -389,19 +389,161 @@ def check_app_updates_winget(
     return apps, matched, msg
 
 
+# v0.6.4: una actualizacion NUNCA se corta por tiempo. Antes un limite fijo de 240 s mataba
+# winget mientras el instalador (p. ej. Antigravity IDE, ~4-6 min) seguia trabajando: la app
+# marcaba un fallo falso y dejaba el instalador huerfano. Ahora se espera con avance visible y,
+# pasado WINGET_UPGRADE_MAX_WAIT_S, se deja de esperar SIN matar nada (sigue en segundo plano).
+WINGET_UPGRADE_MAX_WAIT_S = 45 * 60
+WINGET_UPDATE_NOT_APPLICABLE = 0x8A15002B  # APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE
+_WINGET_OK_TEXTS: tuple[str, ...] = ("successfully installed", "instalado correctamente")
+_WINGET_NOT_APPLICABLE_TEXTS: tuple[str, ...] = (
+    "no applicable upgrade",
+    "no newer package versions",
+    "ninguna actualizaci",
+    "no se encontraron versiones",
+)
+
+
+def winget_settings_path() -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+    return base / "Packages" / "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe" / "LocalState" / "settings.json"
+
+
+def ensure_winget_direct_download(path: Path | None = None) -> str:
+    """v0.6.4: descarga directa (WinINet) en winget en vez de Optimizacion de distribucion.
+
+    Caso real 21/11: Delivery Optimization se quedo 60 s sin avanzar (0x80D02002) y solo despues
+    winget reintento con WinINet, que bajo el instalador en 10 s. Con WinINet las descargas van a
+    la velocidad real de la conexion, igual que el actualizador propio de cada app.
+    Devuelve 'ok' (ya estaba), 'aplicado' o 'omitido: motivo'. Nunca rompe un archivo existente:
+    si tiene comentarios o formato que no se pueden leer con seguridad, no se toca.
+    """
+    import json
+
+    from ..core.safety_guard import atomic_write_text
+
+    p = path or winget_settings_path()
+    data: dict = {}
+    if p.exists():
+        try:
+            raw = p.read_text(encoding="utf-8-sig")
+            lines = [ln for ln in raw.splitlines() if not ln.lstrip().startswith("//")]
+            data = json.loads("\n".join(lines) or "{}")
+        except (OSError, ValueError) as exc:
+            return f"omitido: no se pudo leer la configuracion de winget ({exc.__class__.__name__})"
+        if not isinstance(data, dict):
+            return "omitido: formato inesperado"
+    elif not p.parent.exists():
+        return "omitido: winget no esta instalado para este usuario"
+    network = data.get("network")
+    if not isinstance(network, dict):
+        network = {}
+    if str(network.get("downloader", "")).lower() == "wininet":
+        return "ok"
+    try:
+        if p.exists():
+            backup = p.with_name("settings.json.winoptiai.bak")
+            if not backup.exists():
+                backup.write_bytes(p.read_bytes())
+        data.setdefault("$schema", "https://aka.ms/winget-settings.schema.json")
+        network["downloader"] = "wininet"
+        data["network"] = network
+        atomic_write_text(p, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        return f"omitido: {exc}"
+    return "aplicado"
+
+
+def _winget_log_path(app: InstalledApp) -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "WinOptiAI" / "logs"
+    base.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", app.winget_id or app.name)[:60] or "app"
+    return base / f"winget-upgrade-{safe}.log"
+
+
+def _read_tail(path: Path, max_bytes: int = 8192) -> str:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def winget_phase(output_tail: str) -> str:
+    """Fase legible a partir de la salida de winget ('descargando', 'instalando', '')."""
+    low = (output_tail or "").replace("\r", "\n").lower()
+    # Frases completas: las URL de descarga suelen contener "installer" y confundirian la fase.
+    idx_inst = max(low.rfind("starting package install"), low.rfind("iniciando la instalaci"), low.rfind("instalando"))
+    idx_down = max(low.rfind("downloading"), low.rfind("descargando"))
+    if idx_inst < 0 and idx_down < 0:
+        return ""
+    return "instalando" if idx_inst > idx_down else "descargando"
+
+
+def interpret_winget_result(returncode: int, output: str) -> tuple[bool, str]:
+    """(ok, motivo) de un ``winget upgrade``: 'ok', 'al_dia' o el ultimo renglon del error."""
+    low = (output or "").lower()
+    code = int(returncode) & 0xFFFFFFFF
+    if code == 0 or any(t in low for t in _WINGET_OK_TEXTS):
+        return True, "ok"
+    if code == WINGET_UPDATE_NOT_APPLICABLE or any(t in low for t in _WINGET_NOT_APPLICABLE_TEXTS):
+        return True, "al_dia"
+    snippet = next(
+        (ln.strip() for ln in reversed((output or "").replace("\r", "\n").splitlines()) if ln.strip()), ""
+    )[:160]
+    return False, f"codigo 0x{code:08X}: {snippet}"
+
+
+def running_app_processes(app: InstalledApp) -> list[str]:
+    """Procesos abiertos de esa app (exe dentro de su carpeta): el instalador fallaria o esperaria."""
+    loc = (app.install_location or "").strip().strip('"').rstrip("\\/").lower()
+    if len(loc) < 8 or is_protected_path(loc):
+        return []
+    try:
+        import psutil
+    except ImportError:
+        return []
+    names: set[str] = set()
+    for proc in psutil.process_iter(["name", "exe"]):
+        try:
+            exe = (proc.info.get("exe") or "").lower()
+            if exe.startswith(loc + "\\"):
+                names.add(proc.info.get("name") or os.path.basename(exe))
+        except Exception:  # noqa: BLE001
+            continue
+    return sorted(names)
+
+
 def upgrade_app_winget(
     app: InstalledApp,
     progress_cb: Callable[[int, str], None] | None = None,
-    timeout: int = 240,
+    timeout: float = WINGET_UPGRADE_MAX_WAIT_S,
+    controller=None,
+    poll_s: float = 1.0,
+    popen: Callable[..., subprocess.Popen] | None = None,
 ) -> tuple[bool, str]:
-    """Upgrade a single application using ``winget upgrade --id`` silently."""
+    """Actualizar una app con ``winget upgrade --id`` en silencio, sin cortes por tiempo.
+
+    La salida va a un archivo (no a una tuberia) y el PID de winget queda protegido del cierre
+    total: si se cierra WinOptiAI o se cancela, la instalacion en curso termina igual.
+    """
     if app.protected_reason:
         return False, f"Bloqueada por seguridad: {app.protected_reason}"
-    if not is_winget_available():
+    if not is_winget_available() and popen is None:
         return False, "winget no esta disponible en este equipo."
 
+    import time
+
+    from ..core.win32_bridge import protect_child_pid
+
+    target = app.available_version or "ultima"
+    if popen is None:
+        ensure_winget_direct_download()  # evita la espera de 60 s de Delivery Optimization
     if progress_cb:
-        progress_cb(20, f"Actualizando {app.name} -> {app.available_version or 'ultima'}...")
+        progress_cb(5, f"Actualizando {app.name} -> {target}...")
     cmd = [_winget_exe(), "upgrade"]
     if app.winget_id:
         cmd.extend(["--id", app.winget_id, "--exact"])
@@ -410,24 +552,53 @@ def upgrade_app_winget(
     cmd.extend(["--silent", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"])
 
     try:
-        res = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        out = (res.stdout or "") + "\n" + (res.stderr or "")
-        if res.returncode == 0 or "successfully installed" in out.lower() or "instalado correctamente" in out.lower():
-            if progress_cb:
-                progress_cb(100, f"{app.name} actualizado")
-            return True, f"{app.name} actualizado correctamente ({app.available_version or 'ultima'})."
-        snippet = next((ln.strip() for ln in reversed(out.splitlines()) if ln.strip()), "")[:160]
-        return False, f"winget devolvio codigo {res.returncode}: {snippet}"
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"Error actualizando {app.name}: {exc}"
+        log_path = _winget_log_path(app)
+        with open(log_path, "wb") as fh:
+            proc = (popen or subprocess.Popen)(
+                cmd,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+    except OSError as exc:
+        return False, f"No se pudo iniciar winget para {app.name}: {exc}"
+    protect_child_pid(proc.pid)
+
+    start = time.monotonic()
+    last_msg = ""
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        elapsed = time.monotonic() - start
+        if controller is not None and getattr(controller, "is_canceled", False):
+            return False, (
+                f"{app.name}: la actualizacion ya iniciada sigue en segundo plano hasta terminar "
+                "(no se interrumpe para no romper la instalacion)."
+            )
+        if elapsed >= timeout:
+            return False, (
+                f"{app.name} lleva {int(elapsed // 60)} min instalandose: sigue en segundo plano. "
+                "Busca actualizaciones de nuevo en unos minutos para confirmar."
+            )
+        if progress_cb:
+            phase = winget_phase(_read_tail(log_path)) or "preparando"
+            mins, secs = divmod(int(elapsed), 60)
+            msg = f"{app.name}: {phase} ({mins}:{secs:02d})"
+            if msg != last_msg:
+                last_msg = msg
+                progress_cb(min(95, 10 + int(elapsed / 6)), msg)
+        time.sleep(poll_s)
+
+    ok, why = interpret_winget_result(rc, _read_tail(log_path, 32768))
+    if ok:
+        if progress_cb:
+            progress_cb(100, f"{app.name} actualizado")
+        if why == "al_dia":
+            return True, f"{app.name} ya estaba en la ultima version."
+        return True, f"{app.name} actualizado correctamente ({target})."
+    return False, f"winget no pudo actualizar {app.name} ({why})."
 
 
 # v0.6.3: "Actualizar todas" nunca toca entornos de desarrollo ni saltos de version mayor:
@@ -469,7 +640,6 @@ def upgrade_apps_winget(
     """Actualizar varias apps una por una (microprocesos): se puede cancelar entre una y otra."""
     from ..core.task_control import TaskCanceledError, stop_point
 
-    fn = upgrade_fn or upgrade_app_winget
     results: list[tuple[InstalledApp, bool, str]] = []
     total = max(1, len(apps))
     for i, app in enumerate(apps):
@@ -479,9 +649,18 @@ def upgrade_apps_winget(
             break
         except Exception:  # noqa: BLE001 - Guardar Pausa no aplica: se trata como cancelar
             break
+        prefix = f"({i + 1}/{len(apps)})"
         if progress_cb:
-            progress_cb(int(5 + 90 * i / total), f"({i + 1}/{len(apps)}) Actualizando {app.name}...")
-        ok, msg = fn(app)
+            progress_cb(int(5 + 90 * i / total), f"{prefix} Actualizando {app.name}...")
+        if upgrade_fn is not None:
+            ok, msg = upgrade_fn(app)
+        else:
+
+            def _sub(pct: int, text: str, _i: int = i, _p: str = prefix) -> None:
+                if progress_cb:
+                    progress_cb(int(5 + 90 * (_i + pct / 100) / total), f"{_p} {text}")
+
+            ok, msg = upgrade_app_winget(app, progress_cb=_sub, controller=controller)
         if ok:
             app.version = app.available_version or app.version
             app.available_version = ""

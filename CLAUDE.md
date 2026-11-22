@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.3`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.4`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,17 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.4 (22/11/2026, Claude Code)
+
+- **Actualizaciones confiables y rapidas (`apps/app_manager.py`):** diagnostico real con Antigravity IDE 2.8.0 desde la App.
+  - `upgrade_app_winget` ya no usa `subprocess.run(timeout=240)`: lanza `Popen` con salida a `%LOCALAPPDATA%\WinOptiAI\logs\winget-upgrade-<id>.log`, `protect_child_pid(winget)` (sobrevive a `_shutdown_everything`) y espera sondeando (fase `winget_phase`, minutos). Cancelar o pasar `WINGET_UPGRADE_MAX_WAIT_S` (45 min) solo deja de esperar: **NUNCA matar winget ni el instalador**.
+  - `interpret_winget_result`: 0 / "instalado correctamente" = ok; `0x8A15002B` o "ninguna actualizacion aplicable" = al dia.
+  - `ensure_winget_direct_download`: `settings.json` de winget con `network.downloader = wininet` (Delivery Optimization fallaba con `0x80D02002` tras 60 s). Respaldo `settings.json.winoptiai.bak`; si el archivo tiene comentarios al final de linea, no se toca.
+  - `running_app_processes` + `apps_view._confirm_apps_closed`: pide cerrar la app antes de actualizar.
+  - `process_manager.is_installer_process_name`: AI Boost excluye instaladores.
+  - La copia de archivos del instalador (miles de `.js` en apps Electron, ~15 ms c/u por el antivirus) es igual que en la actualizacion propia de la app; esa la hace en segundo plano.
+- **Verificacion:** 167/167 pruebas (`tests/test_v064_upgrade_reliability.py`, 9) y prueba real: Antigravity IDE 2.7.0 -> 2.8.0 desde la App.
 
 ## Cambios Consolidados v0.6.3 (21/11/2026, Claude Code)
 
@@ -117,7 +128,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.3`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.4`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

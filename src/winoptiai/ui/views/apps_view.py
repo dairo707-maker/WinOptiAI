@@ -24,6 +24,7 @@ from ...apps.app_manager import (
     InstalledApp,
     bulk_upgrade_skip_reason,
     check_app_updates_winget,
+    running_app_processes,
     find_app_leftovers,
     list_installed_apps,
     uninstall_installed_app,
@@ -305,6 +306,8 @@ class AppsView(QWidget):
             )
             if ans != QMessageBox.StandardButton.Yes:
                 return
+        if not self._confirm_apps_closed(targets):
+            return
         self._run_upgrades(targets, "Actualizar apps seleccionadas")
 
     def _on_upgrade_all(self) -> None:
@@ -333,7 +336,28 @@ class AppsView(QWidget):
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
+        if not self._confirm_apps_closed(targets):
+            return
         self._run_upgrades(targets, f"Actualizar {len(targets)} apps")
+
+    def _confirm_apps_closed(self, targets: list[InstalledApp]) -> bool:
+        """v0.6.4: con la app abierta el instalador falla o se queda esperando: pedir cerrarla antes."""
+        open_apps = [(a, procs) for a in targets if (procs := running_app_processes(a))]
+        if not open_apps:
+            return True
+        lines = "\n".join(f"- {a.name} ({', '.join(p[:3])})" for a, p in open_apps[:8])
+        ans = QMessageBox.question(
+            self,
+            "Cerrar apps antes de actualizar",
+            f"Estas apps estan abiertas y su instalador podria fallar o quedarse esperando:\n\n{lines}\n\n"
+            "Guarda tu trabajo, cierralas y pulsa Si para continuar (No para volver).",
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return False
+        still = [a.name for a, _p in open_apps if running_app_processes(a)]
+        if still:
+            self.notify_cb("Siguen abiertas: " + ", ".join(still[:4]) + ". Se intentara igual; si falla, cierralas y repite.")
+        return True
 
     def _run_upgrades(self, targets: list[InstalledApp], label: str) -> None:
         self.upgrade_btn.setEnabled(False)

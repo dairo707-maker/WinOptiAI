@@ -58,6 +58,23 @@ ECOQOS_ELIGIBLE_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# v0.6.4: instaladores y actualizadores en curso nunca se compactan ni se frenan (EcoQoS):
+# una actualizacion debe ir a la misma velocidad que desde la propia app.
+_INSTALLER_NAME_MARKERS: tuple[str, ...] = ("setup", "install", "update", "upgrade", "unins")
+_INSTALLER_EXACT_NAMES: frozenset[str] = frozenset(
+    {"winget.exe", "msiexec.exe", "appinstaller.exe", "appinstallercli.exe", "trustedinstaller.exe"}
+)
+
+
+def is_installer_process_name(name: str) -> bool:
+    low = (name or "").strip().lower()
+    if not low:
+        return False
+    if low in _INSTALLER_EXACT_NAMES or low.endswith(".tmp"):
+        return True
+    return any(m in low for m in _INSTALLER_NAME_MARKERS)
+
+
 ZOMBIE_AI_WORKER_NAMES: frozenset[str] = frozenset(
     {
         "node.exe",
@@ -240,6 +257,7 @@ def run_ai_boost(
                 or (fg_pid is not None and pid == fg_pid)
                 or name in PROTECTED_PROCESS_NAMES
                 or name in AI_FOREGROUND_AGENTS
+                or is_installer_process_name(name)
             ):
                 continue
 

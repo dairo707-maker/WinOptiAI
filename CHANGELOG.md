@@ -2,6 +2,20 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.4] - 2026-11-22
+
+### Corregido
+- **Actualizaciones sin cortes ni fallos falsos:** se quito el limite fijo de 240 s que mataba winget mientras el instalador seguia (caso real: Antigravity IDE). Ahora se espera con la fase visible (descargando / instalando + minutos) y nunca se interrumpe una instalacion iniciada.
+- **Cerrar WinOptiAI durante una actualizacion ya no la rompe:** winget queda protegido del cierre total y su salida va a `%LOCALAPPDATA%\WinOptiAI\logs` (no a una tuberia), asi termina aunque la app se cierre.
+- **"Sin actualizacion aplicable" (0x8A15002B) ya no cuenta como fallo.**
+
+### Rendimiento
+- **Descargas a la velocidad real de la conexion:** winget usa descarga directa (WinINet) en vez de Optimizacion de distribucion, que se quedaba 60 s sin avanzar (0x80D02002) antes de reintentar. Se respalda la configuracion previa de winget.
+- **AI Boost nunca compacta ni frena instaladores** (`winget`, `msiexec`, `*.tmp`, `setup`, `install`, `update`).
+
+### Agregado
+- **Aviso de apps abiertas antes de actualizar:** si el programa esta abierto, se pide cerrarlo (el instalador fallaria o se quedaria esperando).
+
 ## [0.6.3] - 2026-11-21
 
 ### Corregido
