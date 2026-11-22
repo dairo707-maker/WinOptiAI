@@ -1345,15 +1345,51 @@ class StorageView(QWidget):
         else:
             self.notify_cb("No se encontro la ruta seleccionada en disco.")
 
+    def _storage_selection_actions(self) -> list:
+        """v0.6.5: solo las acciones del modo activo que actuan sobre la fila seleccionada."""
+        sec_ok = self.secondary_btn.isEnabled() and not self.secondary_btn.isHidden()
+        ter_ok = self.tertiary_btn.isEnabled() and not self.tertiary_btn.isHidden()
+        m = self.mode
+        if m == "junk":
+            return [("Limpiar seleccionados (a Cuarentena)", self._on_secondary_action, sec_ok)]
+        if m == "duplicates":
+            return [("Enlazar con Hardlink NTFS", self._on_tertiary_action, ter_ok)]
+        if m == "quarantine":
+            return [
+                ("Restaurar", self._on_secondary_action, sec_ok),
+                ("Eliminar definitivamente", self._on_tertiary_action, ter_ok),
+            ]
+        if m == "onedrive":
+            return [(self.secondary_btn.text().strip(), self._on_secondary_action, sec_ok)]
+        return []
+
     def _show_explorer_menu(self, widget: QWidget, pos: QPoint) -> None:
-        menu = QMenu(widget)
-        act = QAction("Ver en el Explorador de Windows", menu)
-        act.triggered.connect(self._reveal_selected_item)
-        menu.addAction(act)
-        if widget is self.table and self.mode in QUICK_QUARANTINE_MODES:
-            act_q = QAction("Enviar a Cuarentena   (Supr)", menu)  # v0.5.9: inmediato, sin proceso
-            act_q.triggered.connect(self._quick_quarantine_selected)
-            menu.addAction(act_q)
+        """v0.6.5: Explorador / Cuarentena / copiar + las mismas acciones del modo activo."""
+        from ..context_menu import build_action_menu, copy_text
+
+        if hasattr(widget, "indexAt"):
+            idx = widget.indexAt(pos)
+            if not idx.isValid():
+                return  # fuera de una fila no hay seleccion sobre la que actuar
+            sel = widget.selectionModel()
+            if sel is not None and not sel.isSelected(idx):
+                widget.setCurrentIndex(idx)
+
+        def _extras():
+            target = self._get_selected_explorer_path()
+            out: list = []
+            if widget is self.table and self.mode in QUICK_QUARANTINE_MODES:
+                out.append(("Enviar a Cuarentena   (Supr)", self._quick_quarantine_selected, True))
+            if widget is self.table:
+                out.extend(self._storage_selection_actions())
+            out.append(None)
+            out.append(("Ver en el Explorador de Windows", self._reveal_selected_item, target is not None))
+            out.append(("Copiar ruta", lambda: copy_text(str(target) if target else ""), target is not None))
+            return out
+
+        menu = build_action_menu(widget, None, None, _extras)
+        if not menu.actions():
+            return
         menu.exec(widget.viewport().mapToGlobal(pos) if hasattr(widget, "viewport") else widget.mapToGlobal(pos))
 
     def _on_tree_scanned(self, report: StorageHierarchyReport) -> None:
@@ -1502,16 +1538,14 @@ class StorageView(QWidget):
         if not p:
             return
         self.heavy_tree.setCurrentItem(it)
-        menu = QMenu(self.heavy_tree)
-        act = QAction("Ver en el Explorador de Windows", menu)
-        act.triggered.connect(lambda: self._reveal_path(str(p)))
-        menu.addAction(act)
-        act_copy = QAction("Copiar ruta", menu)
-        act_copy.triggered.connect(lambda: QApplication.clipboard().setText(str(p)))
-        menu.addAction(act_copy)
-        act_q = QAction("Enviar a Cuarentena   (Supr)", menu)  # v0.5.9: inmediato, sin proceso
-        act_q.triggered.connect(self._quick_quarantine_selected)
-        menu.addAction(act_q)
+        from ..context_menu import build_action_menu, copy_text
+
+        extras = lambda: [  # noqa: E731
+            ("Ver en el Explorador de Windows", lambda: self._reveal_path(str(p)), True),
+            ("Copiar ruta", lambda: copy_text(str(p)), True),
+            ("Enviar a Cuarentena   (Supr)", self._quick_quarantine_selected, True),  # v0.5.9: inmediato
+        ]
+        menu = build_action_menu(self.heavy_tree, None, None, extras)
         menu.exec(self.heavy_tree.viewport().mapToGlobal(pos))
 
     def _make_tree_item(self, node: FolderNode) -> NumericTreeItem:

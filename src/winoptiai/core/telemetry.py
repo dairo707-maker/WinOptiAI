@@ -160,40 +160,115 @@ class PdhTelemetryReader:
         )
 
 
+TEMP_PROBE_UAC_WAIT_S = 120  # tiempo para aceptar el aviso de UAC
+
+
+def build_temperature_probe_script(out_file: str) -> str:
+    """Script PowerShell que escribe {cpu, nvme, error} en ``out_file`` (siempre lo escribe)."""
+    safe = out_file.replace("'", "''")
+    return (
+        "$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'; $cpu=$null; $nvme=$null; $err=''; "
+        "try { $tz=Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | "
+        "Select-Object -First 1; if($tz){ $cpu=[math]::Round(($tz.CurrentTemperature/10.0)-273.15,1) } } "
+        "catch { $err=$_.Exception.Message }; "
+        "try { $d=Get-PhysicalDisk | Where-Object { $_.MediaType -eq 'SSD' -or $_.BusType -eq 'NVMe' } | "
+        "Select-Object -First 1 | Get-StorageReliabilityCounter -ErrorAction Stop; "
+        "if($d -and $d.Temperature){ $nvme=[double]$d.Temperature } } catch { if(-not $err){ $err=$_.Exception.Message } }; "
+        f"[PSCustomObject]@{{cpu=$cpu;nvme=$nvme;error=$err}} | ConvertTo-Json -Compress | "
+        f"Set-Content -LiteralPath '{safe}' -Encoding UTF8"
+    )
+
+
+def _encode_ps(script: str) -> str:
+    import base64
+
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def clean_ps_stderr(text: str) -> str:
+    """Quitar el ruido CLIXML de progreso de PowerShell; conservar solo mensajes de error reales."""
+    import re
+
+    raw = (text or "").strip()
+    if not raw.startswith("#< CLIXML"):
+        return raw
+    errs = re.findall(r'<S S="Error">(.*?)</S>', raw, flags=re.S)
+    msg = " ".join(e.replace("_x000D__x000A_", " ").strip() for e in errs)
+    return re.sub(r"\s+", " ", msg).strip()
+
+
+def interpret_temperature_probe(data: dict | None, launcher_stderr: str = "") -> tuple[float | None, float | None, str]:
+    """Mensaje honesto segun lo que paso (sin confundir un fallo con 'UAC cancelada')."""
+    launcher_stderr = clean_ps_stderr(launcher_stderr)
+    low = launcher_stderr.lower()
+    if data is None:
+        if "cancel" in low or "1223" in low:
+            return None, None, "Lectura de sensores cancelada: no se acepto el aviso de UAC."
+        if launcher_stderr.strip():
+            return None, None, f"No se pudo iniciar la lectura elevada: {launcher_stderr.strip()[:140]}"
+        return None, None, "La lectura de sensores no devolvio resultado (tiempo agotado o bloqueada)."
+    cpu_t = data.get("cpu")
+    nvme_t = data.get("nvme")
+    # Algunas placas devuelven un valor fijo sin sentido (p. ej. -273 o >120 C): se descarta.
+    if isinstance(cpu_t, (int, float)) and not (5.0 <= float(cpu_t) <= 115.0):
+        cpu_t = None
+    if isinstance(nvme_t, (int, float)) and not (5.0 <= float(nvme_t) <= 100.0):
+        nvme_t = None
+    if cpu_t is None and nvme_t is None:
+        return None, None, "Esta placa no expone sensores de temperatura a Windows; se sigue monitoreando por MHz/Turbo."
+    parts = []
+    if cpu_t is not None:
+        parts.append(f"CPU {cpu_t:.0f} C")
+    if nvme_t is not None:
+        parts.append(f"SSD {nvme_t:.0f} C")
+    return cpu_t, nvme_t, "Lectura termica completada: " + ", ".join(parts)
+
+
 def probe_elevated_temperatures() -> tuple[float | None, float | None, str]:
-    """Run a one-shot elevated PowerShell sensor probe for ACPI CPU & NVMe SMART temperatures."""
+    """Lectura puntual de temperatura ACPI (CPU) y S.M.A.R.T. (NVMe/SSD) con permisos de administrador.
+
+    v0.6.5: antes el script iba entre comillas dobles y la PowerShell externa reemplazaba $cpu, $tz,
+    $d... por vacio: la ventana elevada recibia un script roto y la app decia 'UAC cancelada' aunque
+    se aceptara. Ahora va codificado (-EncodedCommand) y, si la app ya es administradora, sin UAC.
+    """
     if not IS_WINDOWS:
         return None, None, "Solo Windows"
     import os
     import tempfile
+    import time
     from pathlib import Path
 
-    out_file = Path(tempfile.gettempdir()) / f"winoptiai_temps_{os.getpid()}.json"
-    ps_cmd = (
-        "$cpu=$null; $nvme=$null; "
-        "try { $tz=Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -EA Stop | Select-Object -First 1; "
-        "if($tz){ $cpu=[math]::Round(($tz.CurrentTemperature/10.0)-273.15,1) } } catch {}; "
-        "try { $d=Get-PhysicalDisk | Where-Object {$_.MediaType -eq 'SSD' -or $_.BusType -eq 'NVMe'} | Select-Object -First 1 | Get-StorageReliabilityCounter -EA Stop; "
-        "if($d -and $d.Temperature){ $nvme=[double]$d.Temperature } } catch {}; "
-        f"[PSCustomObject]@{{cpu=$cpu;nvme=$nvme}} | ConvertTo-Json | Set-Content -Path '{out_file}' -Encoding UTF8"
-    )
-    # Use ShellExecuteEx-like Start-Process -Verb RunAs -Wait so we get exit synchronously
-    wrapper = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        f'Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList "-NoProfile -Command {ps_cmd.replace(chr(34), chr(92) + chr(34))}"',
-    ]
+    from .win32_bridge import is_user_admin
+
+    out_file = Path(tempfile.gettempdir()) / f"winoptiai_temps_{os.getpid()}_{int(time.time())}.json"
+    out_file.unlink(missing_ok=True)
+    encoded = _encode_ps(build_temperature_probe_script(str(out_file)))
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    stderr_txt = ""
     try:
-        subprocess.run(wrapper, timeout=25, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if out_file.exists():
-            data = json.loads(out_file.read_text(encoding="utf-8-sig"))
-            out_file.unlink(missing_ok=True)
-            cpu_t = data.get("cpu")
-            nvme_t = data.get("nvme")
-            if cpu_t is None and nvme_t is None:
-                return None, None, "Placa ACPI no expone sonda termica directa; monitoreo por MHz/Turbo activo."
-            return cpu_t, nvme_t, "Lectura termica elevada completada"
-        return None, None, "Autorizacion UAC cancelada"
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        if is_user_admin():
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, creationflags=no_window)
+        else:
+            launcher = (
+                "$ProgressPreference='SilentlyContinue'; Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait "
+                f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{encoded}'"
+            )
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", launcher]
+            res = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=TEMP_PROBE_UAC_WAIT_S, creationflags=no_window
+            )
+        stderr_txt = (res.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        stderr_txt = ""
+    except OSError as exc:
         return None, None, f"Error leyendo sensores: {exc}"
+    data = None
+    try:
+        if out_file.exists():
+            data = json.loads(out_file.read_text(encoding="utf-8-sig") or "null")
+    except (OSError, json.JSONDecodeError):
+        data = None
+    finally:
+        out_file.unlink(missing_ok=True)
+    return interpret_temperature_probe(data if isinstance(data, dict) else None, stderr_txt)

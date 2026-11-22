@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.4`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,15 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.5 (22/11/2026, Claude Code)
+
+- **Pestanas `setDocumentMode(True)` (`theme.py`):** `QTabBar { qproperty-drawBase: 0 }` + fondo propio en `QTabBar::tab`; antes Windows pintaba una base blanca detras en modo oscuro.
+- **Dialogos (`ui/dialog_localizer.py`):** filtro global instalado en `app.py`; al mostrarse un `QMessageBox`/`QDialogButtonBox` traduce los botones estandar (ES/EN/PT, `set_dialog_language` en `_on_language_changed`) y asigna roles (`PrimaryAction` / `GhostAction`, `RiskAction` si el icono es Advertencia/Critico). No hace falta tocar cada llamada a `QMessageBox`.
+- **Menu contextual (`ui/context_menu.py`, decision del propietario):** muestra SOLO lo que aplica a la seleccion; nunca las acciones generales de la barra (Actualizar todas, Escanear, Buscar...) ni opciones que no aplican (se ocultan, no se desactivan). `install_action_menu(view, row_buttons, extras)`; extras = `(texto, fn, aplica)` y `None` = separador. Aplicaciones: "Actualizar a X" solo con nueva version, Desinstalar solo 1 app no protegida; Inicio: Desactivar/Reactivar segun estado; Almacenamiento: `_storage_selection_actions` por modo.
+- **Iconos de apps (`ui/app_icons.py`, `app_manager.parse_display_icon/guess_app_icon_path/msi_packed_guid`):** `QFileIconProvider` 16 px opacidad 0.85, cache por ruta; fuentes: DisplayIcon -> `Installer\Products\<GUID empaquetado>\ProductIcon` -> .exe de InstallLocation -> `App Paths`. `apps_view._load_icon_batch` carga 6 por vuelta. Nunca lee archivos solo-nube.
+- **Sensores UAC (`core/telemetry.probe_elevated_temperatures`):** script con `-EncodedCommand` (antes `$variables` se expandian en la PowerShell externa), `clean_ps_stderr` quita CLIXML de progreso, `interpret_temperature_probe` da mensajes reales y descarta lecturas imposibles.
+- **Pruebas:** `tests/test_v065_tabs_dark.py`, `tests/test_v065_menus_dialogs_icons.py`.
 
 ## Cambios Consolidados v0.6.4 (22/11/2026, Claude Code)
 
@@ -128,7 +137,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.4`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.5`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).

@@ -27,6 +27,7 @@ from ...core.i18n import tr
 from ...core.sre_policy import SREPolicyEngine
 from ...core.usage_telemetry import format_last_used_time
 from ..svg_icons import load_svg_icon
+from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ...core.help_catalog import TOOLTIPS
 from ..widgets import (
     GlassPanel,
@@ -165,6 +166,13 @@ class ProcessesView(QWidget):
             storage_key="zombie_table",
         )
         z_layout.addWidget(self.zombie_table)
+        # v0.6.5: clic derecho = mismas acciones del apartado
+        install_action_menu(self.proc_table, extras=lambda: self._proc_menu_extras(self.proc_table))
+        install_action_menu(
+            self.zombie_table,
+            row_buttons=[self.kill_zombie_btn],
+            extras=lambda: self._proc_menu_extras(self.zombie_table),
+        )
         root.addWidget(z_panel, stretch=2)
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str) -> None:
@@ -220,6 +228,28 @@ class ProcessesView(QWidget):
             self.zombie_table.setItem(r, 3, QTableWidgetItem(z.cmdline))
         apply_table_tooltips(self.zombie_table)
         self.zombie_table.setSortingEnabled(True)
+
+    def _proc_menu_extras(self, table):
+        from ...core.win32_bridge import reveal_in_explorer
+
+        r = table.currentRow()
+        pid_item = table.item(r, 0) if r >= 0 else None
+        name_item = table.item(r, 1) if r >= 0 else None
+        if pid_item is None:
+            return []
+        exe = ""
+        try:
+            import psutil
+
+            exe = psutil.Process(int(pid_item.text())).exe()
+        except Exception:  # noqa: BLE001 - proceso cerrado o sin permiso
+            exe = ""
+        return [
+            ("Abrir ubicacion del archivo", lambda: reveal_in_explorer(exe), bool(exe)),
+            ("Copiar nombre", lambda: copy_text(name_item.text() if name_item else ""), name_item is not None),
+            ("Copiar PID", lambda: copy_text(pid_item.text()), True),
+            copy_row_extra(table),
+        ]
 
     def _kill_selected_zombie(self) -> None:
         rows = sorted({idx.row() for idx in self.zombie_table.selectedIndexes()})

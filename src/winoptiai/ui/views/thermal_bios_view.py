@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from ...core.i18n import tr
 from ...core.safety_guard import PreOpBackupManager
 from ...core.sre_policy import SREPolicyEngine
+from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ...core.telemetry import LiveSystemTelemetry, probe_elevated_temperatures
 from ...core.win32_bridge import reveal_in_explorer
 from ...thermal_bios.bios_auditor import (
@@ -220,6 +221,12 @@ class ThermalBiosView(QWidget):
         )
         self.rec_table.setWordWrap(True)
         root.addWidget(self.rec_table, stretch=1)
+        # v0.6.5: clic derecho = boton de la fila + acciones del apartado
+        install_action_menu(
+            self.rec_table,
+            row_buttons=lambda: [w for w in [self.rec_table.cellWidget(self.rec_table.currentRow(), 4)] if w is not None],
+            extras=lambda: [copy_row_extra(self.rec_table)],
+        )
 
         self._highlight_profile_button(self.policy.config.active_thermal_profile)
 

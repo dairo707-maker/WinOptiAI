@@ -26,6 +26,7 @@ from ...core.safety_guard import PreOpBackupManager
 from ...core.sre_policy import SREPolicyEngine
 from ...core.usage_telemetry import format_last_used
 from ..svg_icons import load_svg_icon
+from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ..widgets import (
     ROLE_MOVE,
     ROLE_RESTORE,
@@ -148,6 +149,8 @@ class StartupView(QWidget):
             storage_key="startup_table",
         )
         root.addWidget(self.startup_table, stretch=1)
+        # v0.6.5: clic derecho = mismas acciones del apartado
+        install_action_menu(self.startup_table, extras=self._row_menu_extras)
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
         self.lang = lang
@@ -173,6 +176,23 @@ class StartupView(QWidget):
             notify_on_complete=False,
             on_error=lambda _e: self.scan_btn.setEnabled(True),
         )
+
+    def _row_menu_extras(self):
+        items = self._selected_items()
+        if not items:
+            return []
+        it = items[0]
+        single = len(items) == 1
+        n_on = sum(1 for i in items if i.enabled)
+        n_off = len(items) - n_on
+        return [
+            ("Desactivar" if n_on <= 1 else f"Desactivar {n_on}", lambda: self._toggle_selected(False),
+             n_on > 0 and self.disable_btn.isEnabled()),
+            ("Reactivar" if n_off <= 1 else f"Reactivar {n_off}", lambda: self._toggle_selected(True),
+             n_off > 0 and self.enable_btn.isEnabled()),
+            ("Copiar comando", lambda: copy_text(it.command), single and bool(it.command)),
+            copy_row_extra(self.startup_table) if single else None,
+        ]
 
     def _selected_items(self) -> list[StartupItem]:
         rows = sorted({idx.row() for idx in self.startup_table.selectedIndexes()})

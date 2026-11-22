@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -35,7 +35,9 @@ from ...core.i18n import tr
 from ...core.safety_guard import QuarantineVault
 from ...core.sre_policy import SREPolicyEngine
 from ...core.usage_telemetry import format_app_last_used
+from ..app_icons import ICON_PX, app_icon, blank_icon, cached_app_icon
 from ..svg_icons import load_svg_icon
+from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ..theme import format_bytes
 from ..widgets import (
     ROLE_RESTORE,
@@ -76,6 +78,7 @@ class AppsView(QWidget):
         self.apps: list[InstalledApp] = []
         self._updates_checked = False
         self._checking_updates = False
+        self._icon_queue: list[int] = []  # v0.6.5: iconos pendientes (se cargan por tandas)
         self._updates_error = ""
 
         root = QVBoxLayout(self)
@@ -176,6 +179,7 @@ class AppsView(QWidget):
         )
         configure_sortable_table(self.apps_table)
         self.apps_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.apps_table.setIconSize(QSize(ICON_PX, ICON_PX))
         configure_interactive_columns(
             self.apps_table,
             [114, 290, 128, 136, 96, 138, 220],
@@ -183,6 +187,8 @@ class AppsView(QWidget):
             storage_key="apps_table",
         )
         root.addWidget(self.apps_table, stretch=1)
+        # v0.6.5: clic derecho = mismas acciones del apartado
+        install_action_menu(self.apps_table, extras=self._row_menu_extras)
 
     def apply_language_and_theme(self, lang: str, icon_inverted: str, theme_mode: str = "dark") -> None:
         self.lang = lang
@@ -264,6 +270,30 @@ class AppsView(QWidget):
             notify_on_complete=False,
             on_error=_err,
         )
+
+    def _row_menu_extras(self):
+        from ...core.win32_bridge import reveal_in_explorer
+
+        selected = self._selected_apps()
+        if not selected:
+            return []
+        upgradable = [a for a in selected if a.available_version and not a.protected_reason]
+        busy = not self.upgrade_btn.isEnabled()
+        if len(upgradable) == 1:
+            upd_label = f"Actualizar a {upgradable[0].available_version}"
+        else:
+            upd_label = f"Actualizar {len(upgradable)} apps"
+        app = selected[0]
+        single = len(selected) == 1
+        loc = (app.install_location or "").strip().strip('"')
+        return [
+            (upd_label, self._on_upgrade_selected, bool(upgradable) and not busy),
+            ("Desinstalar", self._on_uninstall_selected, single and not app.protected_reason),
+            None,
+            ("Abrir carpeta de instalacion", lambda: reveal_in_explorer(loc), single and bool(loc)),
+            ("Copiar nombre", lambda: copy_text(", ".join(a.name for a in selected)), True),
+            copy_row_extra(self.apps_table) if single else None,
+        ]
 
     def _selected_apps(self) -> list[InstalledApp]:
         rows = sorted({idx.row() for idx in self.apps_table.selectedIndexes()})
@@ -450,6 +480,27 @@ class AppsView(QWidget):
             on_error=lambda _e: self.uninstall_btn.setEnabled(True),
         )
 
+    def _load_icon_batch(self) -> None:
+        """Cargar unos pocos iconos por vuelta del bucle de eventos: la tabla nunca se congela."""
+        if not self._icon_queue:
+            return
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        batch, self._icon_queue = self._icon_queue[:6], self._icon_queue[6:]
+        loaded: dict[int, object] = {}
+        for idx in batch:
+            if 0 <= idx < len(self.apps):
+                loaded[idx] = app_icon(self.apps[idx], dpr)
+        for r in range(self.apps_table.rowCount()):
+            c0 = self.apps_table.item(r, 0)
+            c1 = self.apps_table.item(r, 1)
+            if c0 is None or c1 is None:
+                continue
+            idx = c0.data(Qt.ItemDataRole.UserRole + 1)
+            if idx in loaded:
+                c1.setIcon(loaded[idx])
+        if self._icon_queue:
+            QTimer.singleShot(10, self._load_icon_batch)
+
     def _render_apps(self) -> None:
         now = time.time()
         stale_cutoff = now - 30 * 86400
@@ -477,6 +528,8 @@ class AppsView(QWidget):
 
         self.apps_table.setSortingEnabled(False)
         self.apps_table.setRowCount(len(visible))
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        pending: list[int] = []
         for r, (orig_idx, app) in enumerate(visible):
             eff_ts = app.last_used_ts if app.last_used_ts > 0 else app.install_date_ts
             is_stale = eff_ts > 0 and eff_ts <= stale_cutoff
@@ -497,7 +550,12 @@ class AppsView(QWidget):
             c0.setData(Qt.ItemDataRole.UserRole + 1, orig_idx)
             c0.setForeground(QColor(semaphore_hex(tone, mode)))
             self.apps_table.setItem(r, 0, c0)
-            self.apps_table.setItem(r, 1, QTableWidgetItem(app.name))
+            name_item = QTableWidgetItem(app.name)
+            cached = cached_app_icon(app, dpr)  # v0.6.5: icono real de la app, sutil
+            name_item.setIcon(cached or blank_icon())
+            if cached is None:
+                pending.append(orig_idx)
+            self.apps_table.setItem(r, 1, name_item)
             self.apps_table.setItem(r, 2, QTableWidgetItem(app.version))
 
             if app.available_version:
@@ -526,6 +584,9 @@ class AppsView(QWidget):
             self.apps_table.setItem(r, 5, used_item)
             self.apps_table.setItem(r, 6, QTableWidgetItem(app.publisher or "--"))
         apply_table_tooltips(self.apps_table)
+        self._icon_queue = pending
+        if pending:
+            QTimer.singleShot(0, self._load_icon_batch)
         self.apps_table.setSortingEnabled(True)
 
         if self.apps:

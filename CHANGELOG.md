@@ -2,6 +2,17 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.5] - 2026-11-22
+
+### Corregido
+- **Pestanas del Resumen en modo oscuro:** "Historial y Graficas / Espacio liberado / Registro" (y las del Arbol) ya no quedan sobre una franja blanca nativa de Windows.
+- **Leer Sensores (UAC):** decia "Autorizacion UAC cancelada" aunque se aceptara: la PowerShell externa borraba las variables del script (`$cpu`, `$tz`...). Ahora va codificado (`-EncodedCommand`), sin UAC si la app ya es administradora, con 2 min para aceptar y mensajes reales (cancelado / sin sensores / error).
+
+### Agregado
+- **Botones de confirmacion en tu idioma y visibles:** Si/No, Aceptar/Cancelar (ES/EN/PT) con estilo de boton principal/secundario (oxido en avisos de riesgo), en todos los dialogos.
+- **Clic derecho en todas las tablas:** solo las acciones que aplican a lo seleccionado (p. ej. "Actualizar a 2.8.0" si esa app tiene version nueva, Desinstalar si no esta protegida, Desactivar/Reactivar segun su estado), mas Explorador / copiar. Las acciones generales siguen arriba.
+- **Iconos de las apps** en Aplicaciones (16 px, sutiles): DisplayIcon, icono MSI, .exe de la carpeta o App Paths; carga por tandas sin congelar la tabla.
+
 ## [0.6.4] - 2026-11-22
 
 ### Corregido

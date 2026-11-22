@@ -615,14 +615,30 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: transparent;
     }}
 
-    QTabBar::tab {{
+    /* v0.6.5: con setDocumentMode(True) Windows pinta una base blanca nativa detras de las
+       pestanas; en modo oscuro el texto claro quedaba sobre blanco. Base apagada + fondo propio. */
+    QTabBar {{
         background-color: transparent;
+        qproperty-drawBase: 0;
+    }}
+
+    QTabWidget::tab-bar {{
+        background-color: transparent;
+    }}
+
+    QTabBar::tab {{
+        background-color: {p["bg_glass"]};
         color: {p["text_secondary"]};
         border: 1px solid {p["border_hairline"]};
         padding: 6px 12px;
         font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
         font-size: 11px;
         margin-right: 4px;
+    }}
+
+    QTabBar::tab:hover:!selected {{
+        background-color: {p["bg_hover"]};
+        color: {p["text_primary"]};
     }}
 
     QTabBar::tab:selected {{

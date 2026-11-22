@@ -22,6 +22,7 @@ from ...core.metrics_history import MetricsHistory
 from ...core.telemetry import LiveSystemTelemetry
 from ..history_charts import FreedSpacePanel, HistoryPanel, SystemGaugesWidget
 from ..svg_icons import load_svg_icon
+from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ..theme import get_palette
 from ..widgets import (
     FlowLayout,
@@ -197,6 +198,8 @@ class OverviewView(QWidget):
             storage_key="overview_audit_table",
         )
         ap_layout.addWidget(self.audit_table)
+        # v0.6.5: clic derecho en el registro
+        install_action_menu(self.audit_table, extras=lambda: [copy_row_extra(self.audit_table)])
         self.monitor_tabs.addTab(audit_page, tr("tab_audit", lang))
         self.monitor_tabs.currentChanged.connect(lambda _i: self.schedule_history_refresh(0))
         audit_layout.addWidget(self.monitor_tabs, stretch=1)

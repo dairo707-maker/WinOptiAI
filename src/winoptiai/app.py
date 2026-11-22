@@ -120,6 +120,10 @@ def main() -> int:
     register_embedded_fonts(app)
     app.setStyleSheet(build_obsidian_qss(policy.config.theme_mode))
     app.setWindowIcon(_app_window_icon())
+    # v0.6.5: botones Si/No de los dialogos en el idioma elegido y con estilo visible.
+    from .ui.dialog_localizer import install_dialog_localizer
+
+    install_dialog_localizer(app, policy.config.language)
 
     window = MainWindow(crash_guard=crash_guard, auto_restarted=CRASH_RESTART_ARG in sys.argv)
     activation_server = _start_activation_server(instance_lock.key, window.restore_from_tray)  # noqa: F841

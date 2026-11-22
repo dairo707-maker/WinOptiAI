@@ -61,6 +61,7 @@ class InstalledApp:
     protected_reason: str = ""
     scope: str = "Usuario"  # "Usuario" | "Sistema"
     install_date_ts: float = 0.0
+    icon_path: str = ""  # v0.6.5: archivo (.exe/.ico/.dll) del que Windows toma el icono de la app
 
 
 def is_protected_application(name: str, publisher: str = "", install_location: str = "") -> str:
@@ -83,6 +84,126 @@ def is_protected_application(name: str, publisher: str = "", install_location: s
     if loc.startswith(r"c:\windows\system32"):
         return "Ruta interna del sistema Windows"
     return ""
+
+
+def parse_display_icon(display_icon: str) -> str:
+    """Ruta de archivo de ``DisplayIcon`` (comillas e indice ',0' fuera); '' si no es .exe/.ico/.dll."""
+    raw = os.path.expandvars((display_icon or "").strip())
+    if not raw:
+        return ""
+    if raw.startswith('"'):
+        end = raw.find('"', 1)
+        raw = raw[1:end] if end > 0 else raw[1:]
+    else:
+        head, sep, tail = raw.rpartition(",")
+        if sep and tail.strip().lstrip("-").isdigit():
+            raw = head
+    raw = raw.strip().strip("'")
+    if Path(raw).suffix.lower() not in (".exe", ".ico", ".dll"):
+        return ""
+    return raw
+
+
+_ICON_SKIP_EXE = ("unins", "uninst", "update", "setup", "install", "crash", "helper", "elevat", "notif")
+
+
+def msi_packed_guid(guid: str) -> str:
+    """GUID de producto MSI -> forma 'empaquetada' de Installer\\Products ('' si no es GUID)."""
+    g = (guid or "").strip().strip("{}").replace("-", "").upper()
+    if len(g) != 32 or not re.fullmatch(r"[0-9A-F]{32}", g):
+        return ""
+    head = g[0:8][::-1] + g[8:12][::-1] + g[12:16][::-1]
+    tail = "".join(g[i + 1] + g[i] for i in range(16, 32, 2))
+    return head + tail
+
+
+def _msi_product_icon(subkey: str) -> str:
+    packed = msi_packed_guid(subkey)
+    if not packed or not IS_WINDOWS:
+        return ""
+    import winreg
+
+    for hive, base in (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Classes\Installer\Products"),
+        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Installer\Products"),
+    ):
+        try:
+            with winreg.OpenKey(hive, f"{base}\\{packed}") as k:
+                val, _ = winreg.QueryValueEx(k, "ProductIcon")
+                path = parse_display_icon(str(val or ""))
+                if path and os.path.isfile(path):
+                    return path
+        except OSError:
+            continue
+    return ""
+
+
+_APP_PATHS_CACHE: dict[str, str] = {}
+
+
+def _app_paths_map() -> dict[str, str]:
+    """``App Paths`` del Registro: 'chrome' -> ruta de chrome.exe (sin UAC)."""
+    if _APP_PATHS_CACHE or not IS_WINDOWS:
+        return _APP_PATHS_CACHE
+    import winreg
+
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            root = winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\App Paths")
+        except OSError:
+            continue
+        with root:
+            idx = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(root, idx)
+                    idx += 1
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(root, name) as k:
+                        val, _ = winreg.QueryValueEx(k, "")
+                except OSError:
+                    continue
+                path = parse_display_icon(str(val or ""))
+                stem = Path(name).stem.lower()
+                if path and stem not in _APP_PATHS_CACHE and os.path.isfile(path):
+                    _APP_PATHS_CACHE[stem] = path
+    return _APP_PATHS_CACHE
+
+
+def guess_app_icon_path(app: "InstalledApp") -> str:
+    """Archivo para el icono: DisplayIcon, icono MSI, .exe de su carpeta o App Paths."""
+    if app.icon_path and os.path.isfile(app.icon_path):
+        return app.icon_path
+    subkey = app.app_id.split(":", 1)[-1]
+    msi = _msi_product_icon(subkey)
+    if msi:
+        return msi
+    loc = (app.install_location or "").strip().strip('"')
+    if len(loc) < 4 or not os.path.isdir(loc):
+        words = [w for w in re.split(r"[^a-z0-9]+", app.name.lower()) if len(w) >= 4]
+        paths = _app_paths_map()
+        for w in words:
+            if w in paths:
+                return paths[w]
+        return ""
+    try:
+        exes = [e for e in os.scandir(loc) if e.is_file() and e.name.lower().endswith(".exe")]
+    except OSError:
+        return ""
+    if not exes:
+        return ""
+    words = [w for w in re.split(r"[^a-z0-9]+", app.name.lower()) if len(w) >= 3]
+
+    def _score(entry) -> tuple[int, int]:
+        low = entry.name.lower()
+        bad = any(k in low for k in _ICON_SKIP_EXE)
+        hits = sum(1 for w in words if w in low)
+        return (0 if bad else 1, hits)
+
+    best = max(exes, key=_score)
+    return best.path
 
 
 def _extract_icon_dir(display_icon: str) -> str:
@@ -205,6 +326,7 @@ def list_installed_apps(progress_cb: Callable[[int, str], None] | None = None) -
                             protected_reason=prot,
                             scope=scope,
                             install_date_ts=install_ts,
+                            icon_path=parse_display_icon(icon_raw),
                         )
                         existing = seen.get(norm_k)
                         if existing is None or (candidate.last_used_ts > existing.last_used_ts) or (

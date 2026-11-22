@@ -681,6 +681,9 @@ class MainWindow(QMainWindow):
         lang = str(self.lang_combo.currentData() or "es")
         self.policy.config.language = lang
         self.policy.save_config()
+        from .dialog_localizer import set_dialog_language
+
+        set_dialog_language(lang)
         self._apply_ui_appearance()
 
     def _refresh_theme_button_icon(self, mode: str, color: str) -> None:
