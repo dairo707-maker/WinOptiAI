@@ -2,6 +2,13 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.6] - 2026-11-22
+
+### Corregido
+- **El listado de Aplicaciones se mantiene al dia solo:** despues de actualizar se vuelve a escanear y muestra la version que de verdad quedo instalada; al abrir la pestana se refresca si tiene mas de 30 min o si el Vigia diario encontro novedades.
+- **Fallos de actualizacion con motivo claro:** p. ej. "Git no se actualizo: estaban abiertos bash.exe. Cierralos y vuelve a intentar" (se lee el registro del instalador que indica winget).
+- **Auditoria completa:** los fallos de actualizacion tambien quedan registrados, con su motivo.
+
 ## [0.6.5] - 2026-11-22
 
 ### Corregido

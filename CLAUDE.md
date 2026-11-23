@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.6` confirmada en repo local; ultimo binario publicado `v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,16 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Consolidado v0.6.6 (22/11/2026)
+
+- **Estado de ramas/repos al 22/11/2026:**
+  - `WinOptiAI` Windows `v0.6.6` verificada localmente (binario instalado anterior `v0.6.5` en `%LOCALAPPDATA%\Programs\WinOptiAI\WinOptiAI.exe`; pendiente compilar/publicar release `v0.6.6` o continuar hacia `v0.6.7` Monitoreo Pro cuando lo indique el propietario).
+  - La carpeta local `.historial-ia/` queda sin rastrear en git.
+- **Revision real de actualizaciones (22/11):** 6 de 7 correctas y verificadas en el Registro (Chrome 158.0.8127.37, Python 3.13.17, Zoom 7.2.5, WinRAR 7.23, Python Launcher 3.15.2, PDF24 11.35). Git 2.56.1 fallo porque `bash.exe` estaba abierto (Inno: "Please terminate those processes").
+- `app_manager.installer_blocking_processes`: lee el registro del instalador que indica winget (solo ruta local) y nombra los programas abiertos; `upgrade_app_winget` lo usa en el mensaje de fallo.
+- `apps_view`: `needs_refresh` (vacio, `mark_stale`, o >30 min; nunca durante una actualizacion), re-escaneo 1,5 s despues de `_run_upgrades`, auditoria tambien de fallos ("Actualizar App (fallo)"). `main_window._switch_tab` refresca al abrir Aplicaciones; el Vigia diario llama `mark_stale` si hay novedades.
+- **Repo hermano Android (privado aparte):** `dairo707-maker/WinOptiAI-Android` (local `C:\Users\datg2\dev\WinOptiAI-Android`, fuera de OneDrive; `:core:test` **46/46**, `:app:assembleDebug` OK; ampliado con ficha unificada por item, seleccion externa, reproductor nativo offline video/audio, orden/filtro/agrupacion por tipo de archivo, `HashCache`, residuos WhatsApp/temporales/carpetas vacias, Papelera vaciar/huerfanos y registro semanal de espacio recuperado). Motivo de separacion: `core/updater.py` usa `/releases/latest` y busca `WinOptiAI-Setup.exe`; un release Android en este repo romperia las actualizaciones de Windows.
 
 ## Cambios Consolidados v0.6.5 (22/11/2026, Claude Code)
 

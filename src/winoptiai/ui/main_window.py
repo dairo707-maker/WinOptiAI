@@ -590,8 +590,8 @@ class MainWindow(QMainWindow):
             btn.style().polish(btn)
         if index == 2:
             self.processes_view.refresh_all()
-        elif index == 4 and not self.apps_view.apps and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-            self.apps_view.refresh_apps()
+        elif index == 4 and self.apps_view.needs_refresh() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.apps_view.refresh_apps()  # v0.6.6: tambien si el listado tiene mas de 30 min
         elif index == 5 and not self.startup_view.items and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.startup_view.refresh_startup()
 
@@ -1219,6 +1219,8 @@ class MainWindow(QMainWindow):
             self._watch_running = False
             if slot is not None:
                 cfg.daily_watch_last_slot = slot
+            if findings.app_updates or findings.manual_updates:
+                self.apps_view.mark_stale()  # v0.6.6: el listado se refresca al abrir Aplicaciones
             items = daily_watch.build_digest(findings)
             sig = daily_watch.digest_signature(items)
             now_ts = _time.time()

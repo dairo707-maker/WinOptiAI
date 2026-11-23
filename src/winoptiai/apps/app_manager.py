@@ -648,6 +648,34 @@ def interpret_winget_result(returncode: int, output: str) -> tuple[bool, str]:
     return False, f"codigo 0x{code:08X}: {snippet}"
 
 
+_INSTALLER_LOG_RE = re.compile(
+    r"(?:registro del instalador est\S* disponible en|installer log is available at)\s*:?\s*(.+?\.log)",
+    re.IGNORECASE,
+)
+_BLOCKING_PROC_RE = re.compile(r"^\s*([^\s\\/:][^\\/:\r\n]*?\.exe)\s+\(PID\s+\d+\)", re.IGNORECASE | re.MULTILINE)
+
+
+def installer_blocking_processes(winget_output: str) -> list[str]:
+    """Programas abiertos que hicieron fallar el instalador (lee el registro que indica winget).
+
+    Caso real 22/11: Git no se actualizo porque bash.exe estaba abierto ("Please terminate those
+    processes and retry"). Solo se lee un registro local; nunca rutas de red.
+    """
+    m = _INSTALLER_LOG_RE.search(winget_output or "")
+    if not m:
+        return []
+    log_path = m.group(1).strip().strip('"')
+    if not is_local_disk_path(log_path) or not os.path.isfile(log_path):
+        return []
+    tail = _read_tail(Path(log_path), 65536)
+    names: list[str] = []
+    for name in _BLOCKING_PROC_RE.findall(tail):
+        clean = name.strip()
+        if clean.lower() not in {n.lower() for n in names}:
+            names.append(clean)
+    return names[:6]
+
+
 def running_app_processes(app: InstalledApp) -> list[str]:
     """Procesos abiertos de esa app (exe dentro de su carpeta): el instalador fallaria o esperaria."""
     loc = (app.install_location or "").strip().strip('"').rstrip("\\/").lower()
@@ -749,6 +777,12 @@ def upgrade_app_winget(
         if why == "al_dia":
             return True, f"{app.name} ya estaba en la ultima version."
         return True, f"{app.name} actualizado correctamente ({target})."
+    blocking = installer_blocking_processes(_read_tail(log_path, 32768))
+    if blocking:
+        return False, (
+            f"{app.name} no se actualizo: estaban abiertos {', '.join(blocking)}. "
+            "Cierralos y vuelve a intentar."
+        )
     return False, f"winget no pudo actualizar {app.name} ({why})."
 
 

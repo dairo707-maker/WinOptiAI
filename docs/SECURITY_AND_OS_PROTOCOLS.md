@@ -27,3 +27,9 @@ Antes de mover o limpiar duplicados o huerfanos, `win32_bridge.get_locking_proce
 ## 5. Telemetria de Fallos Local y Anonimizacion
 
 `CrashGuard` y `CrashReporter` operan 100% en local (`%LOCALAPPDATA%\WinOptiAI\crash.log` y `session_lock.json`) sin credenciales embebidas ni telemetria oculta. Si el usuario opta por abrir un reporte en GitHub Issues, la app anonimiza previamente usuario de Windows, nombre de equipo, organizacion de OneDrive y correos electronico antes de mostrarlo para revision manual.
+
+## 6. Sonda Termica UAC, Rutas de Red y Relanzamiento Elevado (v0.6.2–v0.6.5)
+
+- **Cero escritura de archivos en procesos elevados (`telemetry.py`):** al leer sensores ACPI/NVMe via UAC (`probe_elevated_temperatures`), el script PowerShell se pasa codificado con `-EncodedCommand` y retorna la lectura mediante codigo de salida (`PROBE_EXIT_BASE + cpu_decimas*1000 + nvme`), evitando cualquier vulnerabilidad de desvio por *junction* o TOCTOU en archivos temporales.
+- **Proteccion contra fuga NTLM en rutas de red (`app_manager.py`):** `is_local_disk_path()` bloquea rutas UNC (`\\servidor\...`), rutas de dispositivo y unidades de red mapeadas antes de extraer iconos, detectar procesos bloqueantes en logs o inspeccionar carpetas de instalacion.
+- **Relanzamiento UAC seguro (`win32_bridge.py`):** `run_elevated_command(..., track=False)` protege el PID elevado recien lanzado con `protect_child_pid()` sin registrarlo en `_TRACKED_CHILDREN`, impidiendo que el cierre de la instancia estandar interrumpa la nueva sesion administradora ni procesos `winget` en curso.

@@ -1,29 +1,32 @@
-# Arquitectura Tecnica — WinOptiAI
+# Arquitectura Tecnica — WinOptiAI · by TRODAI
 
 ## Vision General
 
-WinOptiAI (`v0.5.10`) esta estructurado en cuatro capas desacopladas para garantizar bajo consumo en reposo (~40–50 MB RAM), arranque fluido en dos fases (`< 300 ms`), control cooperativo de tareas largas, recuperacion ante cierres inesperados y cero bloqueos en el hilo grafico:
+**WinOptiAI (`v0.6.5` publicada / `v0.6.6` WIP)** esta estructurado en cinco bloques desacoplados para garantizar bajo consumo en reposo (~40–50 MB RAM), arranque fluido en dos fases (`< 300 ms`), control cooperativo de tareas largas, recuperacion ante cierres inesperados, seguridad estricta del sistema operativo y cero bloqueos en el hilo grafico:
 
 1. **Capa de Puente Win32 (`src/winoptiai/core/win32_bridge.py`):**
-   - `dwmapi.dll`: aplica `DWMWA_SYSTEMBACKDROP_TYPE = 3` (Acrylic oscuro / claro) y `DWMWA_WINDOW_CORNER_PREFERENCE = 1` (`DWMWCP_DONOTROUND`, bordes rectos `0px`).
-   - `kernel32.dll` / `psapi.dll`: lectura de atributos OneDrive (`GetFileAttributesW`), hidratacion cero + deshidratacion Files On-Demand (`SetFileAttributesW` `+U -P`), enlaces duros NTFS (`CreateHardLinkW`), `SetProcessInformation(ProcessPowerThrottling)` (EcoQoS), `EmptyWorkingSet` y `RegisterApplicationRestart`.
+   - `dwmapi.dll`: aplica `DWMWA_SYSTEMBACKDROP_TYPE = 3` (Acrylic oscuro **Obsidian Navy** / claro **Crisp White**) y `DWMWA_WINDOW_CORNER_PREFERENCE = 1` (`DWMWCP_DONOTROUND`, bordes rectos `0px`).
+   - `kernel32.dll` / `psapi.dll`: lectura de atributos OneDrive (`GetFileAttributesW`), hidratacion cero + deshidratacion Files On-Demand (`SetFileAttributesW` `+U -P`), enlaces duros NTFS (`CreateHardLinkW`), `SetProcessInformation(ProcessPowerThrottling)` (EcoQoS), `EmptyWorkingSet`, `RegisterApplicationRestart` y wrappers 64-bit seguros (`_kernel32_proc()`).
    - `Rstrtmgr.dll`: sesiones del Windows Restart Manager para verificar bloqueos reales en conjuntos puntuales antes de tocar archivos (omitido automaticamente en lotes `> 400` temporales donde aplica fallback directo NTFS `WinError 32`).
-   - `shell32.dll`, `ole32.dll`, `crypt32.dll`, `user32.dll`: envio a Papelera, elevacion UAC con inicializacion COM STA en hilos trabajadores, cifrado DPAPI para tokens Microsoft Graph y lectura de proceso activo en primer plano (`GetForegroundWindow`).
+   - `shell32.dll`, `ole32.dll`, `crypt32.dll`, `user32.dll`: envio a Papelera, elevacion UAC con inicializacion COM STA (`track=False` + `protect_child_pid` en relanzamiento `--elevated-relaunch`), cifrado DPAPI para tokens Microsoft Graph y lectura de proceso activo en primer plano (`GetForegroundWindow` / `EnumWindows`).
 
-2. **Capa de Guardrails, Control Cooperativo y Telemetria de Fallos (`core/`):**
-   - **`safety_guard.py`:** listas blancas inmutables de rutas del sistema operativo y procesos criticos/antivirus, escrituras atomicas resilientes (`atomic_write_text`), `QuarantineVault` transaccional por lotes (`manifest.json` + SHA-256 + auto-expiracion de `Basura:*` > 30 dias) y `PreOpBackupManager`.
-   - **`sre_policy.py`:** guardia hibrido SRE cada `2 s` (`10 s` minimizado) con umbral dinamico segun RAM fisica, 3 muestras consecutivas, histeresis de `300 s`, `audit.jsonl` y seguimiento de acciones completadas.
-   - **`task_control.py`:** `TaskController` (pausa, guardar pausa, cancelacion y checkpoints) y `SessionManager` (`%LOCALAPPDATA%\WinOptiAI\sessions`) para retomar limpiezas tras reiniciar o cerrar la app.
-   - **`crash_guard.py` & `crash_reporter.py`:** `faulthandler` multi-hilo, hooks de excepcion Python/Qt, vigilante de congelamiento GUI (`8 s`), `session_lock.json`, consulta ANSI al Visor de eventos (`ID 1000`/`1002`), y generador de informe anonimizado revisado por el usuario hacia GitHub Issues.
+2. **Capa de Guardrails, Telemetria y Vigilancia (`src/winoptiai/core/`):**
+   - **`safety_guard.py`:** listas blancas inmutables del sistema operativo y procesos criticos/antivirus, escrituras atomicas (`atomic_write_text`), `QuarantineVault` transaccional por lotes (`manifest.json` + SHA-256 + auto-expiracion de `Basura:*` > 30 dias + purga resiliente) y `PreOpBackupManager`.
+   - **`sre_policy.py` & `metrics_history.py`:** guardia hibrido SRE cada `2 s` (`10 s` minimizado) con umbral RAM dinamico (`1.2–4.0 GB`), 3 muestras consecutivas, histeresis de `300 s`, `audit.jsonl`, preferencias persistentes (incluidos anchos de columnas por tabla/modo `table_column_widths`) e historial `metrics.sqlite` de 7 dias gestionado en hebra FIFO dedicada.
+   - **`telemetry.py` & `usage_telemetry.py`:** telemetria PDH diferida (`pdh.dll` con `lazy_init=True`), sonda termica UAC por `-EncodedCommand` y codigo de salida sin crear archivos temporales (`probe_elevated_temperatures`), y telemetria real de `ULTIMO USO` sin UAC (`EnumWindows`, `JumplistData`, `UserAssist` ROT13 + `.lnk` MS-SHLLINK, perfiles de navegador y aliases de suites).
+   - **`daily_watch.py` & `updater.py`:** Vigia diario de solo lectura (`9/14/19 h`) para actualizaciones `winget` y temporales, y auto-actualizador SHA-256 contra GitHub Releases (`/releases/latest`, `WinOptiAI-Setup.exe`).
+   - **`task_control.py`, `single_instance.py`, `crash_guard.py`, `crash_reporter.py`, `onboarding_check.py`, `i18n.py`:** pausas/checkpoints retomables, mutex `Local\WinOptiAI-<hash>`, vigilante GUI (`8 s`), informes anonimizados y localizacion ES/EN/PT.
 
-3. **Motores de Dominio (`storage/`, `ai_optimizer/`, `thermal_bios/`):**
-   - **`junk_scanner.py`:** limpieza de temporales y caches profundas (`Windows Update`, `DeliveryOptimization`, `VS Code`, `HuggingFace .locks`) con progreso ponderado, proteccion `_MEIPASS` y reanudacion de sesiones guardadas.
-   - **`duplicate_finder.py`:** deduplicacion BLAKE3 en 4 etapas + autolimpiador por reglas + re-verificacion de tamano y hash antes de enlazar hardlinks NTFS.
-   - **`tree_analyzer.py` & `onedrive_optimizer.py`:** analisis jerarquico acotado (`60` subcarpetas/nivel + heap top-100) y optimizador hibrido OneDrive Local + Microsoft Graph PKCE.
-   - **`process_manager.py`:** `% CPU` real via cache de handles `psutil`, `run_ai_boost()` (excluye ventana en foco y agentes IA/IDE) y deteccion de workers MCP huerfanos.
-   - **`thermal_controller.py` & `bios_auditor.py`:** perfiles `powercfg` verificados con `/q`, telemetria S.M.A.R.T. NVMe/SSD, eventos 14d (`Disk`/`Ntfs`/`WHEA`), postura TPM/BitLocker/HVCI, soporte multi-OEM BIOS y acciones UAC (`CHKDSK`, `DISM`, `SFC`, `WinSxS`) con deteccion previa de procesos CBS activos.
+3. **Motores de Almacenamiento, Procesos e IA (`storage/`, `ai_optimizer/`, `thermal_bios/`):**
+   - **`junk_scanner.py`, `duplicate_finder.py`, `program_guard.py`:** temporales/caches profundas con reanudacion; deduplicacion BLAKE3 en 4 etapas protegiendo carpetas de programas/entornos y carpetas copiadas, con hardlinks NTFS re-verificados.
+   - **`tree_analyzer.py`, `orphan_hunter.py`, `onedrive_optimizer.py`:** arbol jerarquico acotado (`60`/nivel, top-100 pesados), residuos sin programa padre y OneDrive hibrido (Win32 local + Microsoft Graph PKCE).
+   - **`process_manager.py`:** `% CPU` real cacheado, `run_ai_boost()` (protege ventana activa, agentes IA e instaladores activos) y cazador de workers MCP zombis.
+   - **`thermal_controller.py` & `bios_auditor.py`:** perfiles `powercfg` verificados con `/q`, S.M.A.R.T., eventos 14d, TPM/BitLocker/HVCI, soporte multi-OEM BIOS y `CHKDSK`/`DISM`/`SFC`/`WinSxS` con guardia CBS.
 
-4. **Interfaz Dual Tema "Obsidian Acrylic / Alabaster Frost" (`src/winoptiai/ui/`):**
-   - Construida sobre `PySide6` con fuentes OFL embebidas (`Instrument Sans` + `IBM Plex Mono`) e iconos SVG geometricos propios.
-   - Fase 1 renderiza el shell y `CrashGuard`; Fase 2 ejecuta warmup WMI/disco/retencion en `QThreadPool`.
-   - `QTreeWidget` con carga perezosa (*lazy loading* al expandir), casilla tri-estado `"Seleccionar todo"` sincronizada por sub-modo en `StorageView`, ordenacion segura sin recursion `super().__lt__()` y actualizaciones de widgets diferidas con `QTimer.singleShot(0, ...)`.
+4. **Gestion de Aplicaciones e Inicio de Windows (`src/winoptiai/apps/`):**
+   - **`app_manager.py`:** inventario Registro + `winget` con descarga directa (`WinINet`), ejecucion `Popen` desacoplada a logs persistentes protegida ante cierres (`protect_child_pid`), actualizacion unitaria/masiva (excluyendo entornos dev/saltos mayores en lote), deteccion de procesos bloqueantes en instalador (`installer_blocking_processes`, WIP `v0.6.6`), proteccion contra rutas UNC/red (`is_local_disk_path`), iconos MSI/EXE y desinstalacion con envio reversible de restos.
+   - **`startup_manager.py`:** analisis de `Run`/`Startup`/`StartupApproved` con semafono (`MANTENER`/`PAUSAR`/`DESACTIVAR`) y respaldo reversible.
+
+5. **Interfaz Dual Tema TRODAI (`src/winoptiai/ui/`):**
+   - Identidad **Hexa-Vault Sentinel** sobre `PySide6`, fuentes embebidas **`Space Grotesk`** (`300`/`400`/`500`/`700`, cero `600`) + **`JetBrains Mono`** e iconos SVG geometricos.
+   - Graficas QPainter (`history_charts.py`: series, espacio liberado, anillos 2x2), `TreemapWidget` opaco interactivo (`treemap.py`), **10 tablas/arboles** con columnas redimensionables (`configure_interactive_columns`), scroll horizontal suave, tooltips y orden prioritario (`setSortIndicator(-1)`), ademas de menus contextuales filtrados (`context_menu.py`), carga perezosa de iconos (`app_icons.py`) y traductor global de dialogos (`dialog_localizer.py`).

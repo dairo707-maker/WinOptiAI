@@ -79,6 +79,9 @@ class AppsView(QWidget):
         self._updates_checked = False
         self._checking_updates = False
         self._icon_queue: list[int] = []  # v0.6.5: iconos pendientes (se cargan por tandas)
+        self._last_scan_ts = 0.0  # v0.6.6: hora del ultimo escaneo completo
+        self._stale = False  # v0.6.6: el Vigia diario u otra accion pide refrescar
+        self._upgrading = False
         self._updates_error = ""
 
         root = QVBoxLayout(self)
@@ -198,6 +201,20 @@ class AppsView(QWidget):
         self.sem_dot.set_tone(self.sem_dot._tone, theme_mode)
         self._render_apps()
 
+    REFRESH_MAX_AGE_S = 30 * 60
+
+    def mark_stale(self) -> None:
+        """v0.6.6: pedir un escaneo nuevo la proxima vez que se abra la pestana."""
+        self._stale = True
+
+    def needs_refresh(self, now: float | None = None) -> bool:
+        """Listado vacio, marcado como viejo o con mas de 30 min (y sin tareas en curso)."""
+        if self._upgrading or not self.scan_btn.isEnabled() or self._checking_updates:
+            return False
+        if not self.apps or self._stale:
+            return True
+        return ((now or time.time()) - self._last_scan_ts) > self.REFRESH_MAX_AGE_S
+
     def refresh_apps(self) -> None:
         self.scan_btn.setEnabled(False)
         self.check_updates_btn.setEnabled(False)
@@ -205,6 +222,8 @@ class AppsView(QWidget):
 
         def _done(apps: list[InstalledApp]) -> None:
             self.scan_btn.setEnabled(True)
+            self._last_scan_ts = time.time()
+            self._stale = False
             self.apps = apps
             self._updates_checked = False
             self._updates_error = ""
@@ -390,6 +409,7 @@ class AppsView(QWidget):
         return True
 
     def _run_upgrades(self, targets: list[InstalledApp], label: str) -> None:
+        self._upgrading = True
         self.upgrade_btn.setEnabled(False)
         self.upgrade_all_btn.setEnabled(False)
         self.summary_lbl.setText(f"Actualizando {len(targets)} aplicacion(es) con winget...")
@@ -402,9 +422,10 @@ class AppsView(QWidget):
             self.upgrade_all_btn.setEnabled(True)
             ok = [a for a, good, _m in results if good]
             failed = [(a, m) for a, good, m in results if not good]
+            self._upgrading = False
             for a, _good, m in results:
-                if _good:
-                    self.policy.record_audit_event("usuario", "Actualizar App", m)
+                # v0.6.6: tambien los fallos quedan en la auditoria, con su motivo
+                self.policy.record_audit_event("usuario", "Actualizar App" if _good else "Actualizar App (fallo)", m)
             msg = f"{len(ok)} de {len(targets)} aplicacion(es) actualizadas."
             if len(results) < len(targets):
                 msg += f" Cancelado: {len(targets) - len(results)} sin intentar."
@@ -413,8 +434,12 @@ class AppsView(QWidget):
             self.notify_cb(msg)
             self.summary_lbl.setText(msg)
             self._render_apps()
+            # v0.6.6: verificar con Windows/winget la version que de verdad quedo instalada
+            if results:
+                QTimer.singleShot(1500, self.refresh_apps)
 
         def _err(_e: str) -> None:
+            self._upgrading = False
             self.upgrade_btn.setEnabled(True)
             self.upgrade_all_btn.setEnabled(True)
 

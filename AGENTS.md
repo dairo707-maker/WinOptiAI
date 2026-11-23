@@ -1,31 +1,43 @@
 # AGENTS.md — Guia Multi-Agente (Antigravity, Claude Code, Codex, Cursor)
 
-Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, identidad visual corporativa TRODAI (`0px` Obsidian Navy `#0A0F1D` / Crisp White `#F8FAFC` con `#0EA5E9` / `#3B82F6`, cero emojis, `Space Grotesk` + `JetBrains Mono`), lecciones criticas de `PySide6`/`shiboken6` e invariantes de seguridad del sistema operativo (`v0.6.2`).
+Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, identidad visual corporativa TRODAI (`0px` Obsidian Navy `#0A0F1D` / Crisp White `#F8FAFC` con `#0EA5E9` / `#3B82F6`, cero emojis, `Space Grotesk` + `JetBrains Mono`), lecciones criticas de `PySide6`/`shiboken6`, invariantes de seguridad del sistema operativo (`v0.6.5` publicada e instalada; `v0.6.6` cerrada en repo local, siguiente `v0.6.7`) y separacion respecto al repo hermano Android (`C:\Users\datg2\dev\WinOptiAI-Android`).
 
-## Mapa de Modulos
+## Mapa de Modulos (`src/winoptiai/` — estado `v0.6.6`)
 
-- `src/winoptiai/app.py`: Arranque en 2 fases, QSS embebido, integracion `CrashGuard`, `RegisterApplicationRestart` y manejo de reinicio `--crash-restart`.
-- `src/winoptiai/core/win32_bridge.py`: Puente `ctypes` a `dwmapi.dll`, `kernel32.dll`, `psapi.dll`, `Rstrtmgr.dll`, `shell32.dll` (`RunAs` con COM STA), `crypt32.dll` (DPAPI) y `user32.dll` (`get_foreground_pid`, `RegisterApplicationRestart`).
-- `src/winoptiai/core/safety_guard.py`: Listas blancas OS/antivirus, `atomic_write_text`, `QuarantineVault` transaccional por lotes (`manifest.json`, SHA-256, auto-expiracion 30d de `Basura:*`) y `PreOpBackupManager`.
-- `src/winoptiai/core/sre_policy.py`: Motor de politica hibrida SRE (calibracion dinamica RAM + histeresis 300 s + `audit.jsonl` y persistencia de acciones de auditoria).
-- `src/winoptiai/core/task_control.py`: Control cooperativo (`TaskController`: pausa, guardar pausa, cancelacion, checkpoint) y `SessionManager` (`%LOCALAPPDATA%\WinOptiAI\sessions`).
-- `src/winoptiai/core/crash_guard.py` & `crash_reporter.py`: `faulthandler` nativo, `excepthooks`, vigilante de bloqueos GUI (`8 s`), `session_lock.json`, consulta `wevtutil` (IDs `1000`/`1002` en ANSI `mbcs`) e informe anonimizado opcional hacia GitHub Issues.
-- `src/winoptiai/core/notifications.py`: Centro de notificaciones persistente y consejero periodico de bajo ruido (`PeriodicAdvisor`).
-- `src/winoptiai/core/telemetry.py`: Lector `pdh.dll` independiente de idioma (frecuencia CPU MHz, Turbo %, carga por nucleo y sonda termica ACPI/NVMe).
-- `src/winoptiai/core/i18n.py` & `updater.py`: Soporte ES/EN/PT sincronizado con Inno Setup 6 y auto-actualizador desacoplado con verificacion SHA-256 contra GitHub Releases (`dairo707-maker/WinOptiAI`).
+- `src/winoptiai/app.py`: Arranque en 2 fases, QSS embebido, `AppUserModelID ("TRODAI.WinOptiAI")`, `SingleInstanceLock` (`--elevated-relaunch` espera `30 s`), `DialogLocalizer` global (`QMessageBox` ES/EN/PT + roles), `CrashGuard` y `RegisterApplicationRestart`.
+- `src/winoptiai/core/`:
+  - `win32_bridge.py`: Puente `ctypes` a `dwmapi.dll`, `kernel32.dll`, `psapi.dll`, `Rstrtmgr.dll`, `shell32.dll` (`RunAs` con COM STA, `track=False` + `protect_child_pid` en Elevar Admin), `crypt32.dll` (DPAPI) y `user32.dll` (`get_foreground_pid`, `RegisterApplicationRestart`).
+  - `safety_guard.py`: Listas blancas OS/antivirus, `atomic_write_text`, `QuarantineVault` transaccional por lotes (`manifest.json`, SHA-256, auto-expiracion 30d de `Basura:*`) y `PreOpBackupManager`.
+  - `sre_policy.py`: Motor hibrido SRE (umbral dinamico RAM + histeresis `300 s`, `audit.jsonl`, acciones completadas, configuracion de columnas de tablas `table_column_widths` y horarios del Vigia diario).
+  - `telemetry.py`: Lector `pdh.dll` independiente de idioma con `lazy_init=True` (CPU MHz, Turbo %, carga por nucleo) y sonda termica UAC (`probe_elevated_temperatures`) codificada con `-EncodedCommand` y retorno por codigo de salida (sin escribir archivos en disco elevado).
+  - `usage_telemetry.py`: Telemetria real de `ULTIMO USO` sin falsos `"Hoy"` por fondo ni `st_atime`: ventanas principales visibles (`EnumWindows`), `HKCU\...\Search\JumplistData`, `HKCU\...\Explorer\UserAssist` (ROT13, KNOWNFOLDERIDs, resolucion `.lnk` MS-SHLLINK, perfiles de navegador, aliases de suites), BAM/Prefetch (con UAC) y respaldo `Inst. YYYY-MM-DD`.
+  - `daily_watch.py`: Vigia diario de solo lectura (horarios `9/14/19 h` con tolerancia post-suspension y cooldown `20 h`) que avisa en campana y bandeja cuando detecta actualizaciones `winget` o temporales >= 300 MB.
+  - `task_control.py`, `single_instance.py` & `metrics_history.py`: Control cooperativo (`TaskController`), mutex de instancia unica (con rechazo en `ERROR_ACCESS_DENIED`), e historial `metrics.sqlite` (7 dias, hebra FIFO dedicada).
+  - `crash_guard.py`, `crash_reporter.py`, `notifications.py`, `onboarding_check.py`, `help_catalog.py`, `i18n.py` & `updater.py`: Vigilante GUI (`8 s`), `wevtutil` (`1000`/`1002`), informes anonimizados, chequeo rapido 6 categorias, textos/tooltips ES/EN/PT y auto-actualizador SHA-256 contra `/releases/latest` (`WinOptiAI-Setup.exe`).
+- `src/winoptiai/apps/`:
+  - `app_manager.py`: Inventario Registro + `winget`, actualizaciones individuales o en lote (`upgrade_apps_winget` omitiendo entornos dev y saltos mayores), `Popen` sin timeout de 240s + logs en `%LOCALAPPDATA%\WinOptiAI\logs` + `protect_child_pid` + descarga directa WinINet, aviso de procesos abiertos (`running_app_processes`), lectura de bloqueos del instalador (`installer_blocking_processes`, `v0.6.6`), verificacion de rutas locales (`is_local_disk_path`), iconos MSI/EXE y desinstalacion + restos.
+  - `startup_manager.py`: Escaneo de `Run`/`Startup`/`StartupApproved` con semafono inteligente (`MANTENER`/`PAUSAR`/`DESACTIVAR`) y respaldo reversible.
 - `src/winoptiai/storage/`:
-  - `junk_scanner.py`: Escaner/limpieza por lotes NTFS con omision de `Rstrtmgr.dll` sobre `>400` archivos, rutas OS/IA (`Windows Update`, `VS Code`, `HuggingFace`) y `resume_junk_session()`.
-  - `duplicate_finder.py`: Deduplicador BLAKE3 en 4 etapas + reglas autolimpiador + re-verificacion antes de crear hardlinks NTFS.
-  - `tree_analyzer.py` & `orphan_hunter.py`: Arbol jerarquico acotado (top-60 carpetas por nivel + heap top-100 pesados) y detector de residuos sin programa padre.
-  - `onedrive_optimizer.py`: Optimizador hibrido Files On-Demand local + Microsoft Graph OAuth PKCE cifrado con DPAPI.
-- `src/winoptiai/ai_optimizer/process_manager.py`: Telemetria RAM/`% CPU` con cache de handles `psutil`, `run_ai_boost()` (protege `self_pid`, ventana activa y agentes IA) y cazador de workers MCP zombis.
-- `src/winoptiai/thermal_bios/`: `thermal_controller.py` (perfiles `powercfg` + verificacion `/q`) y `bios_auditor.py` (S.M.A.R.T., eventos 14d `Disk`/`Ntfs`/`WHEA`, TPM/BitLocker/HVCI, OEM BIOS >2a, `CHKDSK`/`DISM`/`SFC`/`WinSxS` con guardia contra sesiones activas).
-- `src/winoptiai/ui/`: Shell `PySide6` Dual Tema (`main_window.py`, `theme.py`, `widgets.py`, `workers.py`, `svg_icons.py`, `system_tray.py`), vistas (`overview_view.py`, `storage_view.py` con casilla tri-estado "Seleccionar todo" y carga perezosa de arbol, `processes_view.py`, `thermal_bios_view.py`) y dialogos (`about_updater_dialog.py`, `notifications_drawer.py`, `crash_report_dialog.py`, `crash_send_dialog.py`).
-- `scripts/build_exe.py`, `packaging/installer.iss` & `tests/`: Empaquetado PyInstaller `--onefile`, Inno Setup 6 con guardia `PrepareToInstall`, y suite de pruebas `test_*`.
+  - `junk_scanner.py`: Escaner/limpieza por lotes NTFS sin `Rstrtmgr.dll` sobre `>400` archivos, rutas OS/IA y `resume_junk_session()`.
+  - `duplicate_finder.py` & `program_guard.py`: Deduplicador BLAKE3 en 4 etapas protegiendo programas/entornos/carpetas copiadas, con reglas autolimpiador y re-verificacion antes de hardlinks NTFS.
+  - `tree_analyzer.py`, `orphan_hunter.py` & `onedrive_optimizer.py`: Arbol acotado (top-60/nivel, heap top-100), residuos sin padre e integracion OneDrive local (`+U -P`) + Graph PKCE con DPAPI.
+- `src/winoptiai/ai_optimizer/process_manager.py`: Telemetria RAM/`% CPU`, `run_ai_boost()` (protege `self_pid`, ventana en foco, agentes IA e instaladores) y cazador de workers MCP zombis.
+- `src/winoptiai/thermal_bios/`: `thermal_controller.py` y `bios_auditor.py` (S.M.A.R.T., eventos 14d, TPM/BitLocker/HVCI, OEM BIOS, `CHKDSK`/`DISM`/`SFC`/`WinSxS` con guardia CBS).
+- `src/winoptiai/ui/`:
+  - Shell y soporte: `main_window.py`, `theme.py` (pestanas `documentMode` sin base nativa blanca), `widgets.py` (`configure_interactive_columns` + persistencia, `configure_sortable_table`, `apply_table_tooltips`), `workers.py`, `svg_icons.py`, `system_tray.py`, `fx.py` (`TrashColumnDelegate`, `UndoToast`), `context_menu.py` (clic derecho filtrado por seleccion), `dialog_localizer.py` (botones/roles ES/EN/PT) y `app_icons.py` (carga por tandas desde disco local).
+  - Graficas y vistas: `history_charts.py` (series 24h/7d, espacio liberado y medidores 2x2), `treemap.py` (`TreemapWidget` opaco), `overview_view.py` (Resumen sin scroll), `storage_view.py`, `processes_view.py`, `thermal_bios_view.py`, `apps_view.py` (refresco auto tras actualizar/>30m/Vigia en `v0.6.6`), `startup_view.py`.
+  - Dialogos: `about_updater_dialog.py`, `notifications_drawer.py`, `crash_report_dialog.py`, `crash_send_dialog.py`, `tour_dialog.py` (Tour 7 pasos).
+- `scripts/build_exe.py`, `packaging/installer.iss` & `tests/`: Empaquetado PyInstaller `--onefile`, Inno Setup 6 y suite completa (`test_*` hasta `test_v066_app_refresh.py`).
+
+## Repositorio Hermano Android (Separado Obligatoriamente)
+
+- **Ruta local:** `C:\Users\datg2\dev\WinOptiAI-Android` (`dairo707-maker/WinOptiAI-Android`, fuera de OneDrive, Kotlin + Jetpack Compose, `:core:test` **46/46**, `:app:assembleDebug` OK).
+- **Invariante critico:** Nunca publicar releases o artefactos Android en este repo de Windows porque `core/updater.py` consulta `/releases/latest` buscando `WinOptiAI-Setup.exe`.
 
 ## Checklist Obligatorio antes de Confirmar Cambios
 
-1. Verificar cero emojis en `src/winoptiai/` y 100% de pruebas aprobadas ejecutando `uv run --no-sync pytest -v`.
-2. Mantener `border-radius: 0px`, paleta monocromo Obsidian Acrylic / Alabaster Frost y diferir con `QTimer.singleShot(0, ...)` toda reconstruccion de tablas/layouts disparada desde widgets hijos (`setCellWidget` / botones dinamicos).
-3. No introducir dependencias fuera de `pyproject.toml` sin actualizar `uv` (`uv sync --extra dev --link-mode=copy` en carpetas OneDrive).
-4. Actualizar `VERSION`, `pyproject.toml`, `CHANGELOG.md`, `CLAUDE.md`/`AGENTS.md` (si aplica) y adjuntar `git note` al commit.
+1. Verificar cero emojis en `src/winoptiai/` y 100% de pruebas aprobadas ejecutando `uv run --no-sync pytest -v` (en entorno headless `offscreen`, las 2 capturas nativas de `test_v065_tabs_dark.py` se omiten con `SKIPPED`).
+2. Mantener `border-radius: 0px` (excepto `QWidget#TopBar`), paleta TRODAI, tipografia `Space Grotesk` (`700`/`500`/`400`/`300`) + `JetBrains Mono` y reconstrucciones diferidas con `QTimer.singleShot(0, ...)` desde widgets hijos.
+3. No escribir archivos temporales desde procesos elevados UAC ni leer iconos/carpetas desde rutas UNC/red (`is_local_disk_path`).
+4. No introducir dependencias fuera de `pyproject.toml` sin actualizar `uv` (`uv sync --extra dev --link-mode=copy` en OneDrive).
+5. Antes de cerrar un release, actualizar `VERSION`, `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py`, `CHANGELOG.md`, `CLAUDE.md` y `AGENTS.md`, y adjuntar `git note` al commit.
