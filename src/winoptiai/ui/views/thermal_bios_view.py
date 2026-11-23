@@ -239,9 +239,15 @@ class ThermalBiosView(QWidget):
     def update_live_telemetry(self, live: LiveSystemTelemetry) -> None:
         freq_ghz = live.cpu_freq_mhz / 1000.0 if live.cpu_freq_mhz else 0.0
         cores_preview = " ".join(f"{int(c)}%" for c in live.per_core_pct[:8])
+        extra = ""
+        if live.commit_pct > 0 or live.gpu_util_pct > 0 or live.disk_active_pct > 0:
+            extra = (
+                f"  |  Disco {live.disk_active_pct:.0f}%  |  Commit {live.commit_pct:.0f}%"
+                f"  |  GPU {live.gpu_util_pct:.0f}% ({live.gpu_vram_shared_mb:.0f} MB)"
+            )
         self.rt_cpu_lbl.setText(
             f"CPU: {live.cpu_utility_pct:.0f}%  |  Reloj: {freq_ghz:.2f} GHz  |  "
-            f"Turbo: {live.cpu_turbo_pct:.0f}%  |  Nucleos: [{cores_preview}]"
+            f"Turbo: {live.cpu_turbo_pct:.0f}%  |  Nucleos: [{cores_preview}]{extra}"
         )
         if live.cpu_temp_c is not None:
             nvme_str = f" / NVMe {live.nvme_temp_c:.0f} C" if live.nvme_temp_c is not None else ""

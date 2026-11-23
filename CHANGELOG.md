@@ -2,6 +2,16 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.7] - 2026-11-22
+
+### Agregado
+- **Telemetria y diagnostico completo sin UAC extra:** PDH multilingue para Disco (`% Disk Time`, cola y MB/s lectura/escritura), Memoria comprometida (`Commit %` / GB / paginacion por segundo via `GetPerformanceInfo`), GPU (`VRAM` compartida y `% GPU Engine` agregado por `PdhGetFormattedCounterArrayW`) y Red local (`RX/TX MB/s`).
+- **Detector de cuello de botella y alertas sostenidas:** etiqueta en vivo en Resumen (`Fluido`, `Disco Saturado`, `Presion Memoria`, `Termica Critica`) con alertas silenciosas a la campana/bandeja tras 30 s continuos de saturacion y enfriamiento antispam.
+- **Historial ampliado y grafica alternable:** migracion SQLite no destructiva en `metrics.sqlite` y alternador `CPU` / `Disco/Commit` en la banda inferior del grafico 24 h / 7 d.
+- **Rendimiento activo y Modo Enfoque (IA):** toggle 100% reversible en 1 clic (`Modo Enfoque` en Resumen, Procesos y Bandeja) que pasa apps secundarias a EcoQoS + prioridad de disco muy baja (`IOPRIO_VERYLOW`), evita suspension sin bloquear pantalla (`SetThreadExecutionState`) y activa perfil `IA Local Maxima` restaurando todo al desactivar o salir.
+- **Controles manuales y Standby RAM:** columna `E/S MB/s` y acciones manuales de `EcoQoS` / `I/O Baja` por proceso seleccionado (protegiendo OS, antivirus, instaladores y agentes IA) + `Purgar Standby (UAC)` mediante `NtSetSystemInformation`.
+- **Inicio Windows Completo y Uptime:** incorpora tareas programadas de inicio (`schtasks` no-Microsoft), servicios automaticos de terceros (`sc config` reversible con UAC) y resumen real de tiempo encendido / tiempo de arranque (`Event ID 100` en Modo Admin).
+
 ## [0.6.6] - 2026-11-22
 
 ### Corregido

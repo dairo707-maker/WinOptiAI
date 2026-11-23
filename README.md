@@ -9,7 +9,7 @@ Creado por **Dairo (`dairo707-maker`)** · Repositorio oficial: `https://github.
 ## Capacidades Principales
 
 - **Resumen sin Scroll, Semaforos y Vigilancia Activa:**
-  - Tarjetas KPI en una fila, cuadricula radial **2x2** (`RAM`, `Disco C:`, `CPU` y `TEMP. CPU` / `MEM. VIRTUAL`), historial de **24 h / 7 d**, grafico de espacio liberado y barra semaforo de subsistemas.
+  - Tarjetas KPI en una fila, cuadricula radial **2x2** (`RAM`, `Disco C:`, `CPU` y `TEMP. CPU` / `COMMIT MEM.`), historial de **24 h / 7 d** alternable (`CPU` o `Disco/Commit`), diagnostico automatico de cuello de botella, alertas sostenidas (`30 s`), grafico de espacio liberado y barra semaforo de subsistemas.
   - **Vigia diario (`daily_watch.py`):** revision de solo lectura en horarios configurables (`9`, `14` y `19 h`) que avisa sobre actualizaciones disponibles o temporales acumulados sin ejecutar cambios automaticos.
 - **Almacenamiento con Seguridad Kernel:**
   - Proteccion estricta de marcadores **OneDrive Cloud-Only** (`GetFileAttributesW`) y exclusiones automaticas (`program_guard.py`) para no tocar entornos Python/Node/programas ni carpetas copiadas.
@@ -18,9 +18,9 @@ Creado por **Dairo (`dairo707-maker`)** · Repositorio oficial: `https://github.
   - **Treemap jerarquico opaco**, arbol de carpetas perezoso, tabla de formatos y top-100 pesados, con columnas **`ULTIMO USO`** y anchos ajustables/persistentes con scroll horizontal en todas las tablas.
 - **Administrador de Aplicaciones e Inicio Inteligente (`apps/`):**
   - Inventario combinado **Registro + `winget`** con **`ULTIMO USO`** real sin requerir UAC (`EnumWindows`, `JumplistData`, `UserAssist` + `.lnk`, aliases de suites), descarga directa **WinINet**, actualizaciones protegidas ante cierres de la app, seleccion multiple / **"Actualizar todas"**, iconos reales y desinstalacion segura con limpieza opcional de residuos hacia Cuarentena.
-  - Analizador de **Inicio de Windows** (`Run`/`Startup`/`StartupApproved`) con sugerencias semaforo (`MANTENER`, `PAUSAR`, `DESACTIVAR`) 100% reversibles.
+  - Analizador de **Inicio de Windows** (`Run`/`Startup`/`StartupApproved`, tareas programadas de inicio y servicios automaticos de terceros + tiempo de encendido/arranque) con sugerencias semaforo (`MANTENER`, `PAUSAR`, `DESACTIVAR`) 100% reversibles.
 - **Optimizacion para IA Agentica, Termica y Hardware:**
-  - Politica hibrida **SRE** calibrada dinamicamente segun RAM fisica (`1.2–4.0 GB`, histeresis `5 m`), **Windows 11 EcoQoS**, compactacion segura `EmptyWorkingSet` (excluyendo ventana activa, agentes IA e instaladores) y cazador de workers MCP zombis.
+  - Politica hibrida **SRE** calibrada dinamicamente segun RAM fisica (`1.2–4.0 GB`, histeresis `5 m`), **Modo Enfoque** reversible (`EcoQoS` + `IOPRIO_VERYLOW` + perfil `IA Maxima` + anti-suspension), controles manuales por proceso (`E/S MB/s`, `EcoQoS`, `E/S Baja`), depuracion **Standby RAM (UAC)** y cazador de workers MCP zombis.
   - Monitoreo `pdh.dll`, sonda termica UAC segura sin archivos temporales, perfiles `powercfg`, S.M.A.R.T., TPM/BitLocker/HVCI y acciones `CHKDSK`/`DISM`/`SFC`/`WinSxS`.
 - **Identidad TRODAI Dual Tema, Idiomas y Auto-Actualizador:**
   - Diseno `0px` **Obsidian Navy** (oscuro) y **Crisp White** (claro) con **Cyber Cyan / Governance Blue**, tipografias OFL **`Space Grotesk`** + **`JetBrains Mono`**, menús contextuales por seleccion, dialogos traducidos (**ES / EN / PT**) y auto-actualizador verificado con **SHA-256**.

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..ai_optimizer.process_manager import (
+    FocusModeManager,
     detect_orphan_ai_workers,
     get_memory_snapshot,
     run_ai_boost,
@@ -39,11 +40,16 @@ from ..core.onboarding_check import QuickCheckReport
 from ..core.safety_guard import PreOpBackupManager, QuarantineVault
 from ..core.sre_policy import SREPolicyEngine
 from ..core.task_control import SessionManager, TaskSessionRecord, new_session_id
-from ..core.telemetry import PdhTelemetryReader
+from ..core.telemetry import (
+    PdhTelemetryReader,
+    SustainedBottleneckMonitor,
+    diagnose_bottleneck,
+)
 from ..core.updater import ReleaseInfo, check_for_updates
 from ..core.win32_bridge import (
     apply_window_theme,
     is_user_admin,
+    purge_standby_memory_list,
     run_elevated_command,
     running_tracked_children,
     terminate_app_child_processes,
@@ -129,7 +135,9 @@ class MainWindow(QMainWindow):
         self.notif_center = NotificationCenter()
         self.session_mgr = SessionManager()
         self.advisor = PeriodicAdvisor(cooldown_seconds=7200)
+        self.focus_mgr = FocusModeManager()
         self.telemetry_reader = PdhTelemetryReader(lazy_init=True)
+        self.bottleneck_monitor = SustainedBottleneckMonitor(sustain_seconds=30.0, cooldown_seconds=600.0)
         # v0.5.8: historial local acotado (1 punto/min, 7 dias) en metrics.sqlite.
         self.metrics_history = MetricsHistory(self.policy.app_dir)
         self._minute_agg = MinuteAggregator()
@@ -361,6 +369,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.overview_view = OverviewView(lang=lang, policy=self.policy)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
+        self.overview_view.trigger_focus_mode.connect(lambda: self._toggle_focus_mode())
         self.overview_view.jump_tab_requested.connect(self._switch_tab)
         self.overview_view.attach_metrics(self.metrics_history, lambda: self.policy.config.ram_threshold_gb)
         self.storage_view = StorageView(
@@ -372,6 +381,8 @@ class MainWindow(QMainWindow):
             lambda: self._execute_ai_boost("usuario"),
             self._set_status,
             lang=lang,
+            focus_cb=lambda: self._toggle_focus_mode(),
+            standby_cb=self._purge_standby_ram,
         )
         self.thermal_view = ThermalBiosView(
             self.policy,
@@ -414,9 +425,11 @@ class MainWindow(QMainWindow):
             on_toggle_sre=self._tray_toggle_sre,
             on_toggle_theme=self._toggle_theme,
             on_open_updates=self._open_about_from_tray,
+            on_toggle_focus=lambda checked: self._toggle_focus_mode(checked),
             initial_thermal=self.policy.config.active_thermal_profile,
             initial_sre=self.policy.config.auto_ram_relief_enabled,
             initial_theme=self.policy.config.theme_mode,
+            initial_focus=self.focus_mgr.active,
         )
         self.tray.show()
 
@@ -521,6 +534,15 @@ class MainWindow(QMainWindow):
         pending = global_pool.activeThreadCount()
         res = terminate_app_child_processes()
         res["pending_tasks"] = pending
+        try:
+            if self.focus_mgr.active:
+                prev_prof = self.focus_mgr.exit().get("previous_thermal")
+                if prev_prof:
+                    apply_thermal_profile(str(prev_prof))
+                    self.policy.config.active_thermal_profile = str(prev_prof)
+                    self.policy.save_config()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self.metrics_history.shutdown()
         except Exception:  # noqa: BLE001
@@ -1187,12 +1209,35 @@ class MainWindow(QMainWindow):
         self.thermal_view.update_live_telemetry(live)
 
         # v0.5.8: un punto por minuto (promedio de las lecturas de 2 s) escrito fuera del hilo GUI.
-        minute = self._minute_agg.add(ram["free_gb"], ram["total_gb"], live.cpu_utility_pct, live.cpu_temp_c)
+        net_kbps = round((live.net_rx_mb_s + live.net_tx_mb_s) * 1024.0, 1)
+        minute = self._minute_agg.add(
+            ram["free_gb"],
+            ram["total_gb"],
+            live.cpu_utility_pct,
+            live.cpu_temp_c,
+            disk_active_pct=live.disk_active_pct,
+            commit_pct=live.commit_pct,
+            gpu_vram_mb=live.gpu_vram_shared_mb,
+            net_kbps=net_kbps,
+        )
         if minute is not None:
             self.metrics_history.record_async(minute)
             # La hebra de metricas es FIFO: la recarga se ejecuta despues de la escritura.
             if self.isVisible():
                 self.overview_view.schedule_history_refresh(200)
+
+        diag = diagnose_bottleneck(live, float(ram["used_pct"]), ram["free_gb"], self.policy.config.ram_threshold_gb)
+        sustained = self.bottleneck_monitor.feed(diag)
+        if sustained is not None:
+            self.policy.record_audit_event("monitor", f"Alerta {sustained.label}", sustained.detail)
+            self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+            self._notify_user(
+                "AVISO",
+                f"Cuello sostenido: {sustained.label}",
+                sustained.detail,
+                action_tab=sustained.action_tab,
+                tray_toast=True,
+            )
 
         if self.policy.evaluate_ram_pressure(ram["free_gb"]):
             self._execute_ai_boost("sre_auto")
@@ -1318,6 +1363,69 @@ class MainWindow(QMainWindow):
 
         self._run_async(_work, _done, "AI Boost (RAM + EcoQoS)", notify_on_complete=False, on_error=_re_enable)
 
+    def _toggle_focus_mode(self, target: bool | None = None) -> None:
+        want = (not self.focus_mgr.active) if target is None else bool(target)
+        if want == self.focus_mgr.active:
+            return
+        if want:
+            prev_prof = self.policy.config.active_thermal_profile
+            res = self.focus_mgr.enter(prev_thermal_profile=prev_prof)
+            if prev_prof != "ai_local":
+                ok_t, _ = apply_thermal_profile("ai_local")
+                if ok_t:
+                    self.policy.config.active_thermal_profile = "ai_local"
+                    self.policy.save_config()
+                    self.thermal_view._highlight_profile_button("ai_local")
+            msg = (
+                f"Modo Enfoque activado ({res['ecoqos']} en EcoQoS, "
+                f"{res['io_low']} en E/S baja, perfil IA Maxima)."
+            )
+            self.policy.record_audit_event("usuario", "Modo Enfoque ON", msg)
+            self._notify_user("COMPLETADO", "Modo Enfoque activado", msg, action_tab=2, tray_toast=False)
+        else:
+            res = self.focus_mgr.exit()
+            prev_prof = res.get("previous_thermal")
+            if prev_prof and prev_prof != self.policy.config.active_thermal_profile:
+                ok_t, _ = apply_thermal_profile(str(prev_prof))
+                if ok_t:
+                    self.policy.config.active_thermal_profile = str(prev_prof)
+                    self.policy.save_config()
+                    self.thermal_view._highlight_profile_button(str(prev_prof))
+            msg = (
+                f"Modo Enfoque revertido ({res['restored_ecoqos']} EcoQoS y "
+                f"{res['restored_io']} E/S restaurados)."
+            )
+            self.policy.record_audit_event("usuario", "Modo Enfoque OFF", msg)
+        self.overview_view.set_focus_mode_active(self.focus_mgr.active)
+        self.processes_view.set_focus_mode_active(self.focus_mgr.active)
+        self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+        self._set_status(msg)
+        self._sync_tray_state()
+
+    def _purge_standby_ram(self) -> None:
+        self.processes_view.standby_btn.setEnabled(False)
+        self._set_status("Solicitando depuracion de Standby RAM (UAC)...")
+
+        def _work() -> tuple[bool, str]:
+            return purge_standby_memory_list(allow_uac=True)
+
+        def _done(res: tuple[bool, str]) -> None:
+            self.processes_view.standby_btn.setEnabled(True)
+            ok, msg = res
+            if ok:
+                self.policy.record_audit_event("usuario", "Purgar Standby RAM", msg)
+                self.overview_view.set_audit_rows(self.policy.read_recent_audit())
+                self._sample_telemetry()
+            self._set_status(msg)
+
+        self._run_async(
+            _work,
+            _done,
+            "Purgar Standby RAM",
+            notify_on_complete=False,
+            on_error=lambda _e: self.processes_view.standby_btn.setEnabled(True),
+        )
+
     def _on_thermal_audit_updated(self) -> None:
         self.overview_view.set_audit_rows(self.policy.read_recent_audit())
         self._sync_tray_state()
@@ -1340,6 +1448,7 @@ class MainWindow(QMainWindow):
             theme_mode=self.policy.config.theme_mode,
             task_summary=task_txt,
             available_update=upd_tag,
+            focus_active=self.focus_mgr.active,
         )
 
     def _check_updates_background(self) -> None:

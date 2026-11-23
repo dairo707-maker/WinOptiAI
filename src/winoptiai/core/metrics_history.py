@@ -69,6 +69,10 @@ class MetricSample:
     cpu_temp_c: float | None
     disk_free_gb: float | None
     app_ram_mb: float | None
+    disk_active_pct: float | None = None
+    commit_pct: float | None = None
+    gpu_vram_mb: float | None = None
+    net_kbps: float | None = None
 
 
 @dataclass(slots=True)
@@ -201,8 +205,21 @@ class MetricsStore:
                 " cpu_pct REAL NOT NULL,"
                 " cpu_temp_c REAL,"
                 " disk_free_gb REAL,"
-                " app_ram_mb REAL)"
+                " app_ram_mb REAL,"
+                " disk_active_pct REAL,"
+                " commit_pct REAL,"
+                " gpu_vram_mb REAL,"
+                " net_kbps REAL)"
             )
+            existing = {str(r[1]) for r in con.execute("PRAGMA table_info(samples)").fetchall()}
+            for col, typ in (
+                ("disk_active_pct", "REAL"),
+                ("commit_pct", "REAL"),
+                ("gpu_vram_mb", "REAL"),
+                ("net_kbps", "REAL"),
+            ):
+                if col not in existing:
+                    con.execute(f"ALTER TABLE samples ADD COLUMN {col} {typ}")
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(str(self.db_path), timeout=5.0)
@@ -214,7 +231,10 @@ class MetricsStore:
         cutoff = int((now if now is not None else time.time()) - RETENTION_SECONDS)
         with self._lock, self._connect() as con:
             con.execute(
-                "INSERT OR REPLACE INTO samples VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO samples"
+                " (ts, ram_free_gb, ram_total_gb, cpu_pct, cpu_temp_c, disk_free_gb, app_ram_mb,"
+                "  disk_active_pct, commit_pct, gpu_vram_mb, net_kbps)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     int(sample.ts),
                     float(sample.ram_free_gb),
@@ -223,6 +243,10 @@ class MetricsStore:
                     sample.cpu_temp_c,
                     sample.disk_free_gb,
                     sample.app_ram_mb,
+                    sample.disk_active_pct,
+                    sample.commit_pct,
+                    sample.gpu_vram_mb,
+                    sample.net_kbps,
                 ),
             )
             con.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
@@ -239,12 +263,16 @@ class MetricsStore:
         with self._connect() as con:
             rows = con.execute(
                 "SELECT MIN(ts), AVG(ram_free_gb), MAX(ram_total_gb), AVG(cpu_pct), AVG(cpu_temp_c),"
-                " AVG(disk_free_gb), AVG(app_ram_mb)"
+                " AVG(disk_free_gb), AVG(app_ram_mb), AVG(disk_active_pct), AVG(commit_pct),"
+                " AVG(gpu_vram_mb), AVG(net_kbps)"
                 " FROM samples WHERE ts >= ? GROUP BY ts / ? ORDER BY 1",
                 (start, bucket),
             ).fetchall()
         return [
-            MetricSample(int(r[0]), float(r[1]), float(r[2]), float(r[3]), r[4], r[5], r[6])
+            MetricSample(
+                int(r[0]), float(r[1]), float(r[2]), float(r[3]),
+                r[4], r[5], r[6], r[7], r[8], r[9], r[10],
+            )
             for r in rows
         ]
 
@@ -258,9 +286,25 @@ class MinuteAggregator:
         self._ram: list[float] = []
         self._cpu: list[float] = []
         self._temp: list[float] = []
+        self._disk_act: list[float] = []
+        self._commit: list[float] = []
+        self._vram: list[float] = []
+        self._net: list[float] = []
         self._total = 0.0
 
-    def add(self, ram_free_gb: float, ram_total_gb: float, cpu_pct: float, cpu_temp_c: float | None, now: float | None = None) -> dict[str, Any] | None:
+    def add(
+        self,
+        ram_free_gb: float,
+        ram_total_gb: float,
+        cpu_pct: float,
+        cpu_temp_c: float | None,
+        now: float | None = None,
+        *,
+        disk_active_pct: float | None = None,
+        commit_pct: float | None = None,
+        gpu_vram_mb: float | None = None,
+        net_kbps: float | None = None,
+    ) -> dict[str, Any] | None:
         ts = time.time() if now is None else now
         if self._started is None:
             self._started = ts
@@ -268,6 +312,14 @@ class MinuteAggregator:
         self._cpu.append(float(cpu_pct))
         if cpu_temp_c is not None:
             self._temp.append(float(cpu_temp_c))
+        if disk_active_pct is not None:
+            self._disk_act.append(float(disk_active_pct))
+        if commit_pct is not None:
+            self._commit.append(float(commit_pct))
+        if gpu_vram_mb is not None:
+            self._vram.append(float(gpu_vram_mb))
+        if net_kbps is not None:
+            self._net.append(float(net_kbps))
         self._total = float(ram_total_gb)
         if ts - self._started < self.interval:
             return None
@@ -277,11 +329,19 @@ class MinuteAggregator:
             "ram_total_gb": self._total,
             "cpu_pct": round(sum(self._cpu) / len(self._cpu), 2),
             "cpu_temp_c": round(sum(self._temp) / len(self._temp), 1) if self._temp else None,
+            "disk_active_pct": round(sum(self._disk_act) / len(self._disk_act), 1) if self._disk_act else None,
+            "commit_pct": round(sum(self._commit) / len(self._commit), 1) if self._commit else None,
+            "gpu_vram_mb": round(sum(self._vram) / len(self._vram), 1) if self._vram else None,
+            "net_kbps": round(sum(self._net) / len(self._net), 1) if self._net else None,
         }
         self._started = ts
         self._ram.clear()
         self._cpu.clear()
         self._temp.clear()
+        self._disk_act.clear()
+        self._commit.clear()
+        self._vram.clear()
+        self._net.clear()
         return out
 
 
@@ -323,6 +383,10 @@ class MetricsHistory:
             cpu_temp_c=partial.get("cpu_temp_c"),
             disk_free_gb=disk_free,
             app_ram_mb=app_mb,
+            disk_active_pct=partial.get("disk_active_pct"),
+            commit_pct=partial.get("commit_pct"),
+            gpu_vram_mb=partial.get("gpu_vram_mb"),
+            net_kbps=partial.get("net_kbps"),
         )
         self.store.add(sample)
         return sample

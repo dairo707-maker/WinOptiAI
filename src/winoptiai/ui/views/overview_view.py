@@ -19,12 +19,13 @@ from PySide6.QtWidgets import (
 from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
 from ...core.metrics_history import MetricsHistory
-from ...core.telemetry import LiveSystemTelemetry
+from ...core.telemetry import LiveSystemTelemetry, diagnose_bottleneck
 from ..history_charts import FreedSpacePanel, HistoryPanel, SystemGaugesWidget
 from ..svg_icons import load_svg_icon
 from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ..theme import get_palette
 from ..widgets import (
+    AdaptiveButton,
     FlowLayout,
     GlassPanel,
     NumericTableItem,
@@ -45,6 +46,7 @@ class OverviewView(QWidget):
     """Scroll-free dashboard overview with TRODAI semaphores, radial gauges, and 24h/7d history."""
 
     trigger_ai_boost = Signal()
+    trigger_focus_mode = Signal()
     jump_tab_requested = Signal(int)
 
     def __init__(
@@ -78,6 +80,7 @@ class OverviewView(QWidget):
         self.title_lbl.setObjectName("PageTitle")
         self.sub_lbl = QLabel(tr("overview_sub", lang))
         self.sub_lbl.setObjectName("PageSubtitle")
+        self.sub_lbl.setWordWrap(True)
         title_box.addWidget(self.title_lbl)
         title_box.addWidget(self.sub_lbl)
         header.addLayout(title_box, stretch=1)
@@ -92,6 +95,15 @@ class OverviewView(QWidget):
         self.help_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.help_toggle_btn.clicked.connect(self._toggle_benefit_strip)
         header.addWidget(self.help_toggle_btn)
+
+        self.focus_btn = AdaptiveButton("Modo Enfoque")
+        self.focus_btn.setObjectName("GhostAction")
+        self.focus_btn.set_variants(["Modo Enfoque", "Enfoque"])
+        self.focus_btn.setCheckable(True)
+        self.focus_btn.setToolTip(TOOLTIPS["overview_focus"])
+        self.focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_btn.clicked.connect(self.trigger_focus_mode.emit)
+        header.addWidget(self.focus_btn)
 
         self.boost_btn = QPushButton(f" {tr('btn_ai_boost', lang)}")
         self.boost_btn.setObjectName("PrimaryAction")
@@ -278,9 +290,12 @@ class OverviewView(QWidget):
         used_pct = int(ram["used_pct"])
         ram_tone = "risk" if free_gb < threshold_gb else ("warn" if free_gb < threshold_gb + 1.0 else "ok")
         ram_tag = "CRITICO" if ram_tone == "risk" else ("AJUSTADA" if ram_tone == "warn" else "OK")
+        ram_sub = f"de {total_gb:.0f} GB ({used_pct}%)"
+        if live.commit_pct > 0:
+            ram_sub += f" · Commit {live.commit_pct:.0f}%"
         self.ram_cell.update_metric(
             f"{free_gb:.2f} GB libres",
-            f"de {total_gb:.0f} GB ({used_pct}% uso)",
+            ram_sub,
             used_pct,
             ram_tag,
             ram_tone,
@@ -289,11 +304,15 @@ class OverviewView(QWidget):
 
         used_disk = max(0.0, disk_total_gb - disk_free_gb)
         disk_pct = int((used_disk / disk_total_gb) * 100) if disk_total_gb > 0 else 0
-        disk_tone = "risk" if disk_pct >= 92 else ("warn" if disk_pct >= 82 else "ok")
-        disk_tag = "LLENO" if disk_tone == "risk" else ("ALTO" if disk_tone == "warn" else "OK")
+        disk_tone = "risk" if disk_pct >= 92 or live.disk_active_pct >= 92 else ("warn" if disk_pct >= 82 or live.disk_active_pct >= 75 else "ok")
+        disk_tag = "SATURADO" if live.disk_active_pct >= 90 else ("LLENO" if disk_pct >= 92 else ("ALTO" if disk_tone == "warn" else "OK"))
+        io_rw = live.disk_read_mb_s + live.disk_write_mb_s
+        disk_sub = f"{used_disk:.0f} / {disk_total_gb:.0f} GB ({disk_pct}%)"
+        if live.disk_active_pct > 0 or io_rw > 0:
+            disk_sub += f" · Act. {live.disk_active_pct:.0f}% · {io_rw:.1f} MB/s"
         self.disk_cell.update_metric(
             f"{disk_free_gb:.1f} GB libres",
-            f"{used_disk:.0f} / {disk_total_gb:.0f} GB ({disk_pct}%)",
+            disk_sub,
             disk_pct,
             disk_tag,
             disk_tone,
@@ -306,21 +325,33 @@ class OverviewView(QWidget):
         cpu_tone = "risk" if (live.cpu_temp_c or 0) >= 85 or cpu_int >= 90 else ("warn" if (live.cpu_temp_c or 0) >= 72 or cpu_int >= 70 else "ok")
         cpu_tag = f"{live.cpu_temp_c:.0f} C" if live.cpu_temp_c else ("ALTA" if cpu_tone != "ok" else "OK")
         thermal_short = thermal_label.replace(" Inteligente", "").replace(" Local Maxima", " Max").replace(" / Silencioso", "")
+        gpu_part = f" · GPU {live.gpu_util_pct:.0f}%" if (live.gpu_util_pct > 0 or live.gpu_vram_shared_mb > 0) else ""
         self.cpu_cell.update_metric(
             f"{live.cpu_utility_pct:.0f}% · {freq_ghz:.2f} GHz{temp_part}",
-            f"Turbo {live.cpu_turbo_pct:.0f}% · {thermal_short}",
+            f"Turbo {live.cpu_turbo_pct:.0f}%{gpu_part} · {thermal_short}",
             cpu_int,
             cpu_tag,
             cpu_tone,
         )
         self.update_subsystem_semaphore("thermal", cpu_tag, cpu_tone)
 
+        net_total = live.net_rx_mb_s + live.net_tx_mb_s
+        sre_sub = f"Umbral < {threshold_gb:.1f} GB · 5m"
+        if net_total > 0 or live.handles_count > 0:
+            sre_sub = f"Umbral < {threshold_gb:.1f} GB · Red {net_total:.1f} MB/s"
         self.sre_cell.update_metric(
             "Activo" if sre_active else "Manual",
-            f"Umbral < {threshold_gb:.1f} GB · 5m",
+            sre_sub,
             100 if sre_active else 0,
             "ON" if sre_active else "PAUSA",
             "ok" if sre_active else "warn",
+        )
+
+        diag = diagnose_bottleneck(live, float(ram["used_pct"]), free_gb, threshold_gb)
+        self.policy_tag.set_tone(diag.label.upper(), "active" if diag.tone == "ok" else diag.tone)
+        self.policy_tag.setToolTip(
+            f"{diag.detail}\nHandles: {live.handles_count} | Hilos: {live.threads_count} | "
+            f"VRAM comp.: {live.gpu_vram_shared_mb:.0f} MB"
         )
 
         # Semáforo global para el panel de medidores radiales
@@ -340,6 +371,15 @@ class OverviewView(QWidget):
             details=details, fourth=self._fourth_gauge(live),
         )
 
+    def set_focus_mode_active(self, active: bool) -> None:
+        self.focus_btn.blockSignals(True)
+        self.focus_btn.setChecked(bool(active))
+        self.focus_btn.set_variants(["Enfoque: ON", "Enf. ON"] if active else ["Modo Enfoque", "Enfoque"])
+        self.focus_btn.setProperty("selected", bool(active))
+        self.focus_btn.style().unpolish(self.focus_btn)
+        self.focus_btn.style().polish(self.focus_btn)
+        self.focus_btn.blockSignals(False)
+
     @staticmethod
     def _fourth_gauge(live: LiveSystemTelemetry) -> dict:
         """4.o medidor: temperatura de CPU si hay sensor; si no, memoria virtual (archivo de paginacion)."""
@@ -349,6 +389,11 @@ class OverviewView(QWidget):
             tone = "risk" if t >= 85 else ("warn" if t >= 72 else "ok")
             return {"label": "TEMP. CPU", "pct": min(100, t), "tone": tone, "text": f"{t} C",
                     "detail": "Critica" if tone == "risk" else ("Elevada" if tone == "warn" else "Normal")}
+        if live.commit_pct > 0:
+            cp = int(round(live.commit_pct))
+            tone = "risk" if cp >= 90 else ("warn" if cp >= 78 else "ok")
+            return {"label": "COMMIT MEM.", "pct": min(100, cp), "tone": tone, "text": f"{cp}%",
+                    "detail": f"{live.commit_used_gb:.1f} / {live.commit_limit_gb:.1f} GB"}
         try:
             import psutil
 

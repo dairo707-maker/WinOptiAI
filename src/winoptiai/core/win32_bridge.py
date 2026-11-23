@@ -66,6 +66,14 @@ IDLE_PRIORITY_CLASS = 0x00000040
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 NORMAL_PRIORITY_CLASS = 0x00000020
 
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+SYSTEM_MEMORY_LIST_INFORMATION = 80
+MEMORY_PURGE_STANDBY_LIST = 4
+SE_PRIVILEGE_ENABLED = 0x00000002
+TOKEN_ADJUST_PRIVILEGES = 0x0020
+TOKEN_QUERY = 0x0008
+
 # Restart Manager constants
 CCH_RM_MAX_APP_NAME = 255
 CCH_RM_MAX_SVC_NAME = 63
@@ -312,6 +320,129 @@ def trim_process_working_set(pid: int) -> bool:
         return bool(psapi.EmptyWorkingSet(handle))
     finally:
         kernel32.CloseHandle(handle)
+
+
+def set_process_io_priority(pid: int, low: bool = True) -> bool:
+    """Set Windows I/O priority for a process (IOPRIO_VERYLOW vs IOPRIO_NORMAL)."""
+    if not IS_WINDOWS or pid <= 4:
+        return False
+    try:
+        import psutil
+
+        proc = psutil.Process(int(pid))
+        target = psutil.IOPRIO_VERYLOW if low else psutil.IOPRIO_NORMAL
+        proc.ionice(target)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def get_process_io_low(pid: int) -> bool:
+    """Return True when the process is running at low/very-low I/O priority."""
+    if not IS_WINDOWS or pid <= 4:
+        return False
+    try:
+        import psutil
+
+        return int(psutil.Process(int(pid)).ionice()) <= int(psutil.IOPRIO_LOW)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def set_focus_keep_awake(active: bool) -> bool:
+    """Prevent Windows idle sleep during active Focus Mode without locking display off."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        flags = (ES_CONTINUOUS | ES_SYSTEM_REQUIRED) if active else ES_CONTINUOUS
+        fn = ctypes.windll.kernel32.SetThreadExecutionState
+        fn.argtypes = [wintypes.DWORD]
+        fn.restype = wintypes.DWORD
+        return bool(fn(wintypes.DWORD(flags)))
+    except OSError:
+        return False
+
+
+def _enable_token_privilege(privilege_name: str) -> bool:
+    if not IS_WINDOWS:
+        return False
+
+    class _LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class _LUID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Luid", _LUID), ("Attributes", wintypes.DWORD)]
+
+    class _TOKEN_PRIVILEGES(ctypes.Structure):
+        _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", _LUID_AND_ATTRIBUTES * 1)]
+
+    advapi32 = ctypes.windll.advapi32
+    kernel32 = ctypes.windll.kernel32
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, ctypes.byref(token)):
+        return False
+    try:
+        luid = _LUID()
+        if not advapi32.LookupPrivilegeValueW(None, privilege_name, ctypes.byref(luid)):
+            return False
+        tp = _TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
+        ok = bool(advapi32.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None))
+        return ok and kernel32.GetLastError() == 0
+    except OSError:
+        return False
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def purge_standby_memory_list(allow_uac: bool = False) -> tuple[bool, str]:
+    """Purge Windows Standby RAM cache cleanly via NtSetSystemInformation (requires Admin + privilege)."""
+    if not IS_WINDOWS:
+        return False, "Solo compatible con Windows"
+    if not is_user_admin():
+        if not allow_uac:
+            return False, "Requiere Administrador (UAC) para depurar la lista Standby."
+        import base64
+
+        cs = (
+            "using System; using System.Runtime.InteropServices; "
+            "public class WinOptiMem { "
+            "[DllImport(\"ntdll.dll\")] public static extern int NtSetSystemInformation(int c, ref int d, int l); "
+            "[DllImport(\"advapi32.dll\", SetLastError=true)] static extern bool OpenProcessToken(IntPtr h, uint a, out IntPtr t); "
+            "[DllImport(\"advapi32.dll\", SetLastError=true, CharSet=CharSet.Unicode)] static extern bool LookupPrivilegeValue(string s, string n, out long l); "
+            "[DllImport(\"advapi32.dll\", SetLastError=true)] static extern bool AdjustTokenPrivileges(IntPtr t, bool d, ref TP n, int bl, IntPtr p, IntPtr rl); "
+            "[StructLayout(LayoutKind.Sequential, Pack=1)] struct TP { public int C; public long L; public int A; } "
+            "public static int Purge() { "
+            "IntPtr t; if (!OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, 0x28, out t)) return -1; "
+            "long l; if (!LookupPrivilegeValue(null, \"SeProfileSingleProcessPrivilege\", out l)) return -2; "
+            "TP tp = new TP { C=1, L=l, A=2 }; AdjustTokenPrivileges(t, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero); "
+            "int cmd = 4; return NtSetSystemInformation(80, ref cmd, 4); } }"
+        )
+        ps_cmd = (
+            f"Add-Type -TypeDefinition '{cs}'; "
+            "$rc = [WinOptiMem]::Purge(); if ($rc -eq 0) { exit 0 } else { exit 2 }"
+        )
+        enc = base64.b64encode(ps_cmd.encode("utf-16le")).decode("ascii")
+        ok = run_elevated_command("powershell.exe", f"-NoProfile -WindowStyle Hidden -EncodedCommand {enc}", track=False)
+        if ok:
+            return True, "Solicitud UAC de depuracion Standby lanzada."
+        return False, "Autorizacion UAC cancelada."
+
+    if not _enable_token_privilege("SeProfileSingleProcessPrivilege"):
+        return False, "No se pudo habilitar SeProfileSingleProcessPrivilege."
+    try:
+        ntdll = ctypes.windll.ntdll
+        ntdll.NtSetSystemInformation.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_ulong]
+        ntdll.NtSetSystemInformation.restype = ctypes.c_long
+        cmd = ctypes.c_int(MEMORY_PURGE_STANDBY_LIST)
+        st = int(ntdll.NtSetSystemInformation(SYSTEM_MEMORY_LIST_INFORMATION, ctypes.byref(cmd), ctypes.sizeof(cmd)))
+        if st == 0:
+            return True, "Lista Standby de Windows depurada (RAM cache liberada sin cerrar apps)."
+        return False, f"NtSetSystemInformation devolvio codigo 0x{st & 0xFFFFFFFF:08X}."
+    except OSError as exc:
+        return False, f"Error depurando lista Standby: {exc}"
 
 
 def create_ntfs_hardlink(link_path: str | Path, existing_file: str | Path) -> bool:

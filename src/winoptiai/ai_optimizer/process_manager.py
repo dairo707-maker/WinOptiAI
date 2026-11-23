@@ -11,11 +11,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import time
 from typing import Callable
 import psutil
 
 from ..core.safety_guard import PROTECTED_PROCESS_NAMES
-from ..core.win32_bridge import get_foreground_pid, set_process_ecoqos, trim_process_working_set
+from ..core.win32_bridge import (
+    get_foreground_pid,
+    get_process_io_low,
+    set_focus_keep_awake,
+    set_process_ecoqos,
+    set_process_io_priority,
+    trim_process_working_set,
+)
 
 
 # Active coding & AI agent processes whose foreground responsiveness is preserved
@@ -96,6 +104,9 @@ class ProcessEntry:
     role: str        # "AGENTE_IA" | "SISTEMA" | "SEGUNDO_PLANO" | "ZOMBI_MCP" | "USUARIO"
     ecoqos_eligible: bool
     started_ts: float = 0.0
+    io_mb_s: float = 0.0
+    io_low: bool = False
+    ecoqos_active: bool = False
 
 
 @dataclass(slots=True)
@@ -121,12 +132,59 @@ def get_memory_snapshot() -> dict[str, float]:
 
 
 _PROC_CACHE: dict[int, psutil.Process] = {}
+_IO_PREV: dict[int, tuple[float, int]] = {}
+_MANUAL_ECOQOS_PIDS: set[int] = set()
+
+
+def is_protected_or_agent(pid: int, name: str, *, respect_foreground: bool = True) -> str:
+    """Return non-empty reason if PID must not be throttled manually or by Focus Mode."""
+    low = (name or "").strip().lower()
+    if pid <= 4 or pid == os.getpid():
+        return "Proceso propio o del nucleo protegido."
+    if low in PROTECTED_PROCESS_NAMES:
+        return f"Proceso del sistema o seguridad protegido ({name})."
+    if low in AI_FOREGROUND_AGENTS:
+        return f"Herramienta IA o IDE protegida ({name})."
+    if is_installer_process_name(low):
+        return f"Instalador o actualizador activo protegido ({name})."
+    if respect_foreground:
+        fg = get_foreground_pid()
+        if fg is not None and pid == fg:
+            return f"Ventana activa en primer plano protegida ({name})."
+    return ""
+
+
+def apply_manual_process_ecoqos(pid: int, name: str, enable: bool) -> tuple[bool, str]:
+    """Manually enable or restore Windows 11 EcoQoS on a non-protected process."""
+    reason = is_protected_or_agent(pid, name, respect_foreground=False) if enable else ""
+    if reason:
+        return False, reason
+    ok = set_process_ecoqos(pid, enable=enable)
+    if ok:
+        if enable:
+            _MANUAL_ECOQOS_PIDS.add(int(pid))
+        else:
+            _MANUAL_ECOQOS_PIDS.discard(int(pid))
+        return True, f"EcoQoS {'activado' if enable else 'restaurado'} en {name} (PID {pid})."
+    return False, f"No se pudo cambiar EcoQoS en {name} (PID {pid})."
+
+
+def apply_manual_process_io_priority(pid: int, name: str, low: bool) -> tuple[bool, str]:
+    """Manually throttle or restore disk I/O priority (IOPRIO_VERYLOW vs NORMAL) for a PID."""
+    reason = is_protected_or_agent(pid, name, respect_foreground=False) if low else ""
+    if reason:
+        return False, reason
+    ok = set_process_io_priority(pid, low=low)
+    if ok:
+        return True, f"Prioridad E/S {'Baja' if low else 'Normal'} aplicada a {name} (PID {pid})."
+    return False, f"No se pudo cambiar prioridad E/S en {name} (PID {pid})."
 
 
 def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
-    """Enumerate running processes sorted by Working Set RAM usage with live cached CPU%."""
+    """Enumerate running processes sorted by Working Set RAM usage with live CPU% & Disk I/O MB/s."""
     entries: list[ProcessEntry] = []
     seen_pids: set[int] = set()
+    now_mono = time.monotonic()
     for proc in psutil.process_iter(["pid", "name", "memory_info"]):
         try:
             pid = int(proc.info["pid"])
@@ -138,10 +196,22 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
             if cached is None:
                 _PROC_CACHE[pid] = proc
                 cpu_pct = round(float(proc.cpu_percent(interval=None) or 0.0), 1)
+                p_ref = proc
             else:
                 cpu_pct = round(float(cached.cpu_percent(interval=None) or 0.0), 1)
+                p_ref = cached
             mem = proc.info.get("memory_info")
             ram_mb = round((mem.rss if mem else 0) / (1024 * 1024), 1)
+            io_mb_s = 0.0
+            try:
+                ioc = p_ref.io_counters()
+                total_io = int(ioc.read_bytes) + int(ioc.write_bytes)
+                prev = _IO_PREV.get(pid)
+                if prev is not None and (now_mono - prev[0]) > 0.15:
+                    io_mb_s = round(max(0, total_io - prev[1]) / (now_mono - prev[0]) / (1024 * 1024), 2)
+                _IO_PREV[pid] = (now_mono, total_io)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, AttributeError):
+                pass
             try:
                 started_ts = float(proc.create_time() or 0.0)
             except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
@@ -170,6 +240,9 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
                     role=role,
                     ecoqos_eligible=eligible,
                     started_ts=started_ts,
+                    io_mb_s=io_mb_s,
+                    io_low=get_process_io_low(pid) if eligible else False,
+                    ecoqos_active=pid in _MANUAL_ECOQOS_PIDS,
                 )
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -179,6 +252,8 @@ def list_top_processes(limit: int = 35) -> list[ProcessEntry]:
     for stale_pid in list(_PROC_CACHE.keys()):
         if stale_pid not in seen_pids:
             _PROC_CACHE.pop(stale_pid, None)
+            _IO_PREV.pop(stale_pid, None)
+            _MANUAL_ECOQOS_PIDS.discard(stale_pid)
     return entries[:limit]
 
 
@@ -298,3 +373,61 @@ def terminate_zombie_worker(pid: int) -> tuple[bool, str]:
         return True, f"Proceso {lname} ({pid}) finalizado"
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired) as exc:
         return False, f"No se pudo finalizar PID {pid}: {exc}"
+
+
+class FocusModeManager:
+    """Reversible 1-click Focus / AI session optimizer (EcoQoS + I/O VeryLow + KeepAwake)."""
+
+    def __init__(self) -> None:
+        self.active: bool = False
+        self._ecoqos_pids: set[int] = set()
+        self._iolow_pids: set[int] = set()
+        self.previous_thermal_profile: str | None = None
+
+    def enter(self, *, prev_thermal_profile: str | None = None) -> dict[str, int | bool]:
+        if self.active:
+            return {"already_active": True, "ecoqos": len(self._ecoqos_pids), "io_low": len(self._iolow_pids), "keep_awake": True}
+        self.previous_thermal_profile = prev_thermal_profile
+        fg_pid = get_foreground_pid()
+        self_pid = os.getpid()
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                pid = int(proc.info["pid"])
+                name = (proc.info["name"] or "").strip().lower()
+                if not name or pid <= 4 or pid == self_pid or (fg_pid is not None and pid == fg_pid):
+                    continue
+                if name not in ECOQOS_ELIGIBLE_NAMES or is_protected_or_agent(pid, name, respect_foreground=False):
+                    continue
+                if set_process_ecoqos(pid, enable=True):
+                    self._ecoqos_pids.add(pid)
+                    _MANUAL_ECOQOS_PIDS.add(pid)
+                if not get_process_io_low(pid) and set_process_io_priority(pid, low=True):
+                    self._iolow_pids.add(pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        awake_ok = set_focus_keep_awake(True)
+        self.active = True
+        return {
+            "already_active": False,
+            "ecoqos": len(self._ecoqos_pids),
+            "io_low": len(self._iolow_pids),
+            "keep_awake": awake_ok,
+        }
+
+    def exit(self) -> dict[str, int | str | None]:
+        restored_eco = 0
+        restored_io = 0
+        for pid in list(self._ecoqos_pids):
+            _MANUAL_ECOQOS_PIDS.discard(pid)
+            if set_process_ecoqos(pid, enable=False):
+                restored_eco += 1
+        for pid in list(self._iolow_pids):
+            if set_process_io_priority(pid, low=False):
+                restored_io += 1
+        self._ecoqos_pids.clear()
+        self._iolow_pids.clear()
+        set_focus_keep_awake(False)
+        prev_prof = self.previous_thermal_profile
+        self.previous_thermal_profile = None
+        self.active = False
+        return {"restored_ecoqos": restored_eco, "restored_io": restored_io, "previous_thermal": prev_prof}

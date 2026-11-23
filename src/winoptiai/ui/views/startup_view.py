@@ -19,7 +19,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...apps.startup_manager import StartupItem, scan_startup_items, set_startup_item_enabled
+from ...apps.startup_manager import (
+    StartupItem,
+    read_last_boot_summary,
+    scan_startup_items,
+    set_startup_item_enabled,
+)
 from ...core.help_catalog import TOOLTIPS
 from ...core.i18n import tr
 from ...core.safety_guard import PreOpBackupManager
@@ -35,6 +40,7 @@ from ..widgets import (
     NumericTableItem,
     SectionBenefitStrip,
     SemaphoreDot,
+    StatusTag,
     apply_table_tooltips,
     configure_interactive_columns,
     configure_sortable_table,
@@ -120,6 +126,8 @@ class StartupView(QWidget):
         self.filter_combo.addItem("Activas al inicio", "enabled")
         self.filter_combo.addItem("Sugeridas: Desactivar", "DESACTIVAR")
         self.filter_combo.addItem("Sugeridas: Pausar", "PAUSAR")
+        self.filter_combo.addItem("Tareas programadas", "SCHTASK")
+        self.filter_combo.addItem("Servicios 3ros", "SERVICE")
         self.filter_combo.currentIndexChanged.connect(lambda _i: self._render_items())
         actions.addWidget(self.filter_combo)
         root.addLayout(actions)
@@ -134,6 +142,8 @@ class StartupView(QWidget):
         self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
         sl.addWidget(self.summary_lbl, stretch=1)
+        self.boot_tag = StatusTag("UPTIME", "neutral")
+        sl.addWidget(self.boot_tag)
         root.addWidget(summary)
 
         self.startup_table = QTableWidget(0, 7)
@@ -162,15 +172,29 @@ class StartupView(QWidget):
 
     def refresh_startup(self) -> None:
         self.scan_btn.setEnabled(False)
-        self.summary_lbl.setText("Analizando entradas de inicio y frecuencia real de uso...")
+        self.summary_lbl.setText("Analizando entradas de inicio, tareas, servicios y arranque...")
 
-        def _done(items: list[StartupItem]) -> None:
+        def _work(progress_cb=None):
+            return scan_startup_items(progress_cb=progress_cb), read_last_boot_summary()
+
+        def _done(res: tuple[list[StartupItem], dict]) -> None:
             self.scan_btn.setEnabled(True)
+            items, boot_info = res
             self.items = items
+            up = str(boot_info.get("uptime_label") or "")
+            boot_lbl = str(boot_info.get("boot_label") or "")
+            if boot_lbl:
+                self.boot_tag.set_tone(f"ARRANQUE {boot_lbl} · {up}", "active")
+                self.boot_tag.setToolTip("Tiempo registrado por Windows (Event ID 100)")
+            elif up:
+                self.boot_tag.set_tone(f"ENCENDIDO {up}", "neutral")
+                self.boot_tag.setToolTip(
+                    "Tiempo desde el ultimo arranque (el tiempo BIOS/Windows exacto requiere Elevar Admin UAC)"
+                )
             self._render_items()
 
         self.run_async(
-            scan_startup_items,
+            _work,
             _done,
             "Analisis inicio Windows",
             notify_on_complete=False,
@@ -264,6 +288,8 @@ class StartupView(QWidget):
             if flt == "enabled" and not it.enabled:
                 continue
             if flt in ("DESACTIVAR", "PAUSAR") and it.recommendation != flt:
+                continue
+            if flt in ("SCHTASK", "SERVICE") and it.location_kind != flt:
                 continue
             visible.append((idx, it))
 

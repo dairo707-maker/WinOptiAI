@@ -93,9 +93,11 @@ class WinOptiTray(QSystemTrayIcon):
         on_toggle_sre: Callable[[bool], None] | None = None,
         on_toggle_theme: Callable[[], None] | None = None,
         on_open_updates: Callable[[], None] | None = None,
+        on_toggle_focus: Callable[[bool], None] | None = None,
         initial_thermal: str = "balanced",
         initial_sre: bool = True,
         initial_theme: str = "dark",
+        initial_focus: bool = False,
     ) -> None:
         super().__init__(build_high_contrast_tray_icon(), parent)
         self._last_taskbar_light: bool | None = None
@@ -122,6 +124,15 @@ class WinOptiTray(QSystemTrayIcon):
         act_boost = QAction("Ejecutar AI Boost (RAM + EcoQoS)", menu)
         act_boost.triggered.connect(on_boost)
         menu.addAction(act_boost)
+
+        self.focus_action = QAction("Modo Enfoque (EcoQoS + E/S)", menu)
+        self.focus_action.setCheckable(True)
+        self.focus_action.setChecked(initial_focus)
+        if on_toggle_focus is not None:
+            self.focus_action.toggled.connect(lambda checked: on_toggle_focus(bool(checked)))
+        else:
+            self.focus_action.setEnabled(False)
+        menu.addAction(self.focus_action)
 
         menu.addSeparator()
         self.therm_menu = menu.addMenu("Perfil Termico")
@@ -194,6 +205,7 @@ class WinOptiTray(QSystemTrayIcon):
         theme_mode: str | None = None,
         task_summary: str | None = None,
         available_update: str | None = None,
+        focus_active: bool | None = None,
     ) -> None:
         """Keep tray checkmarks, active mode titles, update notice, and tooltip synchronized with MainWindow."""
         if thermal_key is not None:
@@ -207,6 +219,11 @@ class WinOptiTray(QSystemTrayIcon):
             self.sre_action.blockSignals(True)
             self.sre_action.setChecked(bool(sre_enabled))
             self.sre_action.blockSignals(False)
+
+        if focus_active is not None:
+            self.focus_action.blockSignals(True)
+            self.focus_action.setChecked(bool(focus_active))
+            self.focus_action.blockSignals(False)
 
         if theme_mode is not None:
             self.theme_action.blockSignals(True)

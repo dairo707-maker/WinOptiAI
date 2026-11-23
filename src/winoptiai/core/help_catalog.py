@@ -128,6 +128,11 @@ TOOLTIPS: dict[str, str] = {
         "Mejora: libera cientos de MB o GB de RAM al instante para tus agentes IA y navegadores.\n"
         "Seguridad: no cierra ninguna aplicacion; protege tu ventana activa, IDEs y antivirus."
     ),
+    "overview_focus": (
+        "Activa o desactiva Modo Enfoque: pasa apps en segundo plano a EcoQoS + prioridad E/S baja y evita suspension.\n"
+        "Mejora: prioriza disco, CPU y energia para tu sesion activa o modelo IA local.\n"
+        "Seguridad: 100% reversible en un clic o al cerrar la app; nunca toca IDEs ni antivirus."
+    ),
     "metric_ram": (
         "Memoria RAM fisica libre y en uso en tiempo real.\n"
         "Mejora: si baja del umbral SRE por 3 muestras seguidas (histeresis 5 min), AI Boost alivia presion."
@@ -247,6 +252,24 @@ TOOLTIPS: dict[str, str] = {
         "Finaliza unicamente el proceso zombi seleccionado (Node/Python/uv cuyo proceso padre ya no existe).\n"
         "Mejora: recupera RAM atrapada por servidores MCP o scripts abandonados.\n"
         "Seguridad: bloqueado para cualquier proceso del sistema, IDE o agente activo."
+    ),
+    "proc_focus": (
+        "Activa o revierte Modo Enfoque: aplica EcoQoS + prioridad de E/S muy baja a clutter y evita suspension.\n"
+        "Mejora: protege tu ventana activa y tareas IA sin interrupciones de fondo.\n"
+        "Seguridad: reversible en un clic devolviendo prioridades previas."
+    ),
+    "proc_standby": (
+        "Depura la memoria cache en espera (Standby List) de Windows mediante NtSetSystemInformation (UAC).\n"
+        "Mejora: recupera memoria cache estancada antes de abrir cargas pesadas o IA local.\n"
+        "Seguridad: solo libera paginas inactivas en cache; no cierra aplicaciones."
+    ),
+    "proc_ecoqos_manual": (
+        "Alterna Windows 11 EcoQoS (Modo Eficiencia) sobre los procesos seleccionados en la tabla.\n"
+        "Seguridad: bloqueado para sistema, antivirus, instaladores y agentes IA."
+    ),
+    "proc_iolow_manual": (
+        "Alterna prioridad de disco E/S muy baja (IOPRIO_VERYLOW) sobre los procesos seleccionados.\n"
+        "Mejora: evita que respaldos o procesos secundarios frenen tu disco principal."
     ),
     # Thermal & BIOS View
     "thermal_audit": (

@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 from ...ai_optimizer.process_manager import (
     ProcessEntry,
     ZombieWorker,
+    apply_manual_process_ecoqos,
+    apply_manual_process_io_priority,
     detect_orphan_ai_workers,
     list_top_processes,
     terminate_zombie_worker,
@@ -30,6 +32,7 @@ from ..svg_icons import load_svg_icon
 from ..context_menu import copy_row_extra, copy_text, install_action_menu
 from ...core.help_catalog import TOOLTIPS
 from ..widgets import (
+    FlowLayout,
     GlassPanel,
     NumericTableItem,
     SectionBenefitStrip,
@@ -51,14 +54,20 @@ class ProcessesView(QWidget):
         notify_cb: Callable[[str], None],
         lang: str = "es",
         parent: QWidget | None = None,
+        *,
+        focus_cb: Callable[[], None] | None = None,
+        standby_cb: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.policy = policy
         self.run_async = run_async
         self.boost_cb = boost_cb
         self.notify_cb = notify_cb
+        self.focus_cb = focus_cb
+        self.standby_cb = standby_cb
         self.lang = lang
         self.zombies: list[ZombieWorker] = []
+        self._entries: list[ProcessEntry] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
@@ -89,11 +98,10 @@ class ProcessesView(QWidget):
         self.benefit_strip = SectionBenefitStrip("processes")
         root.addWidget(self.benefit_strip)
 
-        # Active WinOptiAI Tasks + SRE Toggles bar
+        # Active WinOptiAI Tasks + SRE Toggles + Manual Perf Controls (FlowLayout: never clips)
         sre_panel = GlassPanel()
-        sre_layout = QHBoxLayout(sre_panel)
+        sre_layout = FlowLayout(sre_panel, spacing=10)
         sre_layout.setContentsMargins(14, 10, 14, 10)
-        sre_layout.setSpacing(16)
 
         self.auto_ram_chk = QCheckBox(
             f"Alivio SRE si RAM libre < {self.policy.config.ram_threshold_gb:.1f} GB (5m)"
@@ -109,9 +117,37 @@ class ProcessesView(QWidget):
         self.ecoqos_chk.toggled.connect(self._save_policy_toggles)
         sre_layout.addWidget(self.ecoqos_chk)
 
-        sre_layout.addStretch()
         self.active_task_tag = StatusTag("0 TAREAS APP", "neutral")
         sre_layout.addWidget(self.active_task_tag)
+
+        self.focus_btn = QPushButton("Modo Enfoque (IA)")
+        self.focus_btn.setObjectName("GhostAction")
+        self.focus_btn.setCheckable(True)
+        self.focus_btn.setToolTip(TOOLTIPS["proc_focus"])
+        self.focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.focus_btn.clicked.connect(lambda: self.focus_cb() if self.focus_cb else None)
+        sre_layout.addWidget(self.focus_btn)
+
+        self.standby_btn = QPushButton("Purgar Standby (UAC)")
+        self.standby_btn.setObjectName("GhostAction")
+        self.standby_btn.setToolTip(TOOLTIPS["proc_standby"])
+        self.standby_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.standby_btn.clicked.connect(lambda: self.standby_cb() if self.standby_cb else self._purge_standby_fallback())
+        sre_layout.addWidget(self.standby_btn)
+
+        self.manual_eco_btn = QPushButton("EcoQoS Sel.")
+        self.manual_eco_btn.setObjectName("GhostAction")
+        self.manual_eco_btn.setToolTip(TOOLTIPS["proc_ecoqos_manual"])
+        self.manual_eco_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.manual_eco_btn.clicked.connect(self._toggle_selected_ecoqos)
+        sre_layout.addWidget(self.manual_eco_btn)
+
+        self.manual_io_btn = QPushButton("E/S Baja Sel.")
+        self.manual_io_btn.setObjectName("GhostAction")
+        self.manual_io_btn.setToolTip(TOOLTIPS["proc_iolow_manual"])
+        self.manual_io_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.manual_io_btn.clicked.connect(self._toggle_selected_io_low)
+        sre_layout.addWidget(self.manual_io_btn)
 
         self.refresh_btn = QPushButton("Actualizar")
         self.refresh_btn.setObjectName("GhostAction")
@@ -121,15 +157,15 @@ class ProcessesView(QWidget):
         sre_layout.addWidget(self.refresh_btn)
         root.addWidget(sre_panel)
 
-        # Active top processes table (sortable by PID, Name, Class, CPU%, RAM, EcoQoS, Last Used)
-        self.proc_table = QTableWidget(0, 7)
+        # Active top processes table (sortable by PID, Name, Class, CPU%, E/S MB/s, RAM, EcoQoS/IO, Last Used)
+        self.proc_table = QTableWidget(0, 8)
         self.proc_table.setHorizontalHeaderLabels(
-            ["PID", "PROCESO", "CLASIFICACION", "CPU (%)", "RAM (MB)", "ECOQOS", "ULTIMO USO"]
+            ["PID", "PROCESO", "CLASIFICACION", "CPU (%)", "E/S MB/s", "RAM (MB)", "ECOQOS / E/S", "ULTIMO USO"]
         )
         configure_sortable_table(self.proc_table)
         configure_interactive_columns(
             self.proc_table,
-            [78, 250, 175, 92, 102, 98, 128],
+            [78, 220, 155, 86, 102, 100, 132, 128],
             policy=self.policy,
             storage_key="proc_table",
         )
@@ -197,7 +233,62 @@ class ProcessesView(QWidget):
         self.run_async(lambda: list_top_processes(45), self._render_processes, "Escaneo procesos")
         self.run_async(detect_orphan_ai_workers, self._render_zombies, "Cazador MCP")
 
+    def set_focus_mode_active(self, active: bool) -> None:
+        self.focus_btn.blockSignals(True)
+        self.focus_btn.setChecked(bool(active))
+        self.focus_btn.setText("Enfoque: ON (Revertir)" if active else "Modo Enfoque (IA)")
+        self.focus_btn.setProperty("selected", bool(active))
+        self.focus_btn.style().unpolish(self.focus_btn)
+        self.focus_btn.style().polish(self.focus_btn)
+        self.focus_btn.blockSignals(False)
+
+    def _purge_standby_fallback(self) -> None:
+        from ...core.win32_bridge import purge_standby_memory_list
+
+        self.standby_btn.setEnabled(False)
+        self.run_async(
+            lambda: purge_standby_memory_list(allow_uac=True),
+            lambda res: (self.standby_btn.setEnabled(True), self.notify_cb(res[1])),
+            "Purgar Standby RAM",
+            notify_on_complete=False,
+            on_error=lambda _e: self.standby_btn.setEnabled(True),
+        )
+
+    def _selected_entry(self) -> ProcessEntry | None:
+        r = self.proc_table.currentRow()
+        if r < 0:
+            return None
+        it = self.proc_table.item(r, 0)
+        if it is None:
+            return None
+        try:
+            pid = int(it.text())
+        except ValueError:
+            return None
+        return next((e for e in self._entries if e.pid == pid), None)
+
+    def _toggle_selected_ecoqos(self) -> None:
+        ent = self._selected_entry()
+        if ent is None:
+            self.notify_cb("Selecciona un proceso en la tabla primero.")
+            return
+        ok, msg = apply_manual_process_ecoqos(ent.pid, ent.name, not ent.ecoqos_active)
+        self.notify_cb(msg)
+        if ok:
+            self.refresh_all()
+
+    def _toggle_selected_io_low(self) -> None:
+        ent = self._selected_entry()
+        if ent is None:
+            self.notify_cb("Selecciona un proceso en la tabla primero.")
+            return
+        ok, msg = apply_manual_process_io_priority(ent.pid, ent.name, not ent.io_low)
+        self.notify_cb(msg)
+        if ok:
+            self.refresh_all()
+
     def _render_processes(self, entries: list[ProcessEntry]) -> None:
+        self._entries = list(entries)
         self.proc_table.setSortingEnabled(False)
         self.proc_table.setRowCount(len(entries))
         for r, item in enumerate(entries):
@@ -206,11 +297,21 @@ class ProcessesView(QWidget):
             self.proc_table.setItem(r, 1, QTableWidgetItem(item.name))
             self.proc_table.setItem(r, 2, QTableWidgetItem(item.role))
             self.proc_table.setItem(r, 3, NumericTableItem(f"{item.cpu_pct:.1f}", item.cpu_pct))
-            self.proc_table.setItem(r, 4, NumericTableItem(f"{item.ram_mb:.1f}", item.ram_mb))
-            self.proc_table.setItem(
-                r, 5, QTableWidgetItem("ELEGIBLE" if item.ecoqos_eligible else "PROTEGIDO")
-            )
-            self.proc_table.setItem(r, 6, NumericTableItem(format_last_used_time(ts), ts))
+            io_rate = float(getattr(item, "io_mb_s", 0.0))
+            self.proc_table.setItem(r, 4, NumericTableItem(f"{io_rate:.2f}", io_rate))
+            self.proc_table.setItem(r, 5, NumericTableItem(f"{item.ram_mb:.1f}", item.ram_mb))
+            if not item.ecoqos_eligible:
+                st_txt = "PROTEGIDO"
+            elif item.ecoqos_active and item.io_low:
+                st_txt = "ECO + I/O BAJA"
+            elif item.ecoqos_active:
+                st_txt = "ECO ACTIVO"
+            elif item.io_low:
+                st_txt = "E/S BAJA"
+            else:
+                st_txt = "ELEGIBLE"
+            self.proc_table.setItem(r, 6, QTableWidgetItem(st_txt))
+            self.proc_table.setItem(r, 7, NumericTableItem(format_last_used_time(ts), ts))
         apply_table_tooltips(self.proc_table)
         self.proc_table.setSortingEnabled(True)
 
@@ -244,12 +345,27 @@ class ProcessesView(QWidget):
             exe = psutil.Process(int(pid_item.text())).exe()
         except Exception:  # noqa: BLE001 - proceso cerrado o sin permiso
             exe = ""
-        return [
+        extras_list: list = []
+        if table is self.proc_table:
+            ent = self._selected_entry()
+            if ent is not None and ent.ecoqos_eligible:
+                extras_list.append((
+                    "Quitar EcoQoS" if ent.ecoqos_active else "Aplicar EcoQoS",
+                    self._toggle_selected_ecoqos,
+                    True,
+                ))
+                extras_list.append((
+                    "Prioridad E/S Normal" if ent.io_low else "Prioridad E/S Baja",
+                    self._toggle_selected_io_low,
+                    True,
+                ))
+        extras_list.extend([
             ("Abrir ubicacion del archivo", lambda: reveal_in_explorer(exe), bool(exe)),
             ("Copiar nombre", lambda: copy_text(name_item.text() if name_item else ""), name_item is not None),
             ("Copiar PID", lambda: copy_text(pid_item.text()), True),
             copy_row_extra(table),
-        ]
+        ])
+        return extras_list
 
     def _kill_selected_zombie(self) -> None:
         rows = sorted({idx.row() for idx in self.zombie_table.selectedIndexes()})

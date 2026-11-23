@@ -105,9 +105,14 @@ class TimeSeriesChart(QWidget):
         self.now = time.time()
         self.range_s = float(RANGE_24H)
         self.threshold_gb = 0.0
+        self.secondary_mode = "cpu"  # "cpu" | "io"
         self._event_hits: list[tuple[QRectF, AuditEvent]] = []
         self.setMouseTracking(True)
         self.setMinimumHeight(150)
+
+    def set_secondary_mode(self, mode: str) -> None:
+        self.secondary_mode = "io" if mode == "io" else "cpu"
+        self.update()
 
     # ------------------------------------------------------------------ data
     def set_data(
@@ -290,7 +295,8 @@ class TimeSeriesChart(QWidget):
         p.setFont(ui)
         p.setPen(muted)
         p.drawText(ram_band.adjusted(6, 3, -6, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, "RAM libre (promedio por minuto)")
-        p.drawText(cpu_band.adjusted(6, 3, -6, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, "CPU %")
+        sec_title = "Disco activo % (naranja) / Commit % (azul)" if self.secondary_mode == "io" else "CPU %"
+        p.drawText(cpu_band.adjusted(6, 3, -6, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, sec_title)
 
         # Umbral SRE (linea discontinua, tono ambar atenuado; nunca se recorta arriba)
         if 0 < self.threshold_gb <= ram_max:
@@ -318,7 +324,11 @@ class TimeSeriesChart(QWidget):
         segments = self._segments()
         for seg in segments:
             self._draw_series(p, seg, ram_band, lambda s: s.ram_free_gb / ram_max, ram_col, fill=True)
-            self._draw_series(p, seg, cpu_band, lambda s: s.cpu_pct / 100.0, cpu_col, fill=True)
+            if self.secondary_mode == "io":
+                self._draw_series(p, seg, cpu_band, lambda s: (s.commit_pct or 0.0) / 100.0, cpu_col, fill=False)
+                self._draw_series(p, seg, cpu_band, lambda s: (s.disk_active_pct or 0.0) / 100.0, warn, fill=True)
+            else:
+                self._draw_series(p, seg, cpu_band, lambda s: s.cpu_pct / 100.0, cpu_col, fill=True)
 
         # Marcadores de eventos
         p.setFont(mono)
@@ -397,6 +407,14 @@ class TimeSeriesChart(QWidget):
             return
         when = datetime.fromtimestamp(s.ts).strftime("%d/%m %H:%M")
         parts = [when, f"RAM libre {s.ram_free_gb:.2f} GB de {s.ram_total_gb:.1f} GB", f"CPU {s.cpu_pct:.0f}%"]
+        if s.disk_active_pct is not None:
+            parts.append(f"Disco activo {s.disk_active_pct:.0f}%")
+        if s.commit_pct is not None:
+            parts.append(f"Commit {s.commit_pct:.0f}%")
+        if s.gpu_vram_mb is not None and s.gpu_vram_mb > 0:
+            parts.append(f"GPU VRAM {s.gpu_vram_mb:.0f} MB")
+        if s.net_kbps is not None:
+            parts.append(f"Red {s.net_kbps:.0f} KB/s")
         if s.cpu_temp_c is not None:
             parts.append(f"Temperatura {s.cpu_temp_c:.0f} C")
         if s.disk_free_gb is not None:
@@ -642,7 +660,10 @@ class _AsyncPanel(QWidget):
         self._token += 1
         token = self._token
         relay = self._relay
-        fut = self.history.submit(self.history.load_snapshot, self._range())
+        try:
+            fut = self.history.submit(self.history.load_snapshot, self._range())
+        except RuntimeError:
+            return
 
         def _done(f) -> None:
             try:
@@ -675,6 +696,13 @@ class HistoryPanel(_AsyncPanel):
         lay.setContentsMargins(0, 6, 0, 0)
         lay.setSpacing(4)
         head, self.range_buttons = _range_tabs([(RANGE_24H, "24 h"), (RANGE_7D, "7 d")], self.set_range)
+        self.mode_btn = QPushButton("CPU")
+        self.mode_btn.setObjectName("GhostAction")
+        self.mode_btn.setCheckable(True)
+        self.mode_btn.setToolTip("Alternar banda inferior entre CPU % o Disco activo / Commit %")
+        self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_btn.clicked.connect(self._toggle_secondary_mode)
+        head.addWidget(self.mode_btn)
         self.summary_lbl = QLabel("Sin datos todavia")
         self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
@@ -688,6 +716,11 @@ class HistoryPanel(_AsyncPanel):
         self.chart.setMinimumHeight(170)
         lay.addWidget(self.chart, stretch=1)
         _mark_selected(self.range_buttons, self.range_s)
+
+    def _toggle_secondary_mode(self) -> None:
+        is_io = self.mode_btn.isChecked()
+        self.mode_btn.setText("Disco/Commit" if is_io else "CPU")
+        self.chart.set_secondary_mode("io" if is_io else "cpu")
 
     def _range(self) -> int:
         return self.range_s
@@ -706,9 +739,11 @@ class HistoryPanel(_AsyncPanel):
             cpu = [s.cpu_pct for s in samples]
             below = sum(1 for v in ram if v < self.threshold_fn())
             boosts = sum(1 for e in events if e.category == EVENT_BOOST)
+            disk_vals = [s.disk_active_pct for s in samples if s.disk_active_pct is not None]
+            extra = f" | Disco prom {sum(disk_vals) / len(disk_vals):.0f}%" if disk_vals else ""
             self.summary_lbl.setText(
                 f"RAM libre min {min(ram):.2f} GB | CPU prom {sum(cpu) / len(cpu):.0f}% | "
-                f"{below * 100 // len(ram)}% bajo umbral | {boosts} AI Boost"
+                f"{below * 100 // len(ram)}% bajo umbral | {boosts} AI Boost{extra}"
             )
         else:
             self.summary_lbl.setText("Sin datos todavia")
