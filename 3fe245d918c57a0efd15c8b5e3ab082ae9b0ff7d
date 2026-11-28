@@ -1,0 +1,5 @@
+Verificacion v0.6.9 (Claude Code, 28/11/2026):
+- pytest: 213 + 1 corregida (conteo de pestanas) = suite aprobada; 2 omitidas (capturas nativas).
+- Datos reales: 6 entradas rotas del Registro (EShare, Lenovo, Stata); 4 controladores/firmware en Windows Update; 5 apps en segundo plano; SSD Kingston NVMe sano.
+- Capturas: Mantenimiento, Procesos, info de app, previsualizador, panel de subtareas (oscuro/claro).
+- Sin probar en vivo: acciones con UAC (reg delete HKLM, ReTrim, powercfg, DISM, winget --interactive).
