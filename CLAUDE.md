@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.8` instalada localmente; ultimo binario publicado en GitHub `v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.8`, publicada en GitHub e instalada localmente) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -32,7 +32,7 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
 
-## Trabajo v0.6.8 (27/11/2026, Antigravity + Claude Code; commit local, SIN release)
+## Cambios Consolidados v0.6.8 (27/11/2026, Antigravity + Claude Code; release v0.6.8 publicado)
 
 - **Logo propio (`assets/icons/winoptiai_logo.svg`, Claude Code):** separa producto y organizacion como en PDF Lector. 100 % poligonal (sin curvas ni `path`), colores fijos (no `currentColor`): `load_svg_pixmap("winoptiai_logo", size=N)` lo dibuja tal cual. Usos: `main_window.brand_icon` (26 px, cabecera "WinOptiAI / vX"), `about_updater_dialog` (40 px), `tour_dialog` (28 px), `system_tray.build_high_contrast_tray_icon` (16-48 px; respaldo al emblema TRODAI si falta el SVG), `app._app_window_icon` (respaldo del `.ico`). `scripts/build_exe.render_logo` rasteriza el SVG con Qt para `winoptiai.ico` (16-256) y `wizard_large/small.bmp`. `brand.svg` se conserva: sello `org_seal` 12 px + "by TRODAI" al pie de la barra lateral y 14 px en Acerca de. Pruebas: `tests/test_v068_logo.py`.
 - **Instalada localmente** la v0.6.8 (`%LOCALAPPDATA%\Programs\WinOptiAI`), primera muestra de `metrics.sqlite` a los ~14 s.
@@ -154,7 +154,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.5`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.8`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).
