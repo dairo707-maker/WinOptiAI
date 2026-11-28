@@ -138,7 +138,7 @@ class QuickTourDialog(QDialog):
         # Header
         hdr = QHBoxLayout()
         icon_lbl = QLabel()
-        icon_lbl.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=24))
+        icon_lbl.setPixmap(load_svg_pixmap("winoptiai_logo", size=28))  # v0.6.8: logo del producto
         hdr.addWidget(icon_lbl)
         hdr.addSpacing(8)
 

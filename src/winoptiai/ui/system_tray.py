@@ -36,8 +36,35 @@ def _favicon_svg_template() -> str:
     return _FALLBACK_FAVICON_SVG
 
 
+def _logo_svg_bytes() -> bytes | None:
+    path = get_base_dir() / "assets" / "icons" / "winoptiai_logo.svg"
+    try:
+        return path.read_bytes() if path.exists() else None
+    except OSError:
+        return None
+
+
 def build_high_contrast_tray_icon(light_taskbar: bool | None = None) -> QIcon:
-    """Render crisp multi-size TRODAI Hexa-Vault octagonal badge visible on Light & Dark Windows 11 trays."""
+    """Icono de bandeja nitido en 16-32 px, visible en barra clara y oscura de Windows 11.
+
+    v0.6.8: usa el logo propio de WinOptiAI (contenedor octogonal oscuro con borde gris, que da
+    contraste en ambos temas). Si el SVG faltara, se dibuja el emblema TRODAI de respaldo.
+    """
+    logo = _logo_svg_bytes()
+    if logo:
+        renderer = QSvgRenderer(QByteArray(logo))
+        if renderer.isValid():
+            icon = QIcon()
+            for sz in (16, 20, 24, 32, 48):
+                pm = QPixmap(sz, sz)
+                pm.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(pm)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                renderer.render(painter)
+                painter.end()
+                icon.addPixmap(pm)
+            return icon
+
     is_light = is_windows_taskbar_light_theme() if light_taskbar is None else light_taskbar
     icon = QIcon()
 

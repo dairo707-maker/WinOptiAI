@@ -2,6 +2,23 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.8] - 2026-11-27
+
+### Corregido
+- **Actualizaciones de aplicaciones (`apps/app_manager.py`, `ui/views/apps_view.py`):**
+  - Diagnostico y accion especifica por cada fallo real de `winget`: detecccion de `0x80073D28` (ofrece reintento elevado UAC para paquetes como Microsoft WSL), paquetes que `winget` prohíbe actualizar marcados como `SOLO EDITOR` (ej. Anaconda3), errores de certificado HTTPS `0x80072F0D` (mensaje claro y acceso directo HTTPS oficial sin desactivar TLS), procesos bloqueantes en subcarpetas (`Git\usr\bin\bash.exe`) y variantes `"instaló correctamente"` / codigo `3010`/`0x80070BC2`.
+  - Nuevo boton contextual `Reintentar fallidas` en Aplicaciones y preservacion de diagnosticos tras el re-escaneo automatico.
+- **Grafica de historial (`core/metrics_history.py`, `ui/main_window.py`):**
+  - Primera muestra rapida a los ~10 s del arranque (`MinuteAggregator(interval=60, initial_interval=10)`) y registro explicito de errores en `MetricsHistory.record_async` (`last_error` + `crash.log`) para no fallar nunca en silencio.
+
+### Agregado
+- **Logo propio de WinOptiAI (`assets/icons/winoptiai_logo.svg`):** emblema 100 % poligonal (contenedor octogonal oscuro, engranaje de 8 dientes, escoba blanca/cian y basura limpiada en verde/cian), legible desde 16 px en barra clara y oscura. Se usa en el icono del `.exe`/barra de tareas, la bandeja, la cabecera de la barra lateral, Acerca de, el Tour y el instalador (`winoptiai.ico` de 16 a 256 px y `wizard_large/small.bmp` generados desde el SVG en `scripts/build_exe.py`). El escudo TRODAI (`brand.svg`) queda como sello discreto "by TRODAI" al pie de la barra lateral y en Acerca de.
+
+### Mejorado (Estetica TRODAI desde PDF Lector)
+- **Botones, barras y minianimaciones (`ui/motion.py`, `ui/theme.py`, `ui/widgets.py`):**
+  - Botones planos sin bordes ni acentos cian, `StatusTag` y roles de accion 100% solidos opacos (cero `rgba`), barra lateral con indicador deslizante (`SlidingNavPanel`), selector de rango deslizante `24 h / 7 d` (`SlidingSegmentedControl`), transicion suave de vistas (`ViewTransitionController`) y minianimacion poligonal reactiva al puntero (`MotionBackdropWidget`) con pausa automatica por bateria/carga (`MotionPerformanceGuard`).
+  - Retiro de etiquetas redundantes (`TRODAI SRE`, `EN REPOSO`, chip `GUIA` y badge de version en cabecera).
+
 ## [0.6.7] - 2026-11-22
 
 ### Agregado

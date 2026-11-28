@@ -62,6 +62,9 @@ class InstalledApp:
     scope: str = "Usuario"  # "Usuario" | "Sistema"
     install_date_ts: float = 0.0
     icon_path: str = ""  # v0.6.5: archivo (.exe/.ico/.dll) del que Windows toma el icono de la app
+    upgrade_status: str = ""  # v0.6.8: "", "editor_only", "needs_admin", "tls_error", "blocked", "failed"
+    upgrade_note: str = ""
+    upgrade_url: str = ""
 
 
 def is_protected_application(name: str, publisher: str = "", install_location: str = "") -> str:
@@ -546,13 +549,41 @@ def check_app_updates_winget(
 # pasado WINGET_UPGRADE_MAX_WAIT_S, se deja de esperar SIN matar nada (sigue en segundo plano).
 WINGET_UPGRADE_MAX_WAIT_S = 45 * 60
 WINGET_UPDATE_NOT_APPLICABLE = 0x8A15002B  # APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE
-_WINGET_OK_TEXTS: tuple[str, ...] = ("successfully installed", "instalado correctamente")
+WINGET_ADMIN_REQUIRED = 0x80073D28
+WINGET_TLS_INVALID_CA = 0x80072F0D
+WINGET_REBOOT_REQUIRED_CODES: tuple[int, ...] = (3010, 0x80070BC2)
+_WINGET_OK_TEXTS: tuple[str, ...] = (
+    "successfully installed",
+    "instalado correctamente",
+    "instaló correctamente",
+    "instalo correctamente",
+    "reinicie la aplicaci",
+    "restart the application",
+)
 _WINGET_NOT_APPLICABLE_TEXTS: tuple[str, ...] = (
     "no applicable upgrade",
     "no newer package versions",
     "ninguna actualizaci",
     "no se encontraron versiones",
 )
+_WINGET_EDITOR_ONLY_TEXTS: tuple[str, ...] = (
+    "no se puede actualizar con winget",
+    "cannot be upgraded using winget",
+    "use el metodo proporcionado por el editor",
+    "use el método proporcionado por el editor",
+    "use the method provided by the publisher",
+)
+_WINGET_ADMIN_TEXTS: tuple[str, ...] = (
+    "administrator privileges are required",
+    "se requieren privilegios de administrador",
+    "0x80073d28",
+)
+_WINGET_TLS_TEXTS: tuple[str, ...] = (
+    "0x80072f0d",
+    "internetopenurl() failed",
+    "sec_e_untrusted_root",
+)
+_HTTPS_URL_RE = re.compile(r"https://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def winget_settings_path() -> Path:
@@ -634,18 +665,73 @@ def winget_phase(output_tail: str) -> str:
     return "instalando" if idx_inst > idx_down else "descargando"
 
 
-def interpret_winget_result(returncode: int, output: str) -> tuple[bool, str]:
-    """(ok, motivo) de un ``winget upgrade``: 'ok', 'al_dia' o el ultimo renglon del error."""
-    low = (output or "").lower()
+def _extract_safe_https_url(output: str) -> str:
+    """Extrae la primera URL HTTPS de la salida de winget (solo https://, nunca file/http)."""
+    for raw in _HTTPS_URL_RE.findall(output or ""):
+        clean = raw.rstrip(".,;:)")
+        if clean.lower().startswith("https://"):
+            return clean
+    return ""
+
+
+def classify_winget_failure(returncode: int, output: str) -> tuple[str, str, str]:
+    """Clasifica el resultado de ``winget upgrade`` en (categoria, mensaje_legible, url_https).
+
+    Categorias: ``ok``, ``ok_restart``, ``al_dia``, ``editor_only``, ``needs_admin``,
+    ``tls_error``, ``blocked`` o ``failed``.
+    """
+    text = output or ""
+    low = text.lower()
     code = int(returncode) & 0xFFFFFFFF
+    url = _extract_safe_https_url(text)
+
     if code == 0 or any(t in low for t in _WINGET_OK_TEXTS):
-        return True, "ok"
+        if code in WINGET_REBOOT_REQUIRED_CODES or "reinicie" in low or "restart" in low:
+            return "ok_restart", "Actualizacion completada (reinicia la app o el equipo si lo pide).", url
+        return "ok", "ok", url
+    if code in WINGET_REBOOT_REQUIRED_CODES:
+        return "ok_restart", "Actualizacion completada (requiere reiniciar la aplicacion o el equipo).", url
+    if any(t in low for t in _WINGET_EDITOR_ONLY_TEXTS):
+        return (
+            "editor_only",
+            "Este paquete no se puede actualizar con winget: usa el actualizador propio del editor.",
+            url,
+        )
     if code == WINGET_UPDATE_NOT_APPLICABLE or any(t in low for t in _WINGET_NOT_APPLICABLE_TEXTS):
-        return True, "al_dia"
+        return "al_dia", "al_dia", url
+    if code == WINGET_ADMIN_REQUIRED or any(t in low for t in _WINGET_ADMIN_TEXTS):
+        return (
+            "needs_admin",
+            "Requiere permisos de Administrador (0x80073D28). Reintenta elevando con UAC.",
+            url,
+        )
+    if code == WINGET_TLS_INVALID_CA or any(t in low for t in _WINGET_TLS_TEXTS):
+        return (
+            "tls_error",
+            "Windows rechazo el certificado HTTPS del servidor (0x80072F0D). Revisa tu red o actualiza desde el sitio oficial.",
+            url,
+        )
+    blocking = installer_blocking_processes(text)
+    if blocking:
+        return (
+            "blocked",
+            f"Estaban abiertos {', '.join(blocking)}. Cierralos y vuelve a intentar.",
+            url,
+        )
     snippet = next(
-        (ln.strip() for ln in reversed((output or "").replace("\r", "\n").splitlines()) if ln.strip()), ""
+        (ln.strip() for ln in reversed(text.replace("\r", "\n").splitlines()) if ln.strip()), ""
     )[:160]
-    return False, f"codigo 0x{code:08X}: {snippet}"
+    return "failed", f"codigo 0x{code:08X}: {snippet}", url
+
+
+def interpret_winget_result(returncode: int, output: str) -> tuple[bool, str]:
+    """(ok, motivo) de un ``winget upgrade``: 'ok', 'al_dia' o motivo legible del error."""
+    category, detail, _url = classify_winget_failure(returncode, output)
+    if category in ("ok", "ok_restart"):
+        return True, "ok"
+    if category == "al_dia":
+        return True, "al_dia"
+    return False, detail
 
 
 _INSTALLER_LOG_RE = re.compile(
@@ -676,21 +762,34 @@ def installer_blocking_processes(winget_output: str) -> list[str]:
     return names[:6]
 
 
+_GIT_CLI_PROCS: frozenset[str] = frozenset({"git.exe", "bash.exe", "sh.exe", "mintty.exe", "ssh-agent.exe"})
+
+
 def running_app_processes(app: InstalledApp) -> list[str]:
-    """Procesos abiertos de esa app (exe dentro de su carpeta): el instalador fallaria o esperaria."""
-    loc = (app.install_location or "").strip().strip('"').rstrip("\\/").lower()
-    if len(loc) < 8 or is_protected_path(loc):
+    """Procesos abiertos de esa app (incluye subcarpetas como Git\\usr\\bin\\bash.exe)."""
+    raw_loc = (app.install_location or "").strip().strip('"')
+    loc = os.path.normcase(os.path.normpath(raw_loc)) if raw_loc else ""
+    valid_loc = len(loc) >= 8 and not is_protected_path(loc)
+    is_git_app = "git" in (app.winget_id or "").lower() or (app.name or "").strip().lower() == "git"
+    if not valid_loc and not is_git_app:
         return []
     try:
         import psutil
     except ImportError:
         return []
     names: set[str] = set()
+    loc_prefix = loc + os.sep if valid_loc else ""
     for proc in psutil.process_iter(["name", "exe"]):
         try:
-            exe = (proc.info.get("exe") or "").lower()
-            if exe.startswith(loc + "\\"):
-                names.add(proc.info.get("name") or os.path.basename(exe))
+            exe_raw = proc.info.get("exe") or ""
+            if not exe_raw:
+                continue
+            exe = os.path.normcase(os.path.normpath(exe_raw))
+            pname = (proc.info.get("name") or os.path.basename(exe)).strip()
+            if valid_loc and exe.startswith(loc_prefix):
+                names.add(pname)
+            elif is_git_app and pname.lower() in _GIT_CLI_PROCS and "\\git\\" in exe:
+                names.add(pname)
         except Exception:  # noqa: BLE001
             continue
     return sorted(names)
@@ -741,6 +840,8 @@ def upgrade_app_winget(
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
     except OSError as exc:
+        app.upgrade_status = "failed"
+        app.upgrade_note = str(exc)
         return False, f"No se pudo iniciar winget para {app.name}: {exc}"
     protect_child_pid(proc.pid)
 
@@ -770,20 +871,72 @@ def upgrade_app_winget(
                 progress_cb(min(95, 10 + int(elapsed / 6)), msg)
         time.sleep(poll_s)
 
-    ok, why = interpret_winget_result(rc, _read_tail(log_path, 32768))
-    if ok:
+    tail = _read_tail(log_path, 32768)
+    category, detail, url = classify_winget_failure(rc, tail)
+    app.upgrade_url = url or app.upgrade_url
+    if category in ("ok", "ok_restart"):
+        app.upgrade_status = ""
+        app.upgrade_note = ""
         if progress_cb:
             progress_cb(100, f"{app.name} actualizado")
-        if why == "al_dia":
-            return True, f"{app.name} ya estaba en la ultima version."
+        if category == "ok_restart":
+            return True, f"{app.name} actualizado correctamente ({target}; reinicia la app o PC si lo solicita)."
         return True, f"{app.name} actualizado correctamente ({target})."
-    blocking = installer_blocking_processes(_read_tail(log_path, 32768))
-    if blocking:
+    if category == "al_dia":
+        app.upgrade_status = ""
+        app.upgrade_note = ""
+        if progress_cb:
+            progress_cb(100, f"{app.name} al dia")
+        return True, f"{app.name} ya estaba en la ultima version."
+    if category == "blocked":
+        app.upgrade_status = "blocked"
+        app.upgrade_note = detail
+        blocking = installer_blocking_processes(tail)
         return False, (
             f"{app.name} no se actualizo: estaban abiertos {', '.join(blocking)}. "
             "Cierralos y vuelve a intentar."
         )
-    return False, f"winget no pudo actualizar {app.name} ({why})."
+    if category == "editor_only":
+        app.upgrade_status = "editor_only"
+        app.upgrade_note = detail
+        return False, f"{app.name}: no se puede actualizar con winget; actualiza desde su editor."
+    if category == "needs_admin":
+        app.upgrade_status = "needs_admin"
+        app.upgrade_note = detail
+        return False, f"{app.name} requiere permisos de Administrador (0x80073D28). Reintenta con UAC."
+    if category == "tls_error":
+        app.upgrade_status = "tls_error"
+        app.upgrade_note = detail
+        return False, (
+            f"{app.name}: Windows rechazo el certificado HTTPS del servidor (0x80072F0D). "
+            "Revisa tu red/antivirus o actualiza desde el sitio oficial."
+        )
+
+    app.upgrade_status = "failed"
+    app.upgrade_note = detail
+    return False, f"winget no pudo actualizar {app.name} ({detail})."
+
+
+def upgrade_app_winget_elevated(app: InstalledApp) -> tuple[bool, str]:
+    """Lanza ``winget upgrade`` en consola elevada UAC (sin escribir archivos temporales)."""
+    if app.protected_reason:
+        return False, f"Bloqueada por seguridad: {app.protected_reason}"
+    if not IS_WINDOWS:
+        return False, "Solo disponible en Windows."
+    if not is_winget_available():
+        return False, "winget no esta disponible en este equipo."
+
+    target_arg = f'--id "{app.winget_id}" --exact' if app.winget_id else f'--name "{app.name}" --exact'
+    args = (
+        f"upgrade {target_arg} --silent --accept-source-agreements "
+        "--accept-package-agreements --disable-interactivity"
+    )
+    ok = run_elevated_command(_winget_exe(), args, track=True)
+    if not ok:
+        return False, f"Elevacion UAC cancelada o rechazada para {app.name}."
+    app.upgrade_status = ""
+    app.upgrade_note = "Instalacion elevada UAC iniciada en Windows."
+    return True, f"{app.name}: actualizacion lanzada con permisos de Administrador (UAC)."
 
 
 # v0.6.3: "Actualizar todas" nunca toca entornos de desarrollo ni saltos de version mayor:
@@ -804,6 +957,8 @@ def bulk_upgrade_skip_reason(app: InstalledApp) -> str:
     """Motivo para excluir una app de 'Actualizar todas' ('' = se puede actualizar en lote)."""
     if app.protected_reason:
         return app.protected_reason
+    if app.upgrade_status == "editor_only":
+        return "No actualizable via winget: usar actualizador del editor"
     if not app.available_version:
         return "Sin nueva version"
     low = f"{app.name} {app.winget_id}".lower()

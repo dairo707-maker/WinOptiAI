@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -28,6 +28,7 @@ from ...apps.app_manager import (
     find_app_leftovers,
     list_installed_apps,
     uninstall_installed_app,
+    upgrade_app_winget_elevated,
     upgrade_apps_winget,
 )
 from ...core.help_catalog import TOOLTIPS
@@ -83,6 +84,8 @@ class AppsView(QWidget):
         self._stale = False  # v0.6.6: el Vigia diario u otra accion pide refrescar
         self._upgrading = False
         self._updates_error = ""
+        self._failed_apps: list[InstalledApp] = []
+        self._status_cache: dict[str, tuple[str, str, str]] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 18)
@@ -173,6 +176,14 @@ class AppsView(QWidget):
         self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
         sl.addWidget(self.summary_lbl, stretch=1)
+
+        self.retry_failed_btn = QPushButton("Reintentar fallidas")
+        self.retry_failed_btn.setObjectName("GhostAction")
+        self.retry_failed_btn.setToolTip("Reintentar las apps que fallaron (incluye opcion UAC si alguna pidio Administrador)")
+        self.retry_failed_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.retry_failed_btn.setVisible(False)
+        self.retry_failed_btn.clicked.connect(self._on_retry_failed)
+        sl.addWidget(self.retry_failed_btn)
         root.addWidget(summary)
 
         # Sortable Applications Table (manually resizable + horizontal scroll + persisted widths)
@@ -265,6 +276,7 @@ class AppsView(QWidget):
             self._checking_updates = False
             self.check_updates_btn.setEnabled(True)
             apps, _count, msg = res
+            self._restore_cached_statuses(apps)
             self.apps = apps
             ok_winget = not msg.startswith(("winget no esta disponible", "No se pudo consultar"))
             self._updates_checked = ok_winget
@@ -305,8 +317,10 @@ class AppsView(QWidget):
         app = selected[0]
         single = len(selected) == 1
         loc = (app.install_location or "").strip().strip('"')
+        safe_url = app.upgrade_url if (app.upgrade_url or "").lower().startswith("https://") else ""
         return [
             (upd_label, self._on_upgrade_selected, bool(upgradable) and not busy),
+            ("Abrir sitio oficial (HTTPS)", lambda u=safe_url: QDesktopServices.openUrl(QUrl(u)), single and bool(safe_url)),
             ("Desinstalar", self._on_uninstall_selected, single and not app.protected_reason),
             None,
             ("Abrir carpeta de instalacion", lambda: reveal_in_explorer(loc), single and bool(loc)),
@@ -408,10 +422,90 @@ class AppsView(QWidget):
             self.notify_cb("Siguen abiertas: " + ", ".join(still[:4]) + ". Se intentara igual; si falla, cierralas y repite.")
         return True
 
+    @staticmethod
+    def _app_cache_key(app: InstalledApp) -> str:
+        return (app.winget_id or app.name or "").strip().lower()
+
+    def _restore_cached_statuses(self, apps: list[InstalledApp]) -> None:
+        """Conserva estado diagnostico (SOLO EDITOR, 0x80073D28, TLS) entre re-escaneos."""
+        for app in apps:
+            key = self._app_cache_key(app)
+            if not key or key not in self._status_cache:
+                continue
+            if not app.available_version:
+                self._status_cache.pop(key, None)
+                continue
+            status, note, url = self._status_cache[key]
+            app.upgrade_status = status
+            app.upgrade_note = note
+            if url and not app.upgrade_url:
+                app.upgrade_url = url
+        self._sync_failed_apps(apps)
+
+    def _sync_failed_apps(self, apps: list[InstalledApp] | None = None) -> None:
+        src = apps if apps is not None else self.apps
+        retryable = ("needs_admin", "tls_error", "blocked", "failed")
+        self._failed_apps = [
+            a for a in src if a.available_version and a.upgrade_status in retryable
+        ]
+        self.retry_failed_btn.setVisible(bool(self._failed_apps) and not self._upgrading)
+        if self._failed_apps:
+            self.retry_failed_btn.setText(f"Reintentar fallidas ({len(self._failed_apps)})")
+
+    def _run_elevated_upgrades(self, admin_apps: list[InstalledApp]) -> None:
+        if not admin_apps:
+            return
+        self._upgrading = True
+        self.retry_failed_btn.setVisible(False)
+
+        def _work() -> list[tuple[InstalledApp, bool, str]]:
+            return [(a, *upgrade_app_winget_elevated(a)) for a in admin_apps]
+
+        def _done(res: list[tuple[InstalledApp, bool, str]]) -> None:
+            self._upgrading = False
+            for a, good, m in res:
+                self.policy.record_audit_event("usuario", "Actualizar App (UAC)" if good else "Actualizar App (fallo)", m)
+                if good:
+                    self._status_cache.pop(self._app_cache_key(a), None)
+            launched = sum(1 for _a, good, _m in res if good)
+            self.notify_cb(f"{launched}/{len(res)} actualizacion(es) lanzada(s) con permisos UAC.")
+            self._sync_failed_apps()
+            self._render_apps()
+            if launched:
+                QTimer.singleShot(2500, self.refresh_apps)
+
+        def _err(_e: str) -> None:
+            self._upgrading = False
+            self._sync_failed_apps()
+
+        self.run_async(_work, _done, "Actualizar apps (UAC)", on_error=_err)
+
+    def _on_retry_failed(self) -> None:
+        self._sync_failed_apps()
+        if not self._failed_apps:
+            self.retry_failed_btn.setVisible(False)
+            self.notify_cb("No hay actualizaciones fallidas pendientes de reintento.")
+            return
+        admin_apps = [a for a in self._failed_apps if a.upgrade_status == "needs_admin"]
+        normal_apps = [a for a in self._failed_apps if a.upgrade_status != "needs_admin"]
+        if admin_apps:
+            names = ", ".join(a.name for a in admin_apps[:4])
+            ans = QMessageBox.question(
+                self,
+                "Permisos de Administrador requeridos",
+                f"Estas aplicaciones pidieron permisos de Administrador (0x80073D28): {names}.\n\n"
+                "Deseas ejecutar su actualizacion con permisos elevados (UAC)?",
+            )
+            if ans == QMessageBox.StandardButton.Yes:
+                self._run_elevated_upgrades(admin_apps)
+        if normal_apps and self._confirm_apps_closed(normal_apps):
+            self._run_upgrades(normal_apps, f"Reintentar {len(normal_apps)} apps fallidas")
+
     def _run_upgrades(self, targets: list[InstalledApp], label: str) -> None:
         self._upgrading = True
         self.upgrade_btn.setEnabled(False)
         self.upgrade_all_btn.setEnabled(False)
+        self.retry_failed_btn.setVisible(False)
         self.summary_lbl.setText(f"Actualizando {len(targets)} aplicacion(es) con winget...")
 
         def _work(progress_cb=None, controller=None):
@@ -423,17 +517,35 @@ class AppsView(QWidget):
             ok = [a for a, good, _m in results if good]
             failed = [(a, m) for a, good, m in results if not good]
             self._upgrading = False
-            for a, _good, m in results:
+            for a, good, m in results:
                 # v0.6.6: tambien los fallos quedan en la auditoria, con su motivo
-                self.policy.record_audit_event("usuario", "Actualizar App" if _good else "Actualizar App (fallo)", m)
+                self.policy.record_audit_event("usuario", "Actualizar App" if good else "Actualizar App (fallo)", m)
+                key = self._app_cache_key(a)
+                if good:
+                    self._status_cache.pop(key, None)
+                elif key and a.upgrade_status:
+                    self._status_cache[key] = (a.upgrade_status, a.upgrade_note, a.upgrade_url)
+            self._sync_failed_apps()
             msg = f"{len(ok)} de {len(targets)} aplicacion(es) actualizadas."
             if len(results) < len(targets):
                 msg += f" Cancelado: {len(targets) - len(results)} sin intentar."
             if failed:
-                msg += " Fallaron: " + "; ".join(f"{a.name} ({m[:60]})" for a, m in failed[:3])
+                msg += " Fallaron: " + "; ".join(f"{a.name} ({m[:70]})" for a, m in failed[:3])
             self.notify_cb(msg)
             self.summary_lbl.setText(msg)
             self._render_apps()
+            admin_failed = [a for a, _m in failed if a.upgrade_status == "needs_admin"]
+            if admin_failed:
+                names = ", ".join(a.name for a in admin_failed[:4])
+                ans = QMessageBox.question(
+                    self,
+                    "Permisos de Administrador requeridos",
+                    f"{len(admin_failed)} aplicacion(es) requieren Administrador ({names}).\n\n"
+                    "Deseas lanzarlas ahora con UAC?",
+                )
+                if ans == QMessageBox.StandardButton.Yes:
+                    self._run_elevated_upgrades(admin_failed)
+                    return
             # v0.6.6: verificar con Windows/winget la version que de verdad quedo instalada
             if results:
                 QTimer.singleShot(1500, self.refresh_apps)
@@ -442,6 +554,7 @@ class AppsView(QWidget):
             self._upgrading = False
             self.upgrade_btn.setEnabled(True)
             self.upgrade_all_btn.setEnabled(True)
+            self._sync_failed_apps()
 
         self.run_async(_work, _done, label, on_error=_err)
 
@@ -558,7 +671,9 @@ class AppsView(QWidget):
         for r, (orig_idx, app) in enumerate(visible):
             eff_ts = app.last_used_ts if app.last_used_ts > 0 else app.install_date_ts
             is_stale = eff_ts > 0 and eff_ts <= stale_cutoff
-            if app.available_version:
+            if app.upgrade_status == "editor_only":
+                state_txt, tone = "SOLO EDITOR", "neutral"
+            elif app.available_version:
                 state_txt, tone = "ACTUALIZAR", "warn"
             elif app.protected_reason:
                 state_txt, tone = "PROTEGIDA", "neutral"
@@ -574,8 +689,12 @@ class AppsView(QWidget):
             c0 = QTableWidgetItem(state_txt)
             c0.setData(Qt.ItemDataRole.UserRole + 1, orig_idx)
             c0.setForeground(QColor(semaphore_hex(tone, mode)))
+            if app.upgrade_note:
+                c0.setToolTip(app.upgrade_note)
             self.apps_table.setItem(r, 0, c0)
             name_item = QTableWidgetItem(app.name)
+            if app.upgrade_note:
+                name_item.setToolTip(f"{app.name}\n{app.upgrade_note}")
             cached = cached_app_icon(app, dpr)  # v0.6.5: icono real de la app, sutil
             name_item.setIcon(cached or blank_icon())
             if cached is None:

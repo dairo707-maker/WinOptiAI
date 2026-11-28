@@ -1,8 +1,8 @@
 # AGENTS.md — Guia Multi-Agente (Antigravity, Claude Code, Codex, Cursor)
 
-Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, identidad visual corporativa TRODAI (`0px` Obsidian Navy `#0A0F1D` / Crisp White `#F8FAFC` con `#0EA5E9` / `#3B82F6`, cero emojis, `Space Grotesk` + `JetBrains Mono`), lecciones criticas de `PySide6`/`shiboken6`, invariantes de seguridad del sistema operativo (`v0.6.5` publicada e instalada; `v0.6.6` y `v0.6.7` cerradas en repo local) y separacion respecto al repo hermano Android (`C:\Users\datg2\dev\WinOptiAI-Android`).
+Este repositorio sigue el estandar de contexto compartido. Lea `CLAUDE.md` como referencia maestra de hardware, identidad visual corporativa TRODAI (`0px` Obsidian Navy `#0A0F1D` / Crisp White `#F8FAFC` con `#0EA5E9` / `#3B82F6`, cero emojis, `Space Grotesk` + `JetBrains Mono`), lecciones criticas de `PySide6`/`shiboken6`, invariantes de seguridad del sistema operativo (`v0.6.5` publicada en GitHub; `v0.6.8` cerrada e instalada localmente) y separacion respecto al repo hermano Android (`C:\Users\datg2\dev\WinOptiAI-Android`).
 
-## Mapa de Modulos (`src/winoptiai/` — estado `v0.6.7`)
+## Mapa de Modulos (`src/winoptiai/` — estado `v0.6.8`)
 
 - `src/winoptiai/app.py`: Arranque en 2 fases, QSS embebido, `AppUserModelID ("TRODAI.WinOptiAI")`, `SingleInstanceLock` (`--elevated-relaunch` espera `30 s`), `DialogLocalizer` global (`QMessageBox` ES/EN/PT + roles), `CrashGuard` y `RegisterApplicationRestart`.
 - `src/winoptiai/core/`:

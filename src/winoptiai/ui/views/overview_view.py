@@ -85,10 +85,6 @@ class OverviewView(QWidget):
         title_box.addWidget(self.sub_lbl)
         header.addLayout(title_box, stretch=1)
 
-        self.active_tag = StatusTag("EN REPOSO", "neutral")
-        self.active_tasks_lbl = self.active_tag  # alias legible para tooltips
-        header.addWidget(self.active_tag)
-
         self.help_toggle_btn = QPushButton("?")
         self.help_toggle_btn.setObjectName("GhostAction")
         self.help_toggle_btn.setToolTip("Mostrar u ocultar que mejora esta vista")
@@ -167,8 +163,7 @@ class OverviewView(QWidget):
             self._sem_widgets[key] = (dot, btn, label)
             sem_flow.addWidget(pill)
         sem_outer.addLayout(sem_flow, stretch=1)
-        self.policy_tag = StatusTag("TRODAI SRE", "active")
-        sem_outer.addWidget(self.policy_tag)
+        self.sem_panel = sem_panel
         root.addWidget(sem_panel)
 
         # Main visual monitoring area: 24h/7d curves + live gauges | Space Freed | Audit Log
@@ -257,7 +252,7 @@ class OverviewView(QWidget):
         self.sre_cell.set_title(tr("metric_sre", lang))
         for i, key in enumerate(("tab_history", "tab_freed", "tab_audit")):
             self.monitor_tabs.setTabText(i, tr(key, lang))
-        self.history_panel.chart.update()
+        self.history_panel.apply_theme(theme_mode)
         self.gauges_widget.update()
         self.freed_panel.chart.update()
         self.freed_panel.legend.update()
@@ -268,12 +263,7 @@ class OverviewView(QWidget):
             dot.set_tone(tone, theme_mode)
 
     def set_active_tasks(self, task_names: list[str]) -> None:
-        if task_names:
-            self.active_tag.set_tone(f"{len(task_names)} EN CURSO", "active")
-            self.active_tag.setToolTip("Tareas activas:\n" + "\n".join(task_names))
-        else:
-            self.active_tag.set_tone("EN REPOSO", "neutral")
-            self.active_tag.setToolTip("Monitoreo pasivo TRODAI activo")
+        self._active_task_names = list(task_names)
 
     def update_telemetry(
         self,
@@ -348,9 +338,8 @@ class OverviewView(QWidget):
         )
 
         diag = diagnose_bottleneck(live, float(ram["used_pct"]), free_gb, threshold_gb)
-        self.policy_tag.set_tone(diag.label.upper(), "active" if diag.tone == "ok" else diag.tone)
-        self.policy_tag.setToolTip(
-            f"{diag.detail}\nHandles: {live.handles_count} | Hilos: {live.threads_count} | "
+        self.sem_panel.setToolTip(
+            f"{diag.label}: {diag.detail}\nHandles: {live.handles_count} | Hilos: {live.threads_count} | "
             f"VRAM comp.: {live.gpu_vram_shared_mb:.0f} MB"
         )
 

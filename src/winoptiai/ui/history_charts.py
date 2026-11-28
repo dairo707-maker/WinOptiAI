@@ -38,7 +38,7 @@ from ..core.metrics_history import (
     freed_cumulative_series,
 )
 from .theme import MONO_FONT_FAMILY, UI_FONT_FAMILY
-from .widgets import semaphore_hex
+from .widgets import SlidingSegmentedControl, semaphore_hex
 
 EVENT_GLYPHS = {EVENT_BOOST: "B", EVENT_CLEAN: "L", EVENT_PURGE: "D", EVENT_ERROR: "E"}
 EVENT_NAMES = {
@@ -351,11 +351,16 @@ class TimeSeriesChart(QWidget):
         if not self.samples:
             p.setFont(QFont(UI_FONT_FAMILY, 9))
             p.setPen(muted)
+            msg = (
+                "Recopilando historial: la primera muestra se guarda ~10 s tras abrir WinOptiAI "
+                "y luego una por minuto (tambien en la bandeja)."
+                if self.range_s <= RANGE_24H
+                else "Recopilando historial de 7 dias: se guarda un punto por minuto mientras WinOptiAI esta abierta."
+            )
             p.drawText(
                 ram_band.adjusted(8, 18, -8, -4),
                 Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-                "Recopilando historial: se guarda un punto por minuto mientras WinOptiAI esta abierta "
-                "(tambien minimizada en la bandeja). Vuelva en unos minutos.",
+                msg,
             )
         p.end()
 
@@ -687,7 +692,7 @@ class _AsyncPanel(QWidget):
 
 
 class HistoryPanel(_AsyncPanel):
-    """Pestanas 24 h / 7 d + leyenda + ``TimeSeriesChart``."""
+    """Selector deslizante 24 h / 7 d + leyenda + ``TimeSeriesChart``."""
 
     def __init__(self, palette_fn: Callable[[], dict[str, str]], parent: QWidget | None = None) -> None:
         super().__init__(palette_fn, parent)
@@ -695,7 +700,14 @@ class HistoryPanel(_AsyncPanel):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 6, 0, 0)
         lay.setSpacing(4)
-        head, self.range_buttons = _range_tabs([(RANGE_24H, "24 h"), (RANGE_7D, "7 d")], self.set_range)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.range_seg = SlidingSegmentedControl()
+        self.range_seg.set_options([(str(RANGE_24H), "24 h"), (str(RANGE_7D), "7 d")])
+        self.range_seg.set_current(str(self.range_s), animate=False, emit_signal=False)
+        self.range_seg.apply_theme(self._palette_fn().get("mode", "dark"))
+        self.range_seg.selection_changed.connect(lambda k: self.set_range(int(k)))
+        head.addWidget(self.range_seg)
         self.mode_btn = QPushButton("CPU")
         self.mode_btn.setObjectName("GhostAction")
         self.mode_btn.setCheckable(True)
@@ -703,7 +715,7 @@ class HistoryPanel(_AsyncPanel):
         self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mode_btn.clicked.connect(self._toggle_secondary_mode)
         head.addWidget(self.mode_btn)
-        self.summary_lbl = QLabel("Sin datos todavia")
+        self.summary_lbl = QLabel("Recopilando primera muestra (~10 s)...")
         self.summary_lbl.setObjectName("BodyText")
         self.summary_lbl.setWordWrap(True)
         head.addSpacing(8)
@@ -715,7 +727,10 @@ class HistoryPanel(_AsyncPanel):
         self.chart = TimeSeriesChart(palette_fn)
         self.chart.setMinimumHeight(170)
         lay.addWidget(self.chart, stretch=1)
-        _mark_selected(self.range_buttons, self.range_s)
+
+    def apply_theme(self, mode: str) -> None:
+        self.range_seg.apply_theme(mode)
+        self.chart.update()
 
     def _toggle_secondary_mode(self) -> None:
         is_io = self.mode_btn.isChecked()
@@ -727,7 +742,7 @@ class HistoryPanel(_AsyncPanel):
 
     def set_range(self, range_s: int) -> None:
         self.range_s = int(range_s)
-        _mark_selected(self.range_buttons, self.range_s)
+        self.range_seg.set_current(str(self.range_s), animate=True, emit_signal=False)
         self.refresh_now()
 
     def apply_snapshot(self, data: dict[str, Any]) -> None:
@@ -746,7 +761,11 @@ class HistoryPanel(_AsyncPanel):
                 f"{below * 100 // len(ram)}% bajo umbral | {boosts} AI Boost{extra}"
             )
         else:
-            self.summary_lbl.setText("Sin datos todavia")
+            self.summary_lbl.setText(
+                "Sin datos en las ultimas 24 h (revisa 7 d)"
+                if self.range_s == RANGE_24H
+                else "Recopilando primera muestra (~10 s)..."
+            )
 
 
 class FreedSpacePanel(_AsyncPanel):

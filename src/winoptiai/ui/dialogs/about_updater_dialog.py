@@ -68,10 +68,10 @@ class AboutUpdaterDialog(QDialog):
         root.setContentsMargins(22, 20, 22, 20)
         root.setSpacing(12)
 
-        # Header (TRODAI Corporate Brand Identity)
+        # Header: logo del producto WinOptiAI (v0.6.8); el escudo TRODAI queda como sello pequeno.
         hdr = QHBoxLayout()
         icon = QLabel()
-        icon.setPixmap(load_svg_pixmap("brand", color=p["accent"], size=28))
+        icon.setPixmap(load_svg_pixmap("winoptiai_logo", size=40))
         hdr.addWidget(icon)
         hdr.addSpacing(8)
 
@@ -85,7 +85,14 @@ class AboutUpdaterDialog(QDialog):
         desc.setObjectName("Caption")
         tbox.addWidget(title)
         tbox.addWidget(author)
-        tbox.addWidget(desc)
+        seal_row = QHBoxLayout()
+        seal_row.setSpacing(6)
+        seal = QLabel()
+        seal.setPixmap(load_svg_pixmap("brand", color=p["text_muted"], size=14))
+        seal_row.addWidget(seal)
+        seal_row.addWidget(desc)
+        seal_row.addStretch()
+        tbox.addLayout(seal_row)
         hdr.addLayout(tbox)
         hdr.addStretch()
         self.version_tag = StatusTag(f"V{__version__}", "active")

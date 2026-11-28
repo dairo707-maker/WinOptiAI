@@ -62,6 +62,7 @@ from .dialogs.crash_report_dialog import CrashReportDialog
 from .dialogs.crash_send_dialog import CrashSendDialog
 from .dialogs.notifications_drawer import NotificationsTasksDialog
 from .dialogs.tour_dialog import QuickTourDialog
+from .motion import MotionBackdropWidget, MotionPerformanceGuard, ViewTransitionController
 from .svg_icons import load_svg_icon, load_svg_pixmap
 from .system_tray import WinOptiTray
 from .theme import build_obsidian_qss, get_palette
@@ -71,7 +72,7 @@ from .views.processes_view import ProcessesView
 from .views.startup_view import StartupView
 from .views.storage_view import StorageView
 from .views.thermal_bios_view import ThermalBiosView
-from .widgets import AdaptiveButton, NotebookCanvas, SemaphoreDot, StatusTag
+from .widgets import AdaptiveButton, NotebookCanvas, SemaphoreDot, SlidingNavPanel, StatusTag
 from .workers import AsyncTask
 
 
@@ -138,9 +139,10 @@ class MainWindow(QMainWindow):
         self.focus_mgr = FocusModeManager()
         self.telemetry_reader = PdhTelemetryReader(lazy_init=True)
         self.bottleneck_monitor = SustainedBottleneckMonitor(sustain_seconds=30.0, cooldown_seconds=600.0)
-        # v0.5.8: historial local acotado (1 punto/min, 7 dias) en metrics.sqlite.
+        self.motion_guard = MotionPerformanceGuard()
+        # v0.5.8 / v0.6.8: primera muestra a los 10 s y luego 1 punto/min (7 dias) en metrics.sqlite.
         self.metrics_history = MetricsHistory(self.policy.app_dir)
-        self._minute_agg = MinuteAggregator()
+        self._minute_agg = MinuteAggregator(interval=60, initial_interval=10)
         self._disk_free_gb = 0.0
         self._disk_total_gb = 0.0
         self._force_quit = False
@@ -156,8 +158,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Sidebar
-        sidebar = QWidget()
+        # Sidebar con minianimacion reactiva al puntero
+        self.sidebar = MotionBackdropWidget("sidebar", theme_mode=theme_mode, guard=self.motion_guard)
+        sidebar = self.sidebar
         sidebar.setObjectName("Sidebar")
         sidebar.setFixedWidth(248)  # v0.5.6: "Acerca de y Actualizaciones" completo
         sb_layout = QVBoxLayout(sidebar)
@@ -168,24 +171,23 @@ class MainWindow(QMainWindow):
         brand_layout = QHBoxLayout(brand_box)
         brand_layout.setContentsMargins(16, 16, 16, 14)
         brand_layout.setSpacing(10)
+        # v0.6.8: logo propio del producto (engranaje + escoba); TRODAI queda como sello al pie.
         self.brand_icon = QLabel()
-        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=22))
+        self.brand_icon.setPixmap(load_svg_pixmap("winoptiai_logo", size=26))
         brand_layout.addWidget(self.brand_icon)
 
         brand_txt = QVBoxLayout()
         brand_txt.setSpacing(0)
         brand_title = QLabel("WinOptiAI")
         brand_title.setStyleSheet("font-size: 14px; font-weight: 700; letter-spacing: 0.2px;")
-        brand_sub = QLabel("by TRODAI")
-        brand_sub.setObjectName("Caption")
+        self.brand_sub = QLabel(f"v{__version__}")
+        self.brand_sub.setObjectName("Caption")
         brand_txt.addWidget(brand_title)
-        brand_txt.addWidget(brand_sub)
+        brand_txt.addWidget(self.brand_sub)
         brand_layout.addLayout(brand_txt)
         brand_layout.addStretch()
-        brand_layout.addWidget(StatusTag(f"v{__version__}", "active"))
         sb_layout.addWidget(brand_box)
 
-        self.nav_buttons: list[QPushButton] = []
         self._nav_spec = [
             ("overview", "nav_overview"),
             ("storage", "nav_storage"),
@@ -194,14 +196,12 @@ class MainWindow(QMainWindow):
             ("apps", "nav_apps"),
             ("startup", "nav_startup"),
         ]
-        for idx, (icon_name, tr_key) in enumerate(self._nav_spec):
-            btn = QPushButton(f"  {tr(tr_key, lang)}")
-            btn.setObjectName("NavButton")
-            btn.setIcon(load_svg_icon(icon_name, color=pal["icon_color"], size=15))
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _=False, i=idx: self._switch_tab(i))
-            self.nav_buttons.append(btn)
-            sb_layout.addWidget(btn)
+        self.nav_panel = SlidingNavPanel()
+        self.nav_panel.set_items([(icon_name, tr(tr_key, lang)) for icon_name, tr_key in self._nav_spec])
+        self.nav_panel.set_tooltips([TOOLTIPS.get(tr_key, "") for _, tr_key in self._nav_spec])
+        self.nav_panel.apply_theme(theme_mode)
+        self.nav_panel.current_changed.connect(self._switch_tab)
+        sb_layout.addWidget(self.nav_panel)
 
         sb_layout.addStretch()
 
@@ -214,7 +214,11 @@ class MainWindow(QMainWindow):
         is_admin = is_user_admin()
         mode_row = QHBoxLayout()
         mode_row.setSpacing(6)
-        self.admin_tag = StatusTag("ADMIN UAC" if is_admin else "MODO ESTANDAR", "ok" if is_admin else "neutral")
+        self.admin_tag = StatusTag(
+            "ADMIN UAC" if is_admin else "MODO ESTANDAR",
+            "ok" if is_admin else "neutral",
+            theme_mode=theme_mode,
+        )
         mode_row.addWidget(self.admin_tag)
 
         if not is_admin:
@@ -249,6 +253,18 @@ class MainWindow(QMainWindow):
         self.status_lbl.setObjectName("PageSubtitle")
         self.status_lbl.setWordWrap(True)
         f_layout.addWidget(self.status_lbl)
+
+        # v0.6.8: sello discreto de la organizacion (escudo TRODAI) separado del logo del producto.
+        org_row = QHBoxLayout()
+        org_row.setSpacing(6)
+        self.org_seal = QLabel()
+        self.org_seal.setPixmap(load_svg_pixmap("brand", color=pal["text_muted"], size=12))
+        org_row.addWidget(self.org_seal)
+        org_lbl = QLabel("by TRODAI")
+        org_lbl.setObjectName("Caption")
+        org_row.addWidget(org_lbl)
+        org_row.addStretch()
+        f_layout.addLayout(org_row)
         sb_layout.addWidget(footer)
 
         main_layout.addWidget(sidebar)
@@ -259,7 +275,8 @@ class MainWindow(QMainWindow):
         rc_layout.setContentsMargins(0, 0, 0, 0)
         rc_layout.setSpacing(0)
 
-        top_bar = QWidget()
+        self.top_bar = MotionBackdropWidget("topbar", theme_mode=theme_mode, guard=self.motion_guard)
+        top_bar = self.top_bar
         top_bar.setObjectName("TopBar")
         top_bar.setFixedHeight(42)
         tb_layout = QHBoxLayout(top_bar)
@@ -341,8 +358,8 @@ class MainWindow(QMainWindow):
         tb_layout.addWidget(self.bell_btn)
         rc_layout.addWidget(top_bar)
 
-        # In-app dismissible update banner (v0.6.0) for guaranteed visibility across Focus Assist
-        self.update_banner = QWidget()
+        # In-app dismissible update banner (v0.6.0 / v0.6.8 con minianimacion sutil)
+        self.update_banner = MotionBackdropWidget("banner", theme_mode=theme_mode, guard=self.motion_guard)
         self.update_banner.setObjectName("UpdateBanner")
         ub_layout = QHBoxLayout(self.update_banner)
         ub_layout.setContentsMargins(20, 6, 20, 6)
@@ -412,6 +429,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.thermal_view)
         self.stack.addWidget(self.apps_view)
         self.stack.addWidget(self.startup_view)
+        self.view_transition = ViewTransitionController(self.stack, guard=self.motion_guard)
         rc_layout.addWidget(self.stack, stretch=1)
         main_layout.addWidget(right_col, stretch=1)
 
@@ -547,6 +565,11 @@ class MainWindow(QMainWindow):
             self.metrics_history.shutdown()
         except Exception:  # noqa: BLE001
             pass
+        for surf in (self.sidebar, self.top_bar, self.update_banner):
+            try:
+                surf.cleanup()
+            except Exception:  # noqa: BLE001
+                pass
         self.tray.hide()
         if self.crash_guard is not None:
             self.crash_guard.write_log_block(
@@ -605,11 +628,8 @@ class MainWindow(QMainWindow):
 
     def _switch_tab(self, index: int) -> None:
         self._breadcrumb(f"Vista {index}")
-        self.stack.setCurrentIndex(index)
-        for i, btn in enumerate(self.nav_buttons):
-            btn.setProperty("active", i == index)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+        self.view_transition.switch_to(index)
+        self.nav_panel.set_current_index(index, animate=True, emit_signal=False)
         if index == 2:
             self.processes_view.refresh_all()
         elif index == 4 and self.apps_view.needs_refresh() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
@@ -729,7 +749,13 @@ class MainWindow(QMainWindow):
                 app.setStyleSheet(qss)
         apply_window_theme(int(self.winId()), dark=(mode != "light"))
 
-        self.brand_icon.setPixmap(load_svg_pixmap("brand", color=pal["accent"], size=22))
+        self.brand_icon.setPixmap(load_svg_pixmap("winoptiai_logo", size=26))
+        self.org_seal.setPixmap(load_svg_pixmap("brand", color=pal["text_muted"], size=12))
+        self.sidebar.set_theme_mode(mode)
+        self.top_bar.set_theme_mode(mode)
+        self.update_banner.set_theme_mode(mode)
+        self.nav_panel.apply_theme(mode)
+        self.admin_tag.apply_theme(mode)
         self.update_banner_dot.set_tone("active", mode)
         self.bell_btn.setIcon(load_svg_icon("bell", color=pal["icon_color"], size=15))
         self.tour_btn.setText(f" {tr('btn_tour', lang)}")
@@ -738,11 +764,8 @@ class MainWindow(QMainWindow):
         self.about_btn.setIcon(load_svg_icon("shield", color=pal["icon_color"], size=13))
         self._refresh_theme_button_icon(mode, pal["icon_color"])
 
-        for btn, (icon_name, tr_key) in zip(self.nav_buttons, self._nav_spec):
-            btn.setText(f"  {tr(tr_key, lang)}")
-            btn.setIcon(load_svg_icon(icon_name, color=pal["icon_color"], size=15))
-            if tr_key in TOOLTIPS:
-                btn.setToolTip(TOOLTIPS[tr_key])
+        self.nav_panel.update_labels([tr(tr_key, lang) for _, tr_key in self._nav_spec])
+        self.nav_panel.set_tooltips([TOOLTIPS.get(tr_key, "") for _, tr_key in self._nav_spec])
 
         self.overview_view.apply_language_and_theme(lang, mode, pal["icon_inverted"])
         self.storage_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
@@ -987,6 +1010,8 @@ class MainWindow(QMainWindow):
         self.processes_view.set_active_tasks(summaries)
 
         has_active = bool(self._active_workers)
+        for surf in (self.sidebar, self.top_bar, self.update_banner):
+            surf.set_heavy_task_active(has_active)
         self.pause_top_btn.setVisible(has_active)
         lead_can_save = has_active and bool(getattr(self._active_workers[0], "supports_save", False))
         self.save_pause_top_btn.setVisible(lead_can_save)

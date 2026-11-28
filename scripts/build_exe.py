@@ -96,16 +96,49 @@ def _draw_brand_emblem(
     draw.line([_pt(50, 65, off, k), _pt(50, 74, off, k)], fill=accent, width=sw)
 
 
+LOGO_SVG = ASSETS / "icons" / "winoptiai_logo.svg"
+_QT_APP: list[object] = []
+
+
+def render_logo(size: int) -> Image.Image | None:
+    """v0.6.8: rasteriza el logo propio (winoptiai_logo.svg) con Qt; None si no se puede."""
+    if not LOGO_SVG.exists():
+        return None
+    try:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QByteArray, QRectF, Qt
+        from PySide6.QtGui import QGuiApplication, QImage, QPainter
+        from PySide6.QtSvg import QSvgRenderer
+
+        if QGuiApplication.instance() is None and not _QT_APP:
+            _QT_APP.append(QGuiApplication([]))
+        renderer = QSvgRenderer(QByteArray(LOGO_SVG.read_bytes()))
+        if not renderer.isValid():
+            return None
+        qimg = QImage(size, size, QImage.Format.Format_RGBA8888)
+        qimg.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(qimg)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter, QRectF(0, 0, size, size))
+        painter.end()
+        raw = bytes(qimg.constBits())[: size * size * 4]
+        return Image.frombuffer("RGBA", (size, size), raw, "raw", "RGBA", 0, 1).copy()
+    except Exception as exc:  # noqa: BLE001 - el build sigue con el emblema de respaldo
+        print(f"Advertencia: no se pudo rasterizar el logo ({exc}); se usa el emblema TRODAI.")
+        return None
+
+
 def generate_app_icon() -> Path:
-    """Generate high-contrast multi-resolution TRODAI octagonal .ico matching Hexa-Vault Sentinel."""
+    """Generate multi-resolution .ico from the WinOptiAI logo (fallback: TRODAI emblem)."""
     ico_path = ASSETS / "icons" / "winoptiai.ico"
-    sizes = [256, 128, 64, 48, 32, 16]
+    sizes = [256, 128, 64, 48, 32, 24, 20, 16]
     images: list[Image.Image] = []
 
     for sz in sizes:
-        img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        _draw_brand_emblem(draw, 0, 0, sz)
+        img = render_logo(sz)
+        if img is None:
+            img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+            _draw_brand_emblem(ImageDraw.Draw(img), 0, 0, sz)
         images.append(img)
 
     images[0].save(
@@ -131,9 +164,13 @@ def generate_installer_wizard_images() -> tuple[Path, Path]:
         ld.line([(gx, 0), (gx, 313)], fill=(19, 30, 54), width=1)
     ld.rectangle([0, 0, 163, 313], outline=(51, 65, 95), width=1)
 
-    emblem_rgba = Image.new("RGBA", (88, 88), (10, 15, 29, 255))
-    _draw_brand_emblem(ImageDraw.Draw(emblem_rgba), 0, 0, 88)
-    large.paste(emblem_rgba.convert("RGB"), (38, 68))
+    logo_l = render_logo(88)
+    if logo_l is not None:
+        large.paste(logo_l, (38, 68), logo_l)  # v0.6.8: logo propio sobre el fondo del asistente
+    else:
+        emblem_rgba = Image.new("RGBA", (88, 88), (10, 15, 29, 255))
+        _draw_brand_emblem(ImageDraw.Draw(emblem_rgba), 0, 0, 88)
+        large.paste(emblem_rgba.convert("RGB"), (38, 68))
 
     # Minimalist TRODAI Cyber Cyan & Governance Blue accent bars below emblem
     ld.rectangle([38, 174, 125, 177], fill=(14, 165, 233))
@@ -143,9 +180,13 @@ def generate_installer_wizard_images() -> tuple[Path, Path]:
     # Header badge graphic (55x58) replacing default optical-disc icon
     small = Image.new("RGB", (55, 58), (10, 15, 29))
     sd = ImageDraw.Draw(small)
-    emblem_sm = Image.new("RGBA", (42, 42), (10, 15, 29, 255))
-    _draw_brand_emblem(ImageDraw.Draw(emblem_sm), 0, 0, 42)
-    small.paste(emblem_sm.convert("RGB"), (6, 8))
+    logo_s = render_logo(42)
+    if logo_s is not None:
+        small.paste(logo_s, (6, 8), logo_s)
+    else:
+        emblem_sm = Image.new("RGBA", (42, 42), (10, 15, 29, 255))
+        _draw_brand_emblem(ImageDraw.Draw(emblem_sm), 0, 0, 42)
+        small.paste(emblem_sm.convert("RGB"), (6, 8))
     sd.rectangle([0, 0, 54, 57], outline=(59, 130, 246), width=1)
     small.save(small_path, format="BMP")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QMargins, QPoint, QPointF, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QEvent, QMargins, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from .svg_icons import load_svg_pixmap
-from .theme import MONO_FONT_FAMILY, get_palette
+from .theme import MONO_FONT_FAMILY, UI_FONT_FAMILY, get_palette
 
 if TYPE_CHECKING:
     from ..core.sre_policy import SREPolicyEngine
@@ -556,39 +557,64 @@ class SemaphoreDot(QWidget):
 
 
 class StatusTag(QLabel):
-    """Minimalist TRODAI inline tag badge (0px, 1px border, JetBrains Mono)."""
+    """100% opaque solid flat technical 0px status badge (zero transparency)."""
 
-    TONES = {
-        "neutral": ("#94A3B8", "rgba(148, 163, 184, 75)", "rgba(148, 163, 184, 18)"),
-        "active": ("#0EA5E9", "rgba(14, 165, 233, 115)", "rgba(14, 165, 233, 24)"),
-        "ok": ("#10B981", "rgba(16, 185, 129, 110)", "rgba(16, 185, 129, 22)"),
-        "warn": ("#D97706", "rgba(217, 119, 6, 115)", "rgba(217, 119, 6, 22)"),
-        "risk": ("#DC2626", "rgba(220, 38, 38, 115)", "rgba(220, 38, 38, 22)"),
+    _SOLID_THEMES: dict[str, dict[str, tuple[str, str, str]]] = {
+        "dark": {
+            "neutral": ("#161E2E", "#2A364B", "#CBD5E1"),
+            "active": ("#1A2438", "#334155", "#E2E8F0"),
+            "ok": ("#152E28", "#2B6A5A", "#6EE7B7"),
+            "warn": ("#352814", "#78561F", "#FCD34D"),
+            "risk": ("#3A191E", "#7F2933", "#FCA5A5"),
+        },
+        "light": {
+            "neutral": ("#EEF2F6", "#CBD5E1", "#334155"),
+            "active": ("#E2E8F0", "#CBD5E1", "#0F172A"),
+            "ok": ("#DCFCE7", "#86EFAC", "#166534"),
+            "warn": ("#FEF3C7", "#FCD34D", "#92400E"),
+            "risk": ("#FEE2E2", "#FCA5A5", "#991B1B"),
+        },
     }
 
-    def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        tone: str = "neutral",
+        parent: QWidget | None = None,
+        theme_mode: str = "dark",
+    ) -> None:
         super().__init__(text.upper(), parent)
+        self._tone = tone
+        self._mode = "light" if theme_mode == "light" else "dark"
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.set_tone(text, tone)
+        self.set_tone(text, tone, theme_mode=self._mode)
 
-    def set_tone(self, text: str, tone: str = "neutral") -> None:
+    def apply_theme(self, theme_mode: str) -> None:
+        norm = "light" if theme_mode == "light" else "dark"
+        if norm != self._mode:
+            self._mode = norm
+            self.set_tone(self.text(), self._tone, theme_mode=norm)
+
+    def set_tone(self, text: str, tone: str = "neutral", theme_mode: str | None = None) -> None:
+        if theme_mode is not None:
+            self._mode = "light" if theme_mode == "light" else "dark"
+        self._tone = tone
         self.setText(text.upper())
-        fg, border, bg = self.TONES.get(tone, self.TONES["neutral"])
-        self.setStyleSheet(
-            f"""
-            QLabel {{
-                font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
-                font-size: 8.5px;
-                font-weight: 500;
-                letter-spacing: 0.5px;
-                color: {fg};
-                border: 1px solid {border};
-                background-color: {bg};
-                padding: 2px 5px;
-            }}
-            """
-        )
+        palette = self._SOLID_THEMES[self._mode]
+        fg_default = palette["neutral"]
+        bg, border, fg = palette.get(tone, fg_default)
+        sig = (self._mode, bg, border, fg)
+        if getattr(self, "_last_tag_sig", None) != sig:
+            self._last_tag_sig = sig
+            self.setStyleSheet(
+                f"QLabel {{"
+                f' font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;'
+                f" font-size: 8.5px; font-weight: 500; letter-spacing: 0.5px;"
+                f" color: {fg}; border: 1px solid {border};"
+                f" background-color: {bg}; padding: 2px 6px;"
+                f" }}"
+            )
         self.adjustSize()
 
 
@@ -652,6 +678,7 @@ class SharpMetricCell(GlassPanel):
         color = get_palette(mode)["text_secondary"]
         self.icon_lbl.setPixmap(load_svg_pixmap(self._icon_name, color=color, size=14))
         self.semaphore.set_tone(self.semaphore._tone, mode)
+        self.tag.apply_theme(mode)
 
     def set_title(self, title: str) -> None:
         self.title_lbl.setText(title.upper())
@@ -689,9 +716,6 @@ class SectionBenefitStrip(GlassPanel):
 
         hdr = QHBoxLayout()
         hdr.setSpacing(8)
-        self.badge = StatusTag("GUIA", "neutral")
-        hdr.addWidget(self.badge)
-
         self.title_lbl = QLabel("")
         self.title_lbl.setObjectName("CardTitle")
         self.title_lbl.setWordWrap(True)
@@ -743,3 +767,322 @@ class SectionBenefitStrip(GlassPanel):
 
     def _toggle(self) -> None:
         self.set_expanded(not self._expanded)
+
+
+class SlidingSegmentedControl(QWidget):
+    """Selector horizontal fluido con superficies solidas neutras (portado de PDF Lector TRODAI)."""
+
+    selection_changed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._options: list[tuple[str, str]] = []
+        self._current_index = 0
+        self._hover_index = -1
+        self._mode = "dark"
+        self._animate = True
+        self._pill_x = 2.0
+        self._pill_w = 56.0
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+        self._anim.valueChanged.connect(self._on_anim_value)
+
+        self.setFixedHeight(32)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def set_options(self, options: list[tuple[str, str]]) -> None:
+        self._options = list(options)
+        self._current_index = min(self._current_index, max(0, len(self._options) - 1))
+        self.updateGeometry()
+        self._snap_pill()
+        self.update()
+
+    def set_animations_enabled(self, enabled: bool) -> None:
+        self._animate = bool(enabled)
+
+    def apply_theme(self, mode: str) -> None:
+        self._mode = "light" if mode == "light" else "dark"
+        self.update()
+
+    def current_key(self) -> str:
+        if 0 <= self._current_index < len(self._options):
+            return self._options[self._current_index][0]
+        return ""
+
+    def set_current(self, key: str, *, animate: bool = True, emit_signal: bool = False) -> None:
+        for idx, (opt_key, _) in enumerate(self._options):
+            if opt_key == key:
+                self._select_index(idx, animate=animate, emit_signal=emit_signal)
+                return
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        if not self._options:
+            return QSize(110, 32)
+        fm = QFontMetrics(self.font())
+        max_txt = max(fm.horizontalAdvance(label) for _, label in self._options)
+        seg_w = max(56, max_txt + 20)
+        return QSize(seg_w * len(self._options) + 4, 32)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return self.sizeHint()
+
+    def _segment_rect(self, index: int) -> QRectF:
+        count = max(1, len(self._options))
+        inner_w = max(10.0, float(self.width() - 4))
+        seg_w = inner_w / count
+        return QRectF(2.0 + index * seg_w, 2.0, seg_w, float(self.height() - 4))
+
+    def _snap_pill(self) -> None:
+        rect = self._segment_rect(self._current_index)
+        self._pill_x = rect.x()
+        self._pill_w = rect.width()
+
+    def _on_anim_value(self, value: object) -> None:
+        if isinstance(value, QRectF):
+            self._pill_x = value.x()
+            self._pill_w = value.width()
+        else:
+            self._pill_x = float(value)
+        self.update()
+
+    def _select_index(self, idx: int, *, animate: bool, emit_signal: bool) -> None:
+        if not (0 <= idx < len(self._options)):
+            return
+        changed = idx != self._current_index
+        self._current_index = idx
+        target = self._segment_rect(idx)
+
+        if animate and self._animate and self.isVisible() and self.width() > 20:
+            self._anim.stop()
+            self._anim.setStartValue(QRectF(self._pill_x, 2.0, self._pill_w, target.height()))
+            self._anim.setEndValue(target)
+            self._anim.start()
+        else:
+            self._anim.stop()
+            self._pill_x = target.x()
+            self._pill_w = target.width()
+            self.update()
+
+        if changed and emit_signal:
+            self.selection_changed.emit(self._options[idx][0])
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._anim.state() != QVariantAnimation.State.Running:
+            self._snap_pill()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        count = max(1, len(self._options))
+        seg_w = max(1.0, (self.width() - 4) / count)
+        idx = int((event.position().x() - 2.0) / seg_w)
+        idx = idx if 0 <= idx < len(self._options) else -1
+        if idx != self._hover_index:
+            self._hover_index = idx
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover_index = -1
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._options:
+            seg_w = max(1.0, (self.width() - 4) / len(self._options))
+            idx = max(0, min(len(self._options) - 1, int((event.position().x() - 2.0) / seg_w)))
+            self._select_index(idx, animate=True, emit_signal=True)
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        p = get_palette(self._mode)
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(p["bg_track"]))
+        painter.setPen(QPen(QColor(p["border_hairline"]), 1))
+        painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
+
+        if not self._options:
+            painter.end()
+            return
+
+        if 0 <= self._hover_index < len(self._options) and self._hover_index != self._current_index:
+            hr = self._segment_rect(self._hover_index)
+            painter.fillRect(hr.toRect(), QColor(p["bg_hover"]))
+
+        pill_rect = QRect(int(round(self._pill_x)), 2, max(8, int(round(self._pill_w))), self.height() - 4)
+        painter.fillRect(pill_rect, QColor(p["bg_active"]))
+        painter.setPen(QPen(QColor(p["border_selected"]), 1))
+        painter.drawRect(pill_rect.adjusted(0, 0, -1, -1))
+        sheen = "#475569" if self._mode == "dark" else "#FFFFFF"
+        painter.setPen(QPen(QColor(sheen), 1))
+        painter.drawLine(pill_rect.left() + 1, pill_rect.top() + 1, pill_rect.right() - 1, pill_rect.top() + 1)
+
+        font = QFont(UI_FONT_FAMILY, 9)
+        font.setFamilies([UI_FONT_FAMILY, "Instrument Sans", "Segoe UI"])
+        for idx, (_, label) in enumerate(self._options):
+            sr = self._segment_rect(idx).toRect()
+            is_sel = idx == self._current_index
+            font.setWeight(QFont.Weight.Bold if is_sel else QFont.Weight.Medium)
+            painter.setFont(font)
+            painter.setPen(QColor(p["text_primary"] if is_sel else p["text_secondary"]))
+            painter.drawText(sr, Qt.AlignmentFlag.AlignCenter, label)
+
+        painter.end()
+
+
+class SlidingNavPanel(QWidget):
+    """Navegacion lateral vertical con pildora deslizante neutra (cero acento cian)."""
+
+    current_changed = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._items: list[tuple[str, str]] = []
+        self._tooltips: list[str] = []
+        self._current_index = 0
+        self._hover_index = -1
+        self._mode = "dark"
+        self._animate = True
+        self._row_height = 38
+        self._row_gap = 4
+        self._pill_y = 0.0
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(190)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+        self._anim.valueChanged.connect(self._on_anim_val)
+
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_items(self, items: list[tuple[str, str]]) -> None:
+        self._items = list(items)
+        total_h = len(self._items) * (self._row_height + self._row_gap)
+        self.setFixedHeight(max(38, total_h))
+        self._pill_y = float(self._row_y(self._current_index))
+        self.update()
+
+    def update_labels(self, labels: list[str]) -> None:
+        for idx, lbl in enumerate(labels):
+            if idx < len(self._items):
+                self._items[idx] = (self._items[idx][0], lbl)
+        self.update()
+
+    def set_tooltips(self, tips: list[str]) -> None:
+        self._tooltips = list(tips)
+
+    def tooltips(self) -> list[str]:
+        return list(self._tooltips)
+
+    def current_index(self) -> int:
+        return self._current_index
+
+    def item_count(self) -> int:
+        return len(self._items)
+
+    def set_animations_enabled(self, enabled: bool) -> None:
+        self._animate = bool(enabled)
+
+    def apply_theme(self, mode: str) -> None:
+        self._mode = "light" if mode == "light" else "dark"
+        self.update()
+
+    def set_current_index(self, idx: int, *, animate: bool = True, emit_signal: bool = False) -> None:
+        if not (0 <= idx < len(self._items)):
+            return
+        changed = idx != self._current_index
+        self._current_index = idx
+        target_y = float(self._row_y(idx))
+        if animate and self._animate and self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(self._pill_y)
+            self._anim.setEndValue(target_y)
+            self._anim.start()
+        else:
+            self._anim.stop()
+            self._pill_y = target_y
+            self.update()
+        if changed and emit_signal:
+            self.current_changed.emit(idx)
+
+    def _row_y(self, idx: int) -> int:
+        return idx * (self._row_height + self._row_gap)
+
+    def _on_anim_val(self, val: object) -> None:
+        self._pill_y = float(val)
+        self.update()
+
+    def _index_at_y(self, y: float) -> int:
+        step = self._row_height + self._row_gap
+        idx = int(y // step)
+        if 0 <= idx < len(self._items) and (y % step) <= self._row_height:
+            return idx
+        return -1
+
+    def event(self, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.ToolTip:
+            idx = self._index_at_y(float(event.pos().y()))
+            if 0 <= idx < len(self._tooltips) and self._tooltips[idx]:
+                QToolTip.showText(event.globalPos(), self._tooltips[idx], self)
+                return True
+            QToolTip.hideText()
+        return super().event(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        idx = self._index_at_y(event.position().y())
+        if idx != self._hover_index:
+            self._hover_index = idx
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover_index = -1
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self._index_at_y(event.position().y())
+            if idx >= 0:
+                self.set_current_index(idx, animate=True, emit_signal=True)
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        p = get_palette(self._mode)
+        painter = QPainter(self)
+
+        if 0 <= self._hover_index < len(self._items) and self._hover_index != self._current_index:
+            hy = self._row_y(self._hover_index)
+            painter.fillRect(0, hy, self.width(), self._row_height, QColor(p["bg_hover"]))
+
+        if self._items:
+            py = int(round(self._pill_y))
+            pill = QRect(0, py, self.width(), self._row_height)
+            painter.fillRect(pill, QColor(p["bg_active"]))
+            painter.setPen(QPen(QColor(p["border_strong"]), 1))
+            painter.drawRect(pill.adjusted(0, 0, -1, -1))
+            sheen = "#475569" if self._mode == "dark" else "#FFFFFF"
+            painter.setPen(QPen(QColor(sheen), 1))
+            painter.drawLine(pill.left() + 1, pill.top() + 1, pill.right() - 1, pill.top() + 1)
+
+        font = QFont(UI_FONT_FAMILY, 10)
+        font.setFamilies([UI_FONT_FAMILY, "Instrument Sans", "Segoe UI"])
+        for idx, (icon_name, label) in enumerate(self._items):
+            ry = self._row_y(idx)
+            is_sel = idx == self._current_index
+            icon_color = p["text_primary"] if is_sel else p["text_secondary"]
+            pm = load_svg_pixmap(icon_name, color=icon_color, size=15)
+            painter.drawPixmap(14, ry + (self._row_height - 15) // 2, pm)
+
+            font.setWeight(QFont.Weight.Bold if is_sel else QFont.Weight.Medium)
+            painter.setFont(font)
+            painter.setPen(QColor(p["text_primary"] if is_sel else p["text_secondary"]))
+            text_rect = QRect(39, ry, max(10, self.width() - 47), self._row_height)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
+
+        painter.end()

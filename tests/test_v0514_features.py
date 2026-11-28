@@ -150,8 +150,9 @@ def test_main_window_tooltips_and_benefit_strips_wired(
 
     try:
         # Sidebar & TopBar tooltips
-        for btn in win.nav_buttons:
-            assert btn.toolTip().strip()
+        assert win.nav_panel.item_count() == 6
+        tips = win.nav_panel.tooltips()
+        assert len(tips) == 6 and all(t.strip() for t in tips)
         widgets_to_check = [
             win.lang_combo,
             win.tour_btn,

@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.7` en repo local; ultimo binario publicado `v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.8` instalada localmente; ultimo binario publicado en GitHub `v0.6.5`) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,12 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Trabajo v0.6.8 (27/11/2026, Antigravity + Claude Code; commit local, SIN release)
+
+- **Logo propio (`assets/icons/winoptiai_logo.svg`, Claude Code):** separa producto y organizacion como en PDF Lector. 100 % poligonal (sin curvas ni `path`), colores fijos (no `currentColor`): `load_svg_pixmap("winoptiai_logo", size=N)` lo dibuja tal cual. Usos: `main_window.brand_icon` (26 px, cabecera "WinOptiAI / vX"), `about_updater_dialog` (40 px), `tour_dialog` (28 px), `system_tray.build_high_contrast_tray_icon` (16-48 px; respaldo al emblema TRODAI si falta el SVG), `app._app_window_icon` (respaldo del `.ico`). `scripts/build_exe.render_logo` rasteriza el SVG con Qt para `winoptiai.ico` (16-256) y `wizard_large/small.bmp`. `brand.svg` se conserva: sello `org_seal` 12 px + "by TRODAI" al pie de la barra lateral y 14 px en Acerca de. Pruebas: `tests/test_v068_logo.py`.
+- **Instalada localmente** la v0.6.8 (`%LOCALAPPDATA%\Programs\WinOptiAI`), primera muestra de `metrics.sqlite` a los ~14 s.
+- **Pendientes:** (1) la suite completa pasa (199) pero el proceso de pytest a veces cae al salir (`0xC0000409`/`0xC0000005`) por hilos de monitoreo vivos tras las pruebas de v0.6.7/v0.6.8 (reproducido sin el logo, 2 de 5); la app real no lo sufre (`os._exit`). (2) `crash.log` registra en la v0.6.5 bloqueos de interfaz de 8-9 s el 27/11 (08:02 y 17:38): revisar si persisten en v0.6.8.
 
 ## Consolidado v0.6.6 (22/11/2026)
 

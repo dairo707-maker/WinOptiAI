@@ -980,3 +980,45 @@ def has_windows_reboot_pending() -> bool:
     except OSError:
         pass
     return False
+
+
+SPI_GETCLIENTAREAANIMATION = 0x1042
+
+
+class _SYSTEM_POWER_STATUS(ctypes.Structure):
+    _fields_ = [
+        ("ACLineStatus", wintypes.BYTE),
+        ("BatteryFlag", wintypes.BYTE),
+        ("BatteryLifePercent", wintypes.BYTE),
+        ("SystemStatusFlag", wintypes.BYTE),
+        ("BatteryLifeTime", wintypes.DWORD),
+        ("BatteryFullLifeTime", wintypes.DWORD),
+    ]
+
+
+def windows_animations_enabled() -> bool:
+    """Return False when user disabled OS animations in Windows Accessibility/Visual Effects."""
+    if not IS_WINDOWS:
+        return True
+    try:
+        enabled = wintypes.BOOL(True)
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION, 0, ctypes.byref(enabled), 0
+        )
+        return bool(enabled.value) if ok else True
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def is_battery_saver_active() -> bool:
+    """Return True when Windows 11 Battery Saver (SystemStatusFlag bit 0) is active."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        status = _SYSTEM_POWER_STATUS()
+        ok = ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status))
+        if not ok:
+            return False
+        return bool(status.SystemStatusFlag & 0x01)
+    except Exception:  # noqa: BLE001
+        return False

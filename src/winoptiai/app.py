@@ -70,7 +70,7 @@ def _set_app_user_model_id() -> None:
 
 
 def _app_window_icon():
-    """Icono de ventana/barra de tareas: el mismo .ico a color del ejecutable (Hexa-Vault).
+    """Icono de ventana/barra de tareas: el mismo .ico a color del ejecutable (logo WinOptiAI v0.6.8).
 
     Antes se usaba brand.svg teñido gris claro (#E2E7ED), casi invisible en barra clara.
     """
@@ -83,7 +83,7 @@ def _app_window_icon():
         icon = QIcon(str(ico))
         if not icon.isNull():
             return icon
-    return load_svg_icon("brand", color="#0EA5E9", size=32)
+    return load_svg_icon("winoptiai_logo", size=32)  # v0.6.8: logo propio a color
 
 
 def main() -> int:

@@ -280,8 +280,14 @@ class MetricsStore:
 class MinuteAggregator:
     """Promedia lecturas de 2 s y entrega una muestra por minuto (sin depender de Qt)."""
 
-    def __init__(self, interval: int = SAMPLE_INTERVAL_SECONDS) -> None:
+    def __init__(
+        self,
+        interval: int = SAMPLE_INTERVAL_SECONDS,
+        initial_interval: int | None = None,
+    ) -> None:
         self.interval = interval
+        self._first_pending = initial_interval is not None and initial_interval > 0
+        self._initial_interval = int(initial_interval) if initial_interval is not None else interval
         self._started: float | None = None
         self._ram: list[float] = []
         self._cpu: list[float] = []
@@ -321,8 +327,10 @@ class MinuteAggregator:
         if net_kbps is not None:
             self._net.append(float(net_kbps))
         self._total = float(ram_total_gb)
-        if ts - self._started < self.interval:
+        threshold = self._initial_interval if self._first_pending else self.interval
+        if ts - self._started < threshold:
             return None
+        self._first_pending = False
         out = {
             "ts": int(ts),
             "ram_free_gb": round(sum(self._ram) / len(self._ram), 3),
@@ -352,14 +360,39 @@ class MetricsHistory:
         self.app_dir = app_dir or default_app_data_dir()
         self.store = MetricsStore(self.app_dir / "metrics.sqlite")
         self.audit_path = self.app_dir / "audit.jsonl"
+        self.last_error: str = ""
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="winoptiai-metrics")
 
     def submit(self, fn: Callable[..., Any], *args: Any) -> Future:
         return self._executor.submit(fn, *args)
 
+    def _log_record_error(self, exc: BaseException) -> None:
+        msg = f"{type(exc).__name__}: {exc}"
+        self.last_error = msg
+        try:
+            self.app_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            with (self.app_dir / "crash.log").open("a", encoding="utf-8", errors="replace") as fh:
+                fh.write(f"\n[{stamp}] MetricsHistory.record_async error: {msg}\n")
+        except OSError:
+            pass
+
     def record_async(self, partial: dict[str, Any]) -> Future:
         """Completar disco libre y RAM de la app en la hebra trabajadora y guardar."""
-        return self.submit(self._record, dict(partial))
+        fut = self.submit(self._record, dict(partial))
+
+        def _on_done(done_fut: Future) -> None:
+            if done_fut.cancelled():
+                return
+            try:
+                exc = done_fut.exception()
+            except Exception as exc_inner:  # noqa: BLE001
+                exc = exc_inner
+            if exc is not None:
+                self._log_record_error(exc)
+
+        fut.add_done_callback(_on_done)
+        return fut
 
     def _record(self, partial: dict[str, Any]) -> MetricSample:
         import os

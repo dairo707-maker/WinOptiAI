@@ -13,70 +13,96 @@ from .. import get_base_dir
 
 DARK_PALETTE = {
     "mode": "dark",
-    "bg_window": "rgba(10, 15, 29, 236)",
-    "bg_sidebar": "rgba(15, 22, 40, 228)",
-    "bg_glass": "rgba(15, 22, 40, 214)",
-    "bg_glass_elevated": "rgba(20, 29, 51, 232)",
-    "bg_table": "rgba(10, 15, 29, 218)",
-    "bg_table_alt": "rgba(20, 29, 51, 198)",
-    "bg_header": "rgba(15, 22, 40, 242)",
-    "bg_menu": "#0F1628",
-    "bg_hover": "rgba(14, 165, 233, 24)",
-    "bg_active": "rgba(14, 165, 233, 38)",
-    "border_hairline": "#1F2A44",
-    "border_strong": "#33415F",
+    "bg_window": "#0B0F19",
+    "bg_sidebar": "#101624",
+    "bg_glass": "#131B2C",
+    "bg_glass_elevated": "#182234",
+    "bg_table": "#0D1322",
+    "bg_table_alt": "#131B2C",
+    "bg_header": "#101624",
+    "bg_menu": "#101624",
+    "bg_track": "#0D121E",
+    "bg_hover": "#182234",
+    "bg_active": "#212D44",
+    "border_hairline": "#1F2A3E",
+    "border_strong": "#334155",
+    "border_selected": "#64748B",
     "text_primary": "#F8FAFC",
     "text_secondary": "#CBD5E1",
     "text_muted": "#94A3B8",
     "primary_bg": "#F8FAFC",
-    "primary_fg": "#0A0F1D",
+    "primary_fg": "#0B0F19",
     "primary_hover": "#E2E8F0",
     "icon_color": "#F8FAFC",
-    "icon_inverted": "#0A0F1D",
+    "icon_inverted": "#0B0F19",
     "accent": "#0EA5E9",
     "accent_alt": "#3B82F6",
+    "motion_cyan": "#0EA5E9",
+    "motion_blue": "#3B82F6",
     "tag_ice": "#0EA5E9",
-    "tag_warn": "#F59E0B",
-    "tag_risk": "#F87171",
-    "tag_ok": "#34D399",
-    "explorer_bg": "rgba(14, 165, 233, 38)",
-    "explorer_border": "#0EA5E9",
-    "explorer_hover": "rgba(14, 165, 233, 68)",
-    "explorer_icon": "#38BDF8",
+    "tag_warn": "#FCD34D",
+    "tag_risk": "#FCA5A5",
+    "tag_ok": "#6EE7B7",
+    "restore_bg": "#152E28",
+    "restore_bd": "#2B6A5A",
+    "restore_hover": "#1C3D35",
+    "move_bg": "#352814",
+    "move_bd": "#78561F",
+    "move_hover": "#46351A",
+    "risk_bg": "#3A191E",
+    "risk_bd": "#7F2933",
+    "risk_hover": "#4B2027",
+    "explorer_bg": "#182234",
+    "explorer_border": "#334155",
+    "explorer_hover": "#212D44",
+    "explorer_icon": "#F8FAFC",
 }
 
 LIGHT_PALETTE = {
     "mode": "light",
-    "bg_window": "rgba(248, 250, 252, 244)",
-    "bg_sidebar": "rgba(238, 242, 247, 238)",
-    "bg_glass": "rgba(255, 255, 255, 238)",
-    "bg_glass_elevated": "rgba(238, 242, 247, 242)",
-    "bg_table": "rgba(255, 255, 255, 240)",
-    "bg_table_alt": "rgba(241, 245, 249, 230)",
-    "bg_header": "rgba(238, 242, 247, 246)",
+    "bg_window": "#F8FAFC",
+    "bg_sidebar": "#EEF2F6",
+    "bg_glass": "#FFFFFF",
+    "bg_glass_elevated": "#F1F5F9",
+    "bg_table": "#FFFFFF",
+    "bg_table_alt": "#F1F5F9",
+    "bg_header": "#EEF2F6",
     "bg_menu": "#FFFFFF",
-    "bg_hover": "rgba(37, 99, 235, 18)",
-    "bg_active": "rgba(37, 99, 235, 28)",
+    "bg_track": "#E2E8F0",
+    "bg_hover": "#E6ECF5",
+    "bg_active": "#DDE5F0",
     "border_hairline": "#D5DCE6",
     "border_strong": "#AEB8C7",
+    "border_selected": "#64748B",
     "text_primary": "#0A0F1D",
     "text_secondary": "#334155",
     "text_muted": "#4A5568",
-    "primary_bg": "#0A0F1D",
+    "primary_bg": "#0F172A",
     "primary_fg": "#F8FAFC",
     "primary_hover": "#1E293B",
     "icon_color": "#0A0F1D",
     "icon_inverted": "#F8FAFC",
     "accent": "#2563EB",
     "accent_alt": "#3B82F6",
+    "motion_cyan": "#2563EB",
+    "motion_blue": "#3B82F6",
     "tag_ice": "#2563EB",
-    "tag_warn": "#B45309",
-    "tag_risk": "#B91C1C",
-    "tag_ok": "#047857",
-    "explorer_bg": "rgba(37, 99, 235, 24)",
-    "explorer_border": "#3B82F6",
-    "explorer_hover": "rgba(37, 99, 235, 48)",
-    "explorer_icon": "#1D4ED8",
+    "tag_warn": "#92400E",
+    "tag_risk": "#991B1B",
+    "tag_ok": "#166534",
+    "restore_bg": "#DCFCE7",
+    "restore_bd": "#86EFAC",
+    "restore_hover": "#BBF7D0",
+    "move_bg": "#FEF3C7",
+    "move_bd": "#FCD34D",
+    "move_hover": "#FDE68A",
+    "risk_bg": "#FEE2E2",
+    "risk_bd": "#FCA5A5",
+    "risk_hover": "#FECACA",
+    "explorer_bg": "#F1F5F9",
+    "explorer_border": "#AEB8C7",
+    "explorer_hover": "#DDE5F0",
+    "explorer_icon": "#0A0F1D",
 }
 
 # Backward-compatible default reference
@@ -158,26 +184,26 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QWidget#UpdateBanner {{
-        background-color: {_rgba(p["accent"], 26)};
-        border-bottom: 1px solid {_rgba(p["accent"], 120)};
+        background-color: {p["bg_glass_elevated"]};
+        border-bottom: 1px solid {p["border_hairline"]};
     }}
 
     QPushButton#ExplorerBtn {{
-        background-color: {p["explorer_bg"]};
-        border: 1px solid {p["explorer_border"]};
+        background-color: transparent;
+        border: 1px solid transparent;
         padding: 6px 10px;
         min-width: 34px;
         max-width: 36px;
     }}
 
     QPushButton#ExplorerBtn:hover {{
-        background-color: {p["explorer_hover"]};
-        border-color: {p["explorer_icon"]};
+        background-color: {p["bg_hover"]};
+        border: 1px solid transparent;
     }}
 
     QPushButton#BellBtn {{
-        background-color: {p["bg_glass_elevated"]};
-        border: 1px solid {p["border_hairline"]};
+        background-color: transparent;
+        border: 1px solid transparent;
         color: {p["text_primary"]};
         padding: 5px 10px;
         font-family: "{MONO_FONT_FAMILY}", "IBM Plex Mono", monospace;
@@ -186,7 +212,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QPushButton#BellBtn:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["border_strong"]};
+        border: 1px solid transparent;
     }}
 
     QWidget#GlassPanel {{
@@ -279,16 +305,14 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QPushButton#NavButton[active="true"] {{
         background-color: {p["bg_active"]};
-        border-left: 2px solid {p["accent"]};
-        border-top: 1px solid {p["border_hairline"]};
-        border-bottom: 1px solid {p["border_hairline"]};
+        border: 1px solid {p["border_strong"]};
         color: {p["text_primary"]};
     }}
 
     QPushButton#PrimaryAction {{
         background-color: {p["primary_bg"]};
         color: {p["primary_fg"]};
-        border: 1px solid {p["primary_bg"]};
+        border: none;
         padding: 8px 16px;
         font-size: 12px;
         font-weight: 700;
@@ -297,17 +321,18 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QPushButton#PrimaryAction:hover {{
         background-color: {p["primary_hover"]};
-        border-color: {p["primary_hover"]};
+        border: none;
     }}
 
     QPushButton#PrimaryAction:disabled {{
         opacity: 0.45;
     }}
 
+    /* Botones planos sin bordes ni acentos cian en reposo (estilo PDF Lector TRODAI). */
     QPushButton#GhostAction {{
-        background-color: {p["bg_glass_elevated"]};
+        background-color: transparent;
         color: {p["text_primary"]};
-        border: 1px solid {p["border_hairline"]};
+        border: 1px solid transparent;
         padding: 6px 11px;
         font-size: 12px;
         font-weight: 500;
@@ -315,19 +340,24 @@ def build_obsidian_qss(mode: str = "dark") -> str:
 
     QPushButton#GhostAction:hover {{
         background-color: {p["bg_hover"]};
-        border-color: {p["accent"]};
+        border: 1px solid transparent;
+    }}
+
+    QPushButton#GhostAction:pressed {{
+        background-color: {p["bg_active"]};
     }}
 
     QPushButton#GhostAction[selected="true"] {{
         background-color: {p["bg_active"]};
-        border-color: {p["accent"]};
+        border: 1px solid {p["border_selected"]};
+        font-weight: 700;
     }}
 
-    /* v0.5.6: pestanas de modo (navegacion dentro de una vista): planas, subrayado al activarse. */
+    /* Pestanas de modo planas sin bordes visibles en reposo y fondo neutro al activarse. */
     QPushButton#ModeTab {{
         background-color: transparent;
         color: {p["text_secondary"]};
-        border: 1px solid {p["border_hairline"]};
+        border: 1px solid transparent;
         padding: 7px 12px;
         font-size: 12px;
         font-weight: 500;
@@ -341,50 +371,46 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QPushButton#ModeTab[selected="true"] {{
         background-color: {p["bg_active"]};
         color: {p["text_primary"]};
-        border-color: {p["border_strong"]};
-        border-bottom: 2px solid {p["accent"]};
+        border: 1px solid transparent;
+        border-bottom: 2px solid {p["border_selected"]};
         font-weight: 700;
     }}
 
-    /* v0.5.6: acciones especificas de cada pestana segun su efecto (tonos apagados, sin neon). */
+    /* Acciones especificas de cada pestana 100% solidas opacas (cero rgba). */
     QPushButton#RestoreAction, QPushButton#MoveAction, QPushButton#RiskAction {{
         padding: 7px 12px;
         font-size: 12px;
         font-weight: 700;
-        border-left-width: 3px;
     }}
 
     QPushButton#RestoreAction {{
-        background-color: {_rgba(p["tag_ok"], 22)};
+        background-color: {p["restore_bg"]};
         color: {p["tag_ok"]};
-        border: 1px solid {_rgba(p["tag_ok"], 120)};
-        border-left: 3px solid {p["tag_ok"]};
+        border: 1px solid {p["restore_bd"]};
     }}
 
     QPushButton#RestoreAction:hover {{
-        background-color: {_rgba(p["tag_ok"], 44)};
+        background-color: {p["restore_hover"]};
     }}
 
     QPushButton#MoveAction {{
-        background-color: {_rgba(p["tag_warn"], 20)};
+        background-color: {p["move_bg"]};
         color: {p["tag_warn"]};
-        border: 1px solid {_rgba(p["tag_warn"], 120)};
-        border-left: 3px solid {p["tag_warn"]};
+        border: 1px solid {p["move_bd"]};
     }}
 
     QPushButton#MoveAction:hover {{
-        background-color: {_rgba(p["tag_warn"], 42)};
+        background-color: {p["move_hover"]};
     }}
 
     QPushButton#RiskAction {{
-        background-color: {_rgba(p["tag_risk"], 22)};
+        background-color: {p["risk_bg"]};
         color: {p["tag_risk"]};
-        border: 1px solid {_rgba(p["tag_risk"], 130)};
-        border-left: 3px solid {p["tag_risk"]};
+        border: 1px solid {p["risk_bd"]};
     }}
 
     QPushButton#RiskAction:hover {{
-        background-color: {_rgba(p["tag_risk"], 46)};
+        background-color: {p["risk_hover"]};
     }}
 
     QPushButton#RestoreAction:disabled, QPushButton#MoveAction:disabled, QPushButton#RiskAction:disabled {{
@@ -461,7 +487,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QLineEdit:focus {{
-        border-color: {p["accent"]};
+        border-color: {p["border_selected"]};
     }}
 
     QComboBox QAbstractItemView {{
@@ -498,7 +524,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QHeaderView::section:hover {{
         background-color: {p["bg_hover"]};
         color: {p["text_primary"]};
-        border-right: 1px solid {p["accent"]};
+        border-right: 1px solid {p["border_selected"]};
     }}
 
     QProgressBar {{
@@ -509,7 +535,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QProgressBar::chunk {{
-        background-color: {p["accent"]};
+        background-color: {p["border_selected"]};
     }}
 
     QProgressBar[tone="ok"]::chunk {{
@@ -538,13 +564,13 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QCheckBox::indicator:checked {{
-        background-color: {p["accent"]};
-        border-color: {p["accent"]};
+        background-color: {p["bg_active"]};
+        border-color: {p["text_primary"]};
     }}
 
     QCheckBox::indicator:indeterminate {{
         background-color: {p["border_strong"]};
-        border-color: {p["accent"]};
+        border-color: {p["border_selected"]};
     }}
 
     QCheckBox::indicator {{
@@ -582,7 +608,7 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     }}
 
     QScrollBar::handle:horizontal:hover, QScrollBar::handle:vertical:hover {{
-        background: {p["accent"]};
+        background: {p["border_selected"]};
     }}
 
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
@@ -644,13 +670,14 @@ def build_obsidian_qss(mode: str = "dark") -> str:
     QTabBar::tab:selected {{
         background-color: {p["bg_active"]};
         color: {p["text_primary"]};
-        border-bottom: 2px solid {p["accent"]};
+        border-bottom: 2px solid {p["border_selected"]};
+        font-weight: 700;
     }}
 
     QToolTip {{
         background-color: {p["bg_menu"]};
         color: {p["text_primary"]};
-        border: 1px solid {p["accent"]};
+        border: 1px solid {p["border_strong"]};
         border-radius: 0px;
         padding: 8px 10px;
         font-family: "{UI_FONT_FAMILY}", "Instrument Sans", "Segoe UI", sans-serif;
