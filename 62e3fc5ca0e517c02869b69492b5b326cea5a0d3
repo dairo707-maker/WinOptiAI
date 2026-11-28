@@ -1,0 +1,6 @@
+Verificacion v0.6.8 (Claude Code, 27/11/2026):
+- pytest: 199 aprobadas, 2 omitidas. El proceso de pytest a veces cae al salir (0xC0000409/0xC0000005) por hilos vivos de las pruebas de v0.6.7/v0.6.8; reproducido sin el logo (2 de 5); la app real usa os._exit.
+- build_exe: exit 0; ico 16-256 y bmp del asistente desde winoptiai_logo.svg.
+- Portable aislado: ventana 'WinOptiAI 0.6.8', crash.log vacio, metrics.sqlite con 1 muestra a los ~40 s.
+- Instalada en %LOCALAPPDATA%\Programs\WinOptiAI (registro 0.6.8); muestra nueva a los ~14 s del arranque.
+- Sin push ni release.
