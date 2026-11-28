@@ -62,9 +62,59 @@ class InstalledApp:
     scope: str = "Usuario"  # "Usuario" | "Sistema"
     install_date_ts: float = 0.0
     icon_path: str = ""  # v0.6.5: archivo (.exe/.ico/.dll) del que Windows toma el icono de la app
-    upgrade_status: str = ""  # v0.6.8: "", "editor_only", "needs_admin", "tls_error", "blocked", "failed"
+    upgrade_status: str = ""  # v0.6.8/0.6.9: "", "editor_only", "needs_admin", "tls_error", "blocked",
+    # "needs_interactive", "uninstall_failed", "failed"
     upgrade_note: str = ""
     upgrade_url: str = ""
+
+
+# v0.6.9: componentes de Windows protegidos SOLO contra desinstalar; actualizarlos es seguro y
+# recomendado (parches de seguridad). Antes Visual C++ salia "ACTUALIZAR" pero el boton no hacia nada.
+_UPGRADE_OK_PROTECTED: tuple[str, ...] = (
+    "microsoft visual c++",
+    "microsoft .net",
+    "microsoft windows desktop runtime",
+    "microsoft asp.net core",
+)
+
+# v0.6.9: paquetes retirados por su editor: actualizarlos falla (Teams clasico: 1603 al quitar la
+# version vieja) y conviene desinstalarlos.
+_RETIRED_PACKAGES: tuple[tuple[str, str], ...] = (
+    (
+        "teams machine-wide installer",
+        "Teams clasico fue retirado por Microsoft: ya no recibe actualizaciones. El Teams nuevo no lo necesita; puedes desinstalarlo.",
+    ),
+    (
+        "microsoft.teams.classic",
+        "Teams clasico fue retirado por Microsoft: ya no recibe actualizaciones. El Teams nuevo no lo necesita; puedes desinstalarlo.",
+    ),
+)
+
+
+def retired_reason(app: "InstalledApp") -> str:
+    low = f"{app.name} {app.winget_id}".lower()
+    for key, reason in _RETIRED_PACKAGES:
+        if key in low:
+            return reason
+    return ""
+
+
+def upgrade_block_reason(app: "InstalledApp") -> str:
+    """'' si la app se puede actualizar; si no, el motivo (protegida, retirada o solo editor)."""
+    retired = retired_reason(app)
+    if retired:
+        return retired
+    if app.protected_reason:
+        low = (app.name or "").lower()
+        if not any(k in low for k in _UPGRADE_OK_PROTECTED):
+            return app.protected_reason
+    if app.upgrade_status == "editor_only":
+        return "No se puede actualizar con winget: usa el actualizador propio del editor."
+    return ""
+
+
+def can_upgrade(app: "InstalledApp") -> bool:
+    return bool(app.available_version) and not upgrade_block_reason(app)
 
 
 def is_protected_application(name: str, publisher: str = "", install_location: str = "") -> str:
@@ -718,6 +768,20 @@ def classify_winget_failure(returncode: int, output: str) -> tuple[str, str, str
             f"Estaban abiertos {', '.join(blocking)}. Cierralos y vuelve a intentar.",
             url,
         )
+    # v0.6.9: 1603 = fallo generico de Windows Installer. Caso real 27/11 (Epson Software Updater):
+    # una accion propia del instalador abre la licencia (EULA) y en modo silencioso falla.
+    if re.search(r"desinstalaci\S*\s+con\s+el\s+c\S+digo\s+de\s+salida:\s*1603|uninstall\S*\s+failed\S*.*1603", low):
+        return (
+            "uninstall_failed",
+            "No se pudo quitar la version anterior (1603). Desinstalala y luego instala la nueva, o usa el modo interactivo.",
+            url,
+        )
+    if re.search(r"(instalador|installer)\D{0,60}1603\b", low):
+        return (
+            "needs_interactive",
+            "El instalador necesita completarse en su propia ventana (licencia o pasos). Usa 'Actualizar en modo interactivo'.",
+            url,
+        )
     snippet = next(
         (ln.strip() for ln in reversed(text.replace("\r", "\n").splitlines()) if ln.strip()), ""
     )[:160]
@@ -808,8 +872,9 @@ def upgrade_app_winget(
     La salida va a un archivo (no a una tuberia) y el PID de winget queda protegido del cierre
     total: si se cierra WinOptiAI o se cancela, la instalacion en curso termina igual.
     """
-    if app.protected_reason:
-        return False, f"Bloqueada por seguridad: {app.protected_reason}"
+    block = upgrade_block_reason(app)
+    if block:
+        return False, f"{app.name}: {block}"
     if not is_winget_available() and popen is None:
         return False, "winget no esta disponible en este equipo."
 
@@ -912,6 +977,15 @@ def upgrade_app_winget(
             "Revisa tu red/antivirus o actualiza desde el sitio oficial."
         )
 
+    if category == "needs_interactive":
+        app.upgrade_status = "needs_interactive"
+        app.upgrade_note = detail
+        return False, f"{app.name}: el instalador necesita su ventana (licencia o pasos). Usa 'Actualizar en modo interactivo'."
+    if category == "uninstall_failed":
+        app.upgrade_status = "uninstall_failed"
+        app.upgrade_note = detail
+        return False, f"{app.name}: no se pudo quitar la version anterior (1603). Desinstalala y reinstala, o usa el modo interactivo."
+
     app.upgrade_status = "failed"
     app.upgrade_note = detail
     return False, f"winget no pudo actualizar {app.name} ({detail})."
@@ -919,8 +993,9 @@ def upgrade_app_winget(
 
 def upgrade_app_winget_elevated(app: InstalledApp) -> tuple[bool, str]:
     """Lanza ``winget upgrade`` en consola elevada UAC (sin escribir archivos temporales)."""
-    if app.protected_reason:
-        return False, f"Bloqueada por seguridad: {app.protected_reason}"
+    block = upgrade_block_reason(app)
+    if block:
+        return False, f"{app.name}: {block}"
     if not IS_WINDOWS:
         return False, "Solo disponible en Windows."
     if not is_winget_available():
@@ -939,6 +1014,171 @@ def upgrade_app_winget_elevated(app: InstalledApp) -> tuple[bool, str]:
     return True, f"{app.name}: actualizacion lanzada con permisos de Administrador (UAC)."
 
 
+def upgrade_app_winget_interactive(
+    app: InstalledApp, popen: Callable[..., subprocess.Popen] | None = None
+) -> tuple[bool, str]:
+    """v0.6.9: abre el instalador oficial en su propia ventana (``winget upgrade --interactive``).
+
+    Para instaladores que fallan en silencio (1603 por licencia/EULA, como Epson). La persona
+    completa los pasos; WinOptiAI no espera ni mata nada (PID protegido del cierre total).
+    """
+    block = upgrade_block_reason(app)
+    if block:
+        return False, f"{app.name}: {block}"
+    if not is_winget_available() and popen is None:
+        return False, "winget no esta disponible en este equipo."
+    cmd = [_winget_exe(), "upgrade"]
+    cmd.extend(["--id", app.winget_id, "--exact"] if app.winget_id else ["--name", app.name, "--exact"])
+    cmd.extend(["--interactive", "--accept-source-agreements", "--accept-package-agreements"])
+    try:
+        proc = (popen or subprocess.Popen)(
+            cmd, creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0), stdin=subprocess.DEVNULL
+        )
+    except OSError as exc:
+        return False, f"No se pudo abrir el instalador de {app.name}: {exc}"
+    from ..core.win32_bridge import protect_child_pid
+
+    protect_child_pid(proc.pid)
+    app.upgrade_status = ""
+    app.upgrade_note = "Instalador interactivo abierto: completa los pasos en su ventana."
+    return True, f"{app.name}: se abrio su instalador. Completa los pasos en esa ventana."
+
+
+# ---------------------------------------------------------------- v0.6.9: informacion de la app
+_WINGET_SHOW_KEYS: dict[str, str] = {
+    "descripcion": "description",
+    "description": "description",
+    "descripcion breve": "short_description",
+    "short description": "short_description",
+    "editor": "publisher",
+    "publisher": "publisher",
+    "pagina principal": "homepage",
+    "homepage": "homepage",
+    "licencia": "license",
+    "license": "license",
+    "autor": "author",
+    "author": "author",
+}
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn").lower()
+
+
+def parse_winget_show(text: str) -> dict[str, str]:
+    """Campos utiles de ``winget show`` (es/en): descripcion, editor, pagina, licencia, autor."""
+    out: dict[str, str] = {}
+    last = ""
+    for raw in (text or "").replace("\r", "\n").splitlines():
+        if not raw.strip():
+            last = ""
+            continue
+        if raw.startswith((" ", "\t")):
+            if last == "description":
+                out["description"] = (out.get("description", "") + " " + raw.strip()).strip()
+            continue
+        if ":" not in raw:
+            last = ""
+            continue
+        key, val = raw.split(":", 1)
+        field = _WINGET_SHOW_KEYS.get(_fold(key.strip()))
+        last = field or ""
+        if field and val.strip():
+            out[field] = val.strip()
+    hp = out.get("homepage", "")
+    if hp and not hp.lower().startswith("https://"):
+        out.pop("homepage", None)
+    return out
+
+
+def winget_package_info(app: "InstalledApp", timeout: float = 40.0) -> dict[str, str]:
+    """Descripcion oficial del catalogo winget ({} si no esta en winget o falla)."""
+    if not app.winget_id or not is_winget_available():
+        return {}
+    try:
+        res = subprocess.run(
+            [_winget_exe(), "show", "--id", app.winget_id, "--exact", "--accept-source-agreements",
+             "--disable-interactivity"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    return parse_winget_show(res.stdout or "")
+
+
+def exe_version_info(path: str) -> dict[str, str]:
+    """Descripcion interna de un .exe (la de Propiedades > Detalles): solo discos locales."""
+    if not IS_WINDOWS or not path or not is_local_disk_path(path) or not os.path.isfile(path):
+        return {}
+    import ctypes
+    from ctypes import wintypes
+
+    ver = ctypes.WinDLL("version", use_last_error=True)
+    ver.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    ver.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    ver.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    ver.GetFileVersionInfoW.restype = wintypes.BOOL
+    ver.VerQueryValueW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p),
+                                   ctypes.POINTER(wintypes.UINT)]
+    ver.VerQueryValueW.restype = wintypes.BOOL
+    try:
+        size = ver.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return {}
+        buf = ctypes.create_string_buffer(size)
+        if not ver.GetFileVersionInfoW(path, 0, size, buf):
+            return {}
+        ptr = ctypes.c_void_p()
+        ln = wintypes.UINT()
+        langs: list[str] = []
+        if ver.VerQueryValueW(buf, r"\VarFileInfo\Translation", ctypes.byref(ptr), ctypes.byref(ln)) and ln.value >= 4:
+            arr = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_ushort))
+            for i in range(0, ln.value // 2, 2):
+                langs.append(f"{arr[i]:04x}{arr[i + 1]:04x}")
+        langs += ["040904b0", "040904e4", "0c0a04b0"]
+        out: dict[str, str] = {}
+        for field, key in (("FileDescription", "description"), ("CompanyName", "publisher"),
+                           ("ProductName", "product"), ("LegalCopyright", "copyright")):
+            for lang in langs:
+                if ver.VerQueryValueW(buf, f"\\StringFileInfo\\{lang}\\{field}", ctypes.byref(ptr), ctypes.byref(ln)) and ln.value:
+                    val = ctypes.wstring_at(ptr.value, ln.value).strip("\x00 ").strip()
+                    if val:
+                        out[key] = val
+                        break
+        return out
+    except (OSError, ValueError):
+        return {}
+
+
+def app_local_info(app: "InstalledApp") -> dict[str, str]:
+    """Informacion sin red: descripcion del .exe principal de la app (si se encuentra)."""
+    installer_words = ("installshield", "setup", "install", "uninst", "updater")
+    candidates: list[str] = []
+    for cand in (app.icon_path, guess_app_icon_path(app)):
+        if cand and cand.lower().endswith(".exe") and cand not in candidates:
+            candidates.append(cand)
+    loc = (app.install_location or "").strip().strip('"')
+    if loc and is_local_disk_path(loc) and os.path.isdir(loc):
+        try:
+            words = [w for w in re.split(r"[^a-z0-9]+", app.name.lower()) if len(w) >= 3]
+            for entry in os.scandir(loc):
+                low = entry.name.lower()
+                if entry.is_file() and low.endswith(".exe") and any(w in low for w in words):
+                    candidates.append(entry.path)
+        except OSError:
+            pass
+    for exe in candidates:
+        if any(k in os.path.basename(exe).lower() for k in _ICON_SKIP_EXE):
+            continue
+        info = exe_version_info(exe)
+        if info and not any(k in info.get("description", "").lower() for k in installer_words):
+            return info
+    return {}
+
+
 # v0.6.3: "Actualizar todas" nunca toca entornos de desarrollo ni saltos de version mayor:
 # cambian rutas, paquetes y compatibilidad de proyectos (leccion del incidente del 17/11).
 _BULK_SKIP_KEYWORDS: tuple[str, ...] = (
@@ -955,10 +1195,9 @@ def _major_version(text: str) -> int | None:
 
 def bulk_upgrade_skip_reason(app: InstalledApp) -> str:
     """Motivo para excluir una app de 'Actualizar todas' ('' = se puede actualizar en lote)."""
-    if app.protected_reason:
-        return app.protected_reason
-    if app.upgrade_status == "editor_only":
-        return "No actualizable via winget: usar actualizador del editor"
+    block = upgrade_block_reason(app)
+    if block:
+        return block
     if not app.available_version:
         return "Sin nueva version"
     low = f"{app.name} {app.winget_id}".lower()
@@ -976,19 +1215,38 @@ def upgrade_apps_winget(
     progress_cb: Callable[[int, str], None] | None = None,
     controller=None,
     upgrade_fn: Callable[..., tuple[bool, str]] | None = None,
+    subtask_cb: Callable[..., None] | None = None,
 ) -> list[tuple[InstalledApp, bool, str]]:
-    """Actualizar varias apps una por una (microprocesos): se puede cancelar entre una y otra."""
+    """Actualizar varias apps una por una (microprocesos): se puede cancelar entre una y otra.
+
+    v0.6.9: con ``subtask_cb(clave, label=, pct=, state=, detail=)`` cada app tiene su propia barra
+    (en espera -> en curso -> listo/error) y la vista la quita de "por actualizar" al terminar.
+    """
     from ..core.task_control import TaskCanceledError, stop_point
 
+    def _st(app: InstalledApp, **kw) -> None:
+        if subtask_cb is not None:
+            try:
+                subtask_cb(app.app_id, **kw)
+            except Exception:  # noqa: BLE001 - la barra nunca debe romper la actualizacion
+                pass
+
+    for app in apps:
+        _st(app, label=app.name, pct=0, state="pending")
     results: list[tuple[InstalledApp, bool, str]] = []
     total = max(1, len(apps))
     for i, app in enumerate(apps):
         try:
             stop_point(controller)
         except TaskCanceledError:
+            for rest in apps[i:]:
+                _st(rest, state="skipped", detail="Cancelado antes de empezar")
             break
         except Exception:  # noqa: BLE001 - Guardar Pausa no aplica: se trata como cancelar
+            for rest in apps[i:]:
+                _st(rest, state="skipped", detail="Cancelado antes de empezar")
             break
+        _st(app, state="running", pct=2, detail="Preparando...")
         prefix = f"({i + 1}/{len(apps)})"
         if progress_cb:
             progress_cb(int(5 + 90 * i / total), f"{prefix} Actualizando {app.name}...")
@@ -996,15 +1254,17 @@ def upgrade_apps_winget(
             ok, msg = upgrade_fn(app)
         else:
 
-            def _sub(pct: int, text: str, _i: int = i, _p: str = prefix) -> None:
+            def _sub(pct: int, text: str, _i: int = i, _p: str = prefix, _a: InstalledApp = app) -> None:
                 if progress_cb:
                     progress_cb(int(5 + 90 * (_i + pct / 100) / total), f"{_p} {text}")
+                _st(_a, pct=pct, detail=text)
 
             ok, msg = upgrade_app_winget(app, progress_cb=_sub, controller=controller)
         if ok:
             app.version = app.available_version or app.version
             app.available_version = ""
         results.append((app, ok, msg))
+        _st(app, state="ok" if ok else "error", detail=msg)
     if progress_cb:
         ok_n = sum(1 for _a, ok, _m in results if ok)
         progress_cb(100, f"{ok_n}/{len(apps)} actualizadas")

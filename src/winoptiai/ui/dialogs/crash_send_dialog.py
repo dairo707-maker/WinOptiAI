@@ -1,4 +1,4 @@
-"""Aviso tipo Windows "WinOptiAI se cerro inesperadamente" con envio opcional a GitHub (v0.5.3)."""
+"""Aviso tipo Windows "WinOptiAI se cerro inesperadamente" con envio opcional por correo (v0.6.9; antes GitHub)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ from ...core.crash_guard import CrashGuard
 from ...core.crash_reporter import (
     KIND_CRASH,
     build_issue_title,
-    build_issue_url,
+    REPORT_EMAIL,
+    build_mailto_url,
     build_report_markdown,
     save_report_file,
 )
@@ -77,7 +78,8 @@ class CrashSendDialog(QDialog):
         msg = QLabel(
             intro
             + "¿Desea enviar un informe de error para ayudar a diagnosticar el problema?\n"
-            "Se abrira GitHub en su navegador con el informe ya escrito; usted lo revisa antes de enviarlo. "
+            "Se abrira su programa de correo con el informe ya escrito para el equipo de WinOptiAI: usted lo "
+            "revisa y pulsa Enviar. No necesita cuenta de GitHub ni de ningun otro sitio. "
             "Su usuario de Windows, el nombre del equipo y los correos se reemplazaron por marcadores."
         )
         msg.setWordWrap(True)
@@ -134,9 +136,9 @@ class CrashSendDialog(QDialog):
         clip = QApplication.clipboard()
         if clip is not None:
             clip.setText(self.report_text)
-        # v0.5.7: respaldo en disco por si el portapapeles se pierde al iniciar sesion en GitHub.
+        # Respaldo en disco por si el portapapeles se pierde (y para adjuntarlo al correo).
         self.saved_path = save_report_file(self.report_text, self.guard.app_dir)
-        url, truncated = build_issue_url(self.issue_title, self.report_text)
+        url, truncated = build_mailto_url(self.issue_title, self.report_text)
         opened = bool(self._open_url(url))
         self.sent = opened
         if self.on_decision is not None:
@@ -145,20 +147,19 @@ class CrashSendDialog(QDialog):
         if opened:
             QMessageBox.information(
                 self,
-                "Informe abierto en GitHub",
-                "Se abrio GitHub en su navegador con el informe.\n\n"
-                "1. Si GitHub le pide iniciar sesion, hagalo; volvera al formulario.\n"
+                "Informe listo en su correo",
+                "Se abrio su programa de correo con el informe.\n\n"
                 + (
-                    "2. El informe es largo: borre la nota final y pegue el texto completo con Ctrl+V "
-                    "(ya esta en su portapapeles).\n3. Pulse \"Create\" para enviarlo."
+                    "1. El informe es largo: pegue el texto completo con Ctrl+V debajo de la nota final "
+                    "(ya esta en su portapapeles) o adjunte el archivo guardado.\n2. Pulse Enviar."
                     if truncated
-                    else "2. Revise el texto y pulse \"Create\" para enviarlo."
+                    else "1. Revise el texto.\n2. Pulse Enviar."
                 )
                 + where,
             )
             self.accept()
             return
         self.status_lbl.setText(
-            "No se pudo abrir el navegador. El informe quedo copiado en el portapapeles: "
-            "peguelo en github.com/dairo707-maker/WinOptiAI/issues/new" + where.replace("\n", " ")
+            "No hay un programa de correo configurado. El informe quedo copiado en el portapapeles: "
+            f"envielo desde su correo web (Gmail, Outlook) a {REPORT_EMAIL}." + where.replace("\n", " ")
         )

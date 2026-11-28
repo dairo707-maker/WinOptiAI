@@ -79,6 +79,7 @@ class ThermalBiosView(QWidget):
         self.lang = lang
         self.profile_buttons: dict[str, QPushButton] = {}
         self.last_report: HardwareAuditReport | None = None
+        self.last_driver_updates: list = []  # v0.6.9: controladores/BIOS pendientes (Windows Update)
         # v0.5.1: acciones en curso (evita doble clic) y re-render diferido pendiente
         self._running_actions: set[str] = set()
         self._render_pending = False
@@ -181,9 +182,22 @@ class ThermalBiosView(QWidget):
         self.hw_lbl.setObjectName("BodyText")
         self.hw_lbl.setWordWrap(True)
         hw_outer.addWidget(self.hw_lbl)
+        # v0.6.9: controladores y BIOS/firmware pendientes segun Windows Update (solo lectura)
+        self.updates_lbl = QLabel("Actualizaciones de controladores y BIOS: pulsa 'Escanear Hardware y BIOS'.")
+        self.updates_lbl.setObjectName("Caption")
+        self.updates_lbl.setWordWrap(True)
+        hw_outer.addWidget(self.updates_lbl)
         # v0.5.6: acciones en su propia fila (antes comprimian el inventario en ventanas angostas)
         hw_layout = FlowLayout(spacing=8)
         hw_outer.addLayout(hw_layout)
+
+        self.wu_btn = QPushButton("Abrir Windows Update")
+        self.wu_btn.setObjectName("GhostAction")
+        self.wu_btn.setToolTip("Instala controladores y BIOS/firmware desde Windows Update > Actualizaciones opcionales")
+        self.wu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.wu_btn.clicked.connect(self._open_windows_update)
+        self.wu_btn.setVisible(False)
+        hw_layout.addWidget(self.wu_btn)
 
         self.backups_btn = QPushButton("Copias Seguridad")
         self.backups_btn.setObjectName("GhostAction")
@@ -313,14 +327,62 @@ class ThermalBiosView(QWidget):
         self._schedule_render_recommendations()
         self.notify_cb("Pendientes de auditoria restablecidos.")
 
-    def refresh_audit(self) -> None:
+    def refresh_audit(self, *, announce: bool = True) -> None:
+        """v0.6.9: auditoria + controladores/BIOS en Windows Update; avisa el resultado si lo pidio la persona."""
+        self._announce_audit = announce
+        from ...thermal_bios.driver_updates import check_pending_driver_updates
+
         self.audit_btn.setEnabled(False)
-        self.run_async(
-            run_hardware_bios_audit,
-            self._on_audit_ready,
-            "Auditoria universal hardware",
-            on_error=lambda _e: self.audit_btn.setEnabled(True),
+        self.audit_btn.setText(" Escaneando...")
+        self.updates_lbl.setText("Buscando controladores y BIOS/firmware en Windows Update...")
+
+        def _work(progress_cb=None):
+            if progress_cb:
+                progress_cb(10, "Perfil de hardware y BIOS...")
+            report = run_hardware_bios_audit()
+            if progress_cb:
+                progress_cb(60, "Consultando Windows Update (controladores y BIOS)...")
+            updates, err = check_pending_driver_updates()
+            return report, updates, err
+
+        def _err(_e: str) -> None:
+            self.audit_btn.setEnabled(True)
+            self.audit_btn.setText(" Escanear Hardware y BIOS")
+            self.updates_lbl.setText("No se pudo completar la revision. Intenta de nuevo.")
+
+        self.run_async(_work, self._on_full_audit_ready, "Auditoria universal hardware",
+                       notify_on_complete=False, on_error=_err)
+
+    def _on_full_audit_ready(self, result) -> None:
+        from ...thermal_bios.driver_updates import summarize_driver_updates
+
+        report, updates, err = result
+        self.audit_btn.setText(" Escanear Hardware y BIOS")
+        self._on_audit_ready(report)
+        self.last_driver_updates = updates
+        summary = summarize_driver_updates(updates, err)
+        lines = [summary]
+        for u in updates[:6]:
+            date = f" ({u.date})" if u.date else ""
+            lines.append(f"  - {u.kind}: {u.title}{date}")
+        self.updates_lbl.setText("\n".join(lines))
+        self.wu_btn.setVisible(bool(updates))
+        pending_recs = len(
+            [r for r in report.recommendations
+             if r.get("action_id", "") not in set(self.policy.config.completed_audit_actions)]
         )
+        recs_txt = f" {pending_recs} recomendacion(es) en la tabla." if pending_recs else " Sin recomendaciones pendientes."
+        if getattr(self, "_announce_audit", True):
+            self.notify_cb(f"Hardware y BIOS revisados (BIOS {report.bios_version}). {summary}{recs_txt}")
+            self.policy.record_audit_event("usuario", "Escanear Hardware y BIOS", summary)
+
+    def _open_windows_update(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from ...thermal_bios.driver_updates import OPTIONAL_UPDATES_URI
+
+        QDesktopServices.openUrl(QUrl(OPTIONAL_UPDATES_URI))
 
     def _run_recommendation(self, item: dict[str, str]) -> None:
         """Slot of a cell-widget button: never rebuild the table synchronously from here.

@@ -32,6 +32,11 @@ TOOLTIPS: dict[str, str] = {
         "Mejora: actualiza software desactualizado en 1 clic o desinstala programas olvidados limpiando residuos.\n"
         "Seguridad: protege Windows, antivirus, drivers y WinOptiAI; los restos opcionales van a Cuarentena."
     ),
+    "nav_maintenance": (
+        "Mantenimiento del sistema: Registro, unidades, salud del SSD y espacio que ocupa Windows.\n"
+        "Mejora: quita entradas rotas del Registro, optimiza cada disco segun su tipo (TRIM en SSD) y libera espacio del sistema.\n"
+        "Seguridad: solo entradas que apuntan a archivos inexistentes, con copia .reg restaurable; acciones con herramientas oficiales de Windows y UAC."
+    ),
     "nav_startup": (
         "Gestor de aplicaciones que arrancan con Windows con sugerencia inteligente tipo semaforo.\n"
         "Mejora: acelera el encendido y reduce RAM consumida al iniciar pausando apps que casi no usas.\n"
@@ -393,6 +398,14 @@ SECTION_BENEFITS: dict[str, dict[str, str]] = {
             "mediante Microsoft winget y desinstala programas con opcion segura de limpiar restos."
         ),
         "safety": "Protege componentes de Windows, antivirus, drivers y WinOptiAI; restos opcionales van a Cuarentena.",
+    },
+    "maintenance": {
+        "title": "Que mejora esta vista (Mantenimiento del sistema)",
+        "improves": (
+            "Quita del Registro lo que quedo roto al desinstalar programas, optimiza cada unidad segun su "
+            "tipo (TRIM en SSD, desfragmentar solo en HDD), vigila la salud del SSD y libera espacio del sistema."
+        ),
+        "safety": "Solo toca entradas que apuntan a archivos inexistentes, siempre con copia .reg restaurable; usa herramientas oficiales de Windows.",
     },
     "startup": {
         "title": "Que mejora esta vista (Inicio Inteligente de Windows)",

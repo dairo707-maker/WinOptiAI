@@ -235,7 +235,8 @@ def test_main_window_clean_labels_motion_and_no_clipping(
         assert "TRODAI SRE" not in labels_txt
         assert "EN REPOSO" not in labels_txt
         assert "GUIA" not in labels_txt
-        assert "v0.6.8" in win.brand_sub.text()
+        from winoptiai import __version__
+        assert f"v{__version__}" in win.brand_sub.text()
         assert not hasattr(win.overview_view, "policy_tag")
         assert not hasattr(win.overview_view, "active_tag")
     finally:

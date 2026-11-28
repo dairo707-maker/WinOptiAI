@@ -636,6 +636,13 @@ def build_obsidian_qss(mode: str = "dark") -> str:
         background-color: {p["bg_active"]};
     }}
 
+    /* v0.6.9: las areas desplazables usaban el fondo blanco nativo (Centro de notificaciones en
+       modo oscuro). Fondo transparente: hereda el panel del tema. */
+    QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport {{
+        background: transparent;
+        border: none;
+    }}
+
     QTabWidget::pane {{
         border: 1px solid {p["border_hairline"]};
         background-color: transparent;

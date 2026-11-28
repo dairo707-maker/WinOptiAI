@@ -61,7 +61,7 @@ class CrashReportDialog(QDialog):
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.clicked.connect(self._open_log)
         actions.addWidget(open_btn)
-        send_btn = QPushButton("Enviar a GitHub")
+        send_btn = QPushButton("Enviar por correo")  # v0.6.9: sin cuenta de GitHub
         send_btn.setObjectName("GhostAction")
         send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         send_btn.clicked.connect(self._send_report)

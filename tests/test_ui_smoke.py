@@ -31,7 +31,7 @@ def test_ui_instantiation_themes_sorting_and_about() -> None:
     win = MainWindow()
     try:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        assert win.stack.count() == 6
+        assert win.stack.count() == 7  # v0.6.9: + Mantenimiento
         assert elapsed_ms < 4500.0
 
         # Verify sortable tables enabled across all 6 views
@@ -44,7 +44,7 @@ def test_ui_instantiation_themes_sorting_and_about() -> None:
         assert win.startup_view.startup_table.isSortingEnabled()
 
         # Switch tabs and storage modes cleanly
-        for idx in range(6):
+        for idx in range(7):
             win._switch_tab(idx)
             assert win.stack.currentIndex() == idx
         for mode in ("junk", "duplicates", "tree", "orphans", "quarantine"):

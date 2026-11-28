@@ -128,7 +128,9 @@ def test_apps_menu_only_shows_what_applies_to_selection(qapp, tmp_path, monkeypa
         return [a.text() for a in build_action_menu(view.apps_table, extras=view._row_menu_extras).actions() if a.text()]
 
     alfa = labels_for(["Alfa"])
-    assert alfa[0] == "Actualizar a 1.1" and "Desinstalar" in alfa and "Abrir carpeta de instalacion" in alfa
+    # v0.6.9: "Informacion de la app" encabeza el menu de una sola app
+    assert alfa[0] == "Informacion de la app" and alfa[1] == "Actualizar a 1.1"
+    assert "Desinstalar" in alfa and "Abrir carpeta de instalacion" in alfa
     beta = labels_for(["Beta"])
     assert not any(t.startswith("Actualizar") for t in beta) and "Desinstalar" in beta
     gamma = labels_for(["Gamma"])

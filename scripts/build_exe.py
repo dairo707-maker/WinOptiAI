@@ -275,17 +275,15 @@ def main() -> int:
     ico_path = generate_app_icon()
     generate_installer_wizard_images()
 
+    # v0.6.9: QtPdf y QtMultimedia se incluyen para el previsualizador interno (PDF, audio y video).
     qt_excludes = [
         "--exclude-module", "PySide6.QtWebEngineCore",
         "--exclude-module", "PySide6.QtWebEngineWidgets",
         "--exclude-module", "PySide6.QtWebEngineQuick",
-        "--exclude-module", "PySide6.QtPdf",
-        "--exclude-module", "PySide6.QtPdfWidgets",
         "--exclude-module", "PySide6.Qt3DCore",
         "--exclude-module", "PySide6.Qt3DRender",
         "--exclude-module", "PySide6.QtQuick",
         "--exclude-module", "PySide6.QtQml",
-        "--exclude-module", "PySide6.QtMultimedia",
     ]
 
     # 1. Build standalone WinOptiAI-Portable.exe

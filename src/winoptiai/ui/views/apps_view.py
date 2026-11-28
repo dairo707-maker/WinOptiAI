@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
 from ...apps.app_manager import (
     InstalledApp,
     bulk_upgrade_skip_reason,
+    can_upgrade,
     check_app_updates_winget,
+    retired_reason,
+    upgrade_app_winget_interactive,
+    upgrade_block_reason,
     running_app_processes,
     find_app_leftovers,
     list_installed_apps,
@@ -308,7 +312,7 @@ class AppsView(QWidget):
         selected = self._selected_apps()
         if not selected:
             return []
-        upgradable = [a for a in selected if a.available_version and not a.protected_reason]
+        upgradable = [a for a in selected if can_upgrade(a)]
         busy = not self.upgrade_btn.isEnabled()
         if len(upgradable) == 1:
             upd_label = f"Actualizar a {upgradable[0].available_version}"
@@ -318,15 +322,71 @@ class AppsView(QWidget):
         single = len(selected) == 1
         loc = (app.install_location or "").strip().strip('"')
         safe_url = app.upgrade_url if (app.upgrade_url or "").lower().startswith("https://") else ""
+        retired = retired_reason(app)
         return [
+            ("Informacion de la app", lambda a=app: self._show_app_info(a), single),
+            None,
             (upd_label, self._on_upgrade_selected, bool(upgradable) and not busy),
+            (
+                "Actualizar en modo interactivo",
+                lambda a=app: self._run_interactive_upgrade(a),
+                single and can_upgrade(app) and not busy,
+            ),
             ("Abrir sitio oficial (HTTPS)", lambda u=safe_url: QDesktopServices.openUrl(QUrl(u)), single and bool(safe_url)),
-            ("Desinstalar", self._on_uninstall_selected, single and not app.protected_reason),
+            (
+                "Desinstalar (retirada por su editor)" if retired else "Desinstalar",
+                self._on_uninstall_selected,
+                single and not app.protected_reason,
+            ),
             None,
             ("Abrir carpeta de instalacion", lambda: reveal_in_explorer(loc), single and bool(loc)),
             ("Copiar nombre", lambda: copy_text(", ".join(a.name for a in selected)), True),
             copy_row_extra(self.apps_table) if single else None,
         ]
+
+    def _offer_interactive(self, apps: list[InstalledApp]) -> bool:
+        """v0.6.9: instaladores que fallan en silencio (1603): ofrecer abrir su ventana oficial."""
+        names = "\n".join(f"- {a.name}: {a.upgrade_note}" for a in apps[:5])
+        ans = QMessageBox.question(
+            self,
+            "Completar en el instalador",
+            "Estas actualizaciones no se pueden terminar en silencio:\n\n"
+            f"{names}\n\nAbro el instalador oficial de la primera para que completes sus pasos "
+            "(licencia o permisos)?",
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return False
+        self._run_interactive_upgrade(apps[0])
+        return True
+
+    def _run_interactive_upgrade(self, app: InstalledApp) -> None:
+        ok, msg = upgrade_app_winget_interactive(app)
+        self.policy.record_audit_event("usuario", "Actualizar App (interactivo)" if ok else "Actualizar App (fallo)", msg)
+        self.notify_cb(msg)
+        if ok:
+            self._status_cache.pop(self._app_cache_key(app), None)
+            self.mark_stale()
+            self._render_apps()
+
+    def _show_app_info(self, app: InstalledApp) -> None:
+        """v0.6.9: ficha de la app (que es, editor, version, carpeta, uso) con descripcion oficial."""
+        from ..dialogs.app_info_dialog import AppInfoDialog
+
+        dlg = AppInfoDialog(app, theme_mode=self.policy.config.theme_mode, parent=self)
+        dlg.show()
+
+        def _fetch() -> dict:
+            from ...apps.app_manager import app_local_info, winget_package_info
+
+            return {"local": app_local_info(app), "online": winget_package_info(app)}
+
+        def _done(info: dict) -> None:
+            try:
+                dlg.set_details(info.get("local") or {}, info.get("online") or {})
+            except RuntimeError:
+                pass  # la ventana ya se cerro
+
+        self.run_async(_fetch, _done, f"Informacion de {app.name}", notify_on_complete=False)
 
     def _selected_apps(self) -> list[InstalledApp]:
         rows = sorted({idx.row() for idx in self.apps_table.selectedIndexes()})
@@ -349,11 +409,12 @@ class AppsView(QWidget):
         if not selected:
             self.notify_cb("Selecciona una o varias aplicaciones de la tabla (Ctrl o Mayus para varias).")
             return
-        blocked = [a for a in selected if a.protected_reason]
-        targets = [a for a in selected if a.available_version and not a.protected_reason]
+        blocked = [a for a in selected if a.available_version and upgrade_block_reason(a)]
+        targets = [a for a in selected if can_upgrade(a)]
         if not targets:
             if blocked:
-                self.notify_cb(f"Protegida: {blocked[0].protected_reason}")
+                reason = upgrade_block_reason(blocked[0])
+                QMessageBox.information(self, "No se puede actualizar", f"{blocked[0].name}:\n\n{reason}")
             else:
                 self.notify_cb("Primero usa 'Buscar Actualizaciones' o selecciona apps con nueva version.")
             return
@@ -374,7 +435,7 @@ class AppsView(QWidget):
         self._run_upgrades(targets, "Actualizar apps seleccionadas")
 
     def _on_upgrade_all(self) -> None:
-        candidates = [a for a in self.apps if a.available_version]
+        candidates = [a for a in self.apps if a.available_version and not retired_reason(a)]
         if not candidates:
             self.notify_cb("No hay actualizaciones pendientes. Usa 'Buscar Actualizaciones' primero.")
             return
@@ -444,7 +505,7 @@ class AppsView(QWidget):
 
     def _sync_failed_apps(self, apps: list[InstalledApp] | None = None) -> None:
         src = apps if apps is not None else self.apps
-        retryable = ("needs_admin", "tls_error", "blocked", "failed")
+        retryable = ("needs_admin", "tls_error", "blocked", "failed", "needs_interactive", "uninstall_failed")
         self._failed_apps = [
             a for a in src if a.available_version and a.upgrade_status in retryable
         ]
@@ -486,8 +547,14 @@ class AppsView(QWidget):
             self.retry_failed_btn.setVisible(False)
             self.notify_cb("No hay actualizaciones fallidas pendientes de reintento.")
             return
+        interactive = [a for a in self._failed_apps if a.upgrade_status in ("needs_interactive", "uninstall_failed")]
+        if interactive and self._offer_interactive(interactive):
+            return
         admin_apps = [a for a in self._failed_apps if a.upgrade_status == "needs_admin"]
-        normal_apps = [a for a in self._failed_apps if a.upgrade_status != "needs_admin"]
+        normal_apps = [
+            a for a in self._failed_apps
+            if a.upgrade_status not in ("needs_admin", "needs_interactive", "uninstall_failed")
+        ]
         if admin_apps:
             names = ", ".join(a.name for a in admin_apps[:4])
             ans = QMessageBox.question(
@@ -508,8 +575,26 @@ class AppsView(QWidget):
         self.retry_failed_btn.setVisible(False)
         self.summary_lbl.setText(f"Actualizando {len(targets)} aplicacion(es) con winget...")
 
-        def _work(progress_cb=None, controller=None):
-            return upgrade_apps_winget(targets, progress_cb=progress_cb, controller=controller)
+        def _work(progress_cb=None, controller=None, subtask_cb=None):
+            return upgrade_apps_winget(
+                targets, progress_cb=progress_cb, controller=controller, subtask_cb=subtask_cb
+            )
+
+        by_id = {a.app_id: a for a in targets}
+
+        def _on_item(key: str, info: dict) -> None:
+            # v0.6.9: cada app actualizada sale de "por actualizar" en cuanto termina.
+            if info.get("state") not in ("ok", "error"):
+                return
+            app = by_id.get(key)
+            if app is None:
+                return
+            if info.get("state") == "ok":
+                app.available_version = ""
+                app.upgrade_status = ""
+                app.upgrade_note = ""
+                self._status_cache.pop(self._app_cache_key(app), None)
+            self._render_apps()
 
         def _done(results) -> None:
             self.upgrade_btn.setEnabled(True)
@@ -534,6 +619,9 @@ class AppsView(QWidget):
             self.notify_cb(msg)
             self.summary_lbl.setText(msg)
             self._render_apps()
+            interactive_failed = [a for a, _m in failed if a.upgrade_status in ("needs_interactive", "uninstall_failed")]
+            if interactive_failed and self._offer_interactive(interactive_failed):
+                return
             admin_failed = [a for a, _m in failed if a.upgrade_status == "needs_admin"]
             if admin_failed:
                 names = ", ".join(a.name for a in admin_failed[:4])
@@ -556,7 +644,7 @@ class AppsView(QWidget):
             self.upgrade_all_btn.setEnabled(True)
             self._sync_failed_apps()
 
-        self.run_async(_work, _done, label, on_error=_err)
+        self.run_async(_work, _done, label, on_error=_err, subtask_ui_cb=_on_item)
 
     def _on_uninstall_selected(self) -> None:
         app = self._selected_app()
@@ -671,8 +759,12 @@ class AppsView(QWidget):
         for r, (orig_idx, app) in enumerate(visible):
             eff_ts = app.last_used_ts if app.last_used_ts > 0 else app.install_date_ts
             is_stale = eff_ts > 0 and eff_ts <= stale_cutoff
-            if app.upgrade_status == "editor_only":
+            if retired_reason(app):
+                state_txt, tone = "RETIRADA", "risk"
+            elif app.upgrade_status == "editor_only":
                 state_txt, tone = "SOLO EDITOR", "neutral"
+            elif app.upgrade_status in ("needs_interactive", "uninstall_failed") and app.available_version:
+                state_txt, tone = "INTERACTIVO", "warn"
             elif app.available_version:
                 state_txt, tone = "ACTUALIZAR", "warn"
             elif app.protected_reason:

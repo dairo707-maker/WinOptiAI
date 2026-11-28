@@ -2,6 +2,22 @@
 
 Todos los cambios notables de **WinOptiAI** se documentan en este archivo siguiendo [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/) y [Semantic Versioning](https://semver.org/lang/es/).
 
+## [0.6.9] - 2026-11-28
+
+### Corregido
+- **Actualizaciones que no avanzaban:** Visual C++ y .NET salian como "ACTUALIZAR" pero el boton no hacia nada (estaban bloqueados como protegidos); ahora se actualizan y solo se impide desinstalarlos. Instaladores que fallan en silencio (1603 por licencia, como Epson) quedan como "INTERACTIVO" con "Actualizar en modo interactivo". Teams clasico (Machine-Wide Installer) se marca "RETIRADA" por Microsoft y se ofrece desinstalarlo.
+- **Escanear Hardware y BIOS siempre responde:** avisa el resultado y consulta Windows Update (sin UAC) para mostrar controladores y BIOS/firmware disponibles, con acceso a "Actualizaciones opcionales"; o "Todo al dia".
+- **Centro de notificaciones en modo oscuro:** ya no sale con fondo blanco.
+
+### Agregado
+- **Progreso por elemento:** los procesos agrupados (actualizar varias apps, cerrar apps, limpiar Registro) muestran una barra por elemento en un detalle desplegable del panel de tareas, y la pildora superior indica (k/n) y el elemento en curso. Cada app actualizada sale de la lista "por actualizar" en cuanto termina.
+- **Clic derecho > Informacion de la app:** que es (descripcion oficial del catalogo winget o del propio programa), editor, version, tamano, fechas, ultimo uso, carpeta, licencia y pagina oficial.
+- **Apps en segundo plano (Procesos):** programas sin ventana que gastan memoria/CPU, con lo que liberan y aviso de efectos (OneDrive, WhatsApp, Teams); se cierran a mano. Nunca sistema, antivirus, instaladores ni agentes IA.
+- **Nueva pestana Mantenimiento:** Registro (solo entradas rotas que apuntan a archivos inexistentes, con copia .reg y Restaurar), Unidades y SSD (TRIM en SSD, desfragmentar solo HDD, salud y desgaste) y Espacio del sistema (componentes viejos de Windows, puntos de restauracion al 5 %, hibernacion, memoria virtual explicada).
+- **Enfriar en un clic (Resumen):** perfil termico Frio + modo eficiencia en segundo plano; pulsar de nuevo revierte.
+- **Previsualizador interno:** imagenes, texto/CSV/JSON, PDF y audio/video desde el clic derecho de Almacenamiento (nunca abre archivos solo-nube).
+- **Reportes de error por correo:** sin cuenta de GitHub; abre el correo del usuario con el informe anonimizado (copia completa en portapapeles y archivo).
+
 ## [0.6.8] - 2026-11-27
 
 ### Corregido

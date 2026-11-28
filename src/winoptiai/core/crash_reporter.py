@@ -129,6 +129,38 @@ def build_issue_url(title: str, body: str, max_chars: int = MAX_ISSUE_URL_CHARS)
     return prefix + quote(head + note), True
 
 
+# v0.6.9 (decision del propietario 28/11/2026): los informes se envian por CORREO, sin cuenta de
+# GitHub. La app abre el programa de correo del usuario con el informe anonimizado ya escrito.
+REPORT_EMAIL = "datg.2007@hotmail.com"
+# Windows recorta los enlaces mailto largos (~2.000 caracteres): el resto va al portapapeles/archivo.
+MAX_MAILTO_CHARS = 1900
+
+
+def build_mailto_url(
+    subject: str, body: str, max_chars: int = MAX_MAILTO_CHARS, to: str = REPORT_EMAIL
+) -> tuple[str, bool]:
+    """Enlace ``mailto:`` con el informe precargado. Devuelve (url, recortado)."""
+    note = (
+        "\n\n[Informe recortado por longitud. El texto completo esta en su portapapeles: "
+        "pegue con Ctrl+V debajo de esta linea, o adjunte el archivo de "
+        "%LOCALAPPDATA%\\WinOptiAI\\reports.]"
+    )
+    prefix = f"mailto:{to}?subject={quote(subject)}&body="
+    url = prefix + quote(body)
+    if len(url) <= max_chars:
+        return url, False
+    budget = max_chars - len(prefix) - len(quote(note))
+    kept: list[str] = []
+    used = 0
+    for line in body.splitlines(keepends=True):
+        cost = len(quote(line))
+        if used + cost > budget:
+            break
+        kept.append(line)
+        used += cost
+    return prefix + quote("".join(kept).rstrip("\n") + note), True
+
+
 def save_report_file(text: str, app_dir: Path | None = None) -> Path | None:
     """Guardar el informe completo en %LOCALAPPDATA%\\WinOptiAI\\reports (respaldo del portapapeles)."""
     base = (app_dir or default_app_data_dir()) / "reports"

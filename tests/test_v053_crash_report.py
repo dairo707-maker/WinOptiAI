@@ -154,7 +154,8 @@ def test_send_dialog_opens_github_only_on_user_click(qapp: QApplication, tmp_pat
     dlg2 = CrashSendDialog(guard2, on_decision=decisions.append, open_url=lambda u: opened.append(u) or True)
     dlg2._send()
     assert dlg2.saved_path is not None and dlg2.saved_path.read_text(encoding="utf-8") == dlg2.report_text
-    assert len(opened) == 1 and opened[0].startswith(cr.ISSUE_BASE_URL) and decisions[-1] is True
+    # v0.6.9: el informe se envia por correo (sin cuenta de GitHub)
+    assert len(opened) == 1 and opened[0].startswith(f"mailto:{cr.REPORT_EMAIL}?") and decisions[-1] is True
     assert "datg2" not in opened[0]
     assert QApplication.clipboard().text() == dlg2.report_text
 

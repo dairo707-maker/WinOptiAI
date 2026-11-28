@@ -60,7 +60,7 @@ def test_hardware_audit_and_power_scheme() -> None:
 
 def test_assets_and_zero_emoji_ui_policy() -> None:
     base = get_base_dir()
-    assert get_version() == "0.6.8"
+    assert get_version() == "0.6.9"
     assert (base / "assets" / "fonts" / "SpaceGrotesk[wght].ttf").exists()
     assert (base / "assets" / "fonts" / "JetBrainsMono-Regular.ttf").exists()
     assert (base / "assets" / "fonts" / "InstrumentSans.ttf").exists()

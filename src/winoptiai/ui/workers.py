@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import inspect
+import threading
 import time
 from typing import Any, Callable
 import uuid
@@ -31,6 +32,7 @@ class WorkerSignals(QObject):
     paused_saved = Signal(str, str, int, str)  # task_id, session_id, percent, detail
     canceled = Signal(str, str)             # task_id, detail
     error = Signal(str, str)                # task_id, error_msg
+    subtask = Signal(str, str, object)      # v0.6.9: task_id, clave, dict(label, pct, state, detail)
 
 
 class AsyncTask(QRunnable):
@@ -53,6 +55,10 @@ class AsyncTask(QRunnable):
         self.kwargs = kwargs
         self.controller = TaskController(self.task_id)
         self.signals = WorkerSignals()
+        # v0.6.9: subtareas de un proceso agrupado (p. ej. cada app de un lote), en orden.
+        self.subtasks: dict[str, dict] = {}
+        self._sub_lock = threading.Lock()
+        self._sub_last_emit: dict[str, float] = {}
 
     def eta_label(self) -> str:
         """Return realistic remaining time estimate once task progresses past initialization."""
@@ -92,10 +98,63 @@ class AsyncTask(QRunnable):
         except RuntimeError:
             pass
 
+    SUBTASK_STATES = ("pending", "running", "ok", "error", "skipped")
+
+    def subtask_snapshot(self) -> list[tuple[str, dict]]:
+        with self._sub_lock:
+            return [(k, dict(v)) for k, v in self.subtasks.items()]
+
+    def subtask_counts(self) -> tuple[int, int]:
+        """(terminadas, total) de las subtareas."""
+        with self._sub_lock:
+            total = len(self.subtasks)
+            done = sum(1 for v in self.subtasks.values() if v.get("state") in ("ok", "error", "skipped"))
+        return done, total
+
+    def _emit_subtask(
+        self,
+        key: str,
+        label: str | None = None,
+        pct: int | None = None,
+        state: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Actualiza una subtarea (hilo trabajador). Cambios de estado se emiten siempre; el %
+        como mucho ~8 veces/s por subtarea para no saturar el hilo GUI."""
+        key = str(key)
+        with self._sub_lock:
+            cur = self.subtasks.get(key)
+            if cur is None:
+                cur = {"label": label or key, "pct": 0, "state": "pending", "detail": ""}
+                self.subtasks[key] = cur
+            state_changed = False
+            if label:
+                cur["label"] = label
+            if pct is not None:
+                cur["pct"] = max(0, min(100, int(pct)))
+            if state and state in self.SUBTASK_STATES and state != cur["state"]:
+                cur["state"] = state
+                state_changed = True
+                if state in ("ok", "skipped"):
+                    cur["pct"] = 100
+            if detail is not None:
+                cur["detail"] = detail
+            info = dict(cur)
+        now = time.monotonic()
+        if not state_changed and (now - self._sub_last_emit.get(key, 0.0)) < 0.12:
+            return
+        self._sub_last_emit[key] = now
+        try:
+            self.signals.subtask.emit(self.task_id, key, info)
+        except RuntimeError:
+            pass
+
     def run(self) -> None:
         try:
             call_kwargs = dict(self.kwargs)
             sig = inspect.signature(self.fn)
+            if "subtask_cb" in sig.parameters and "subtask_cb" not in call_kwargs:
+                call_kwargs["subtask_cb"] = self._emit_subtask
             if "progress_cb" in sig.parameters and "progress_cb" not in call_kwargs:
                 call_kwargs["progress_cb"] = self._emit_progress
             if "controller" in sig.parameters and "controller" not in call_kwargs:

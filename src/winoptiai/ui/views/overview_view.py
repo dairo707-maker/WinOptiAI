@@ -47,6 +47,7 @@ class OverviewView(QWidget):
 
     trigger_ai_boost = Signal()
     trigger_focus_mode = Signal()
+    trigger_cool_mode = Signal()  # v0.6.9: Enfriar en un clic
     jump_tab_requested = Signal(int)
 
     def __init__(
@@ -100,6 +101,19 @@ class OverviewView(QWidget):
         self.focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.focus_btn.clicked.connect(self.trigger_focus_mode.emit)
         header.addWidget(self.focus_btn)
+
+        # v0.6.9 (como en Android): Enfriar = perfil termico Frio + modo eficiencia en segundo plano.
+        self.cool_btn = AdaptiveButton("Enfriar")
+        self.cool_btn.setObjectName("GhostAction")
+        self.cool_btn.set_variants(["Enfriar"])
+        self.cool_btn.setCheckable(True)
+        self.cool_btn.setToolTip(
+            "Baja la temperatura en un clic: perfil termico Frio (con respaldo del plan de energia) y modo "
+            "eficiencia para apps en segundo plano. Pulsa de nuevo para volver al perfil anterior."
+        )
+        self.cool_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cool_btn.clicked.connect(self.trigger_cool_mode.emit)
+        header.addWidget(self.cool_btn)
 
         self.boost_btn = QPushButton(f" {tr('btn_ai_boost', lang)}")
         self.boost_btn.setObjectName("PrimaryAction")

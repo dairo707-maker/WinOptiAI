@@ -1383,6 +1383,10 @@ class StorageView(QWidget):
             if widget is self.table:
                 out.extend(self._storage_selection_actions())
             out.append(None)
+            from ..dialogs.file_preview_dialog import open_preview, preview_kind
+
+            tgt = str(target) if target is not None else ""
+            out.append(("Vista previa", lambda t=tgt: open_preview(t, self), bool(tgt) and bool(preview_kind(tgt))))
             out.append(("Ver en el Explorador de Windows", self._reveal_selected_item, target is not None))
             out.append(("Copiar ruta", lambda: copy_text(str(target) if target else ""), target is not None))
             return out
@@ -1540,7 +1544,10 @@ class StorageView(QWidget):
         self.heavy_tree.setCurrentItem(it)
         from ..context_menu import build_action_menu, copy_text
 
+        from ..dialogs.file_preview_dialog import open_preview, preview_kind
+
         extras = lambda: [  # noqa: E731
+            ("Vista previa", lambda: open_preview(str(p), self), bool(preview_kind(str(p)))),
             ("Ver en el Explorador de Windows", lambda: self._reveal_path(str(p)), True),
             ("Copiar ruta", lambda: copy_text(str(p)), True),
             ("Enviar a Cuarentena   (Supr)", self._quick_quarantine_selected, True),  # v0.5.9: inmediato

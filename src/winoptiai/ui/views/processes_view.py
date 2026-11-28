@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -169,6 +170,7 @@ class ProcessesView(QWidget):
             policy=self.policy,
             storage_key="proc_table",
         )
+        self.proc_table.setMinimumHeight(170)  # v0.6.9: nunca aplastada por el panel inferior
         root.addWidget(self.proc_table, stretch=3)
 
         # Orphan AI / MCP workers panel
@@ -190,7 +192,46 @@ class ProcessesView(QWidget):
         self.kill_zombie_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.kill_zombie_btn.clicked.connect(self._kill_selected_zombie)
         z_hdr.addWidget(self.kill_zombie_btn)
-        z_layout.addLayout(z_hdr)
+        # v0.6.9: pestanas "Apps en segundo plano" (como Android) + cazador de workers IA
+        self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.setDocumentMode(True)
+        bg_page = QWidget()
+        bg_l = QVBoxLayout(bg_page)
+        bg_l.setContentsMargins(0, 8, 0, 0)
+        bg_l.setSpacing(8)
+        bg_hdr = QHBoxLayout()
+        bg_hint = QLabel("Programas sin ventana que gastan memoria o CPU. Puedes cerrarlos sin perder trabajo.")
+        bg_hint.setObjectName("Caption")
+        bg_hint.setWordWrap(True)
+        bg_hdr.addWidget(bg_hint, stretch=1)
+        self.bg_tag = StatusTag("SIN REVISAR", "neutral")
+        bg_hdr.addWidget(self.bg_tag)
+        self.bg_scan_btn = QPushButton("Buscar")
+        self.bg_scan_btn.setObjectName("GhostAction")
+        self.bg_scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bg_scan_btn.clicked.connect(self.refresh_background_apps)
+        bg_hdr.addWidget(self.bg_scan_btn)
+        self.bg_close_btn = QPushButton("Cerrar seleccionadas")
+        self.bg_close_btn.setObjectName("RiskAction")
+        self.bg_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bg_close_btn.clicked.connect(self._close_selected_bg_apps)
+        bg_hdr.addWidget(self.bg_close_btn)
+        bg_l.addLayout(bg_hdr)
+        self.bg_table = QTableWidget(0, 5)
+        self.bg_table.setHorizontalHeaderLabels(["APP", "PROCESOS", "RAM (MB)", "CPU %", "AL CERRAR"])
+        configure_sortable_table(self.bg_table)
+        self.bg_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        configure_interactive_columns(self.bg_table, [300, 92, 100, 80, 380], policy=self.policy, storage_key="bg_apps_table")
+        self.bg_table.setMinimumHeight(70)
+        bg_l.addWidget(self.bg_table)
+        self.bg_apps: list = []
+        install_action_menu(self.bg_table, extras=self._bg_menu_extras)
+
+        zombie_page = QWidget()
+        zl = QVBoxLayout(zombie_page)
+        zl.setContentsMargins(0, 8, 0, 0)
+        zl.setSpacing(8)
+        zl.addLayout(z_hdr)
 
         self.zombie_table = QTableWidget(0, 4)
         self.zombie_table.setHorizontalHeaderLabels(["PID", "PROCESO", "RAM (MB)", "COMANDO"])
@@ -201,7 +242,11 @@ class ProcessesView(QWidget):
             policy=self.policy,
             storage_key="zombie_table",
         )
-        z_layout.addWidget(self.zombie_table)
+        self.zombie_table.setMinimumHeight(70)
+        zl.addWidget(self.zombie_table)
+        self.bottom_tabs.addTab(bg_page, "Apps en segundo plano")
+        self.bottom_tabs.addTab(zombie_page, "Workers IA huerfanos")
+        z_layout.addWidget(self.bottom_tabs)
         # v0.6.5: clic derecho = mismas acciones del apartado
         install_action_menu(self.proc_table, extras=lambda: self._proc_menu_extras(self.proc_table))
         install_action_menu(
@@ -232,6 +277,105 @@ class ProcessesView(QWidget):
     def refresh_all(self) -> None:
         self.run_async(lambda: list_top_processes(45), self._render_processes, "Escaneo procesos")
         self.run_async(detect_orphan_ai_workers, self._render_zombies, "Cazador MCP")
+        self.refresh_background_apps()
+
+    # ------------------------------------------------------------------ v0.6.9: segundo plano
+    def refresh_background_apps(self) -> None:
+        from ...ai_optimizer.background_apps import list_closable_background_apps
+
+        self.bg_scan_btn.setEnabled(False)
+
+        def _err(_e: str) -> None:
+            self.bg_scan_btn.setEnabled(True)
+
+        self.run_async(list_closable_background_apps, self._render_bg_apps, "Apps en segundo plano",
+                       notify_on_complete=False, on_error=_err)
+
+    def _render_bg_apps(self, apps: list) -> None:
+        from ...ai_optimizer.background_apps import caution_note
+
+        self.bg_scan_btn.setEnabled(True)
+        self.bg_apps = list(apps)
+        total = sum(a.ram_mb for a in apps)
+        self.bg_tag.set_tone(f"{len(apps)} APPS · {total:.0f} MB" if apps else "NADA QUE CERRAR", "warn" if apps else "ok")
+        self.bg_table.setSortingEnabled(False)
+        self.bg_table.setRowCount(len(apps))
+        for r, a in enumerate(apps):
+            name_item = QTableWidgetItem(a.display)
+            name_item.setData(Qt.ItemDataRole.UserRole + 1, r)
+            name_item.setToolTip(a.exe or a.display)
+            self.bg_table.setItem(r, 0, name_item)
+            self.bg_table.setItem(r, 1, NumericTableItem(str(len(a.pids)), len(a.pids)))
+            self.bg_table.setItem(r, 2, NumericTableItem(f"{a.ram_mb:.0f}", a.ram_mb))
+            self.bg_table.setItem(r, 3, NumericTableItem(f"{a.cpu_pct:.1f}", a.cpu_pct))
+            self.bg_table.setItem(r, 4, QTableWidgetItem(caution_note(a.name)))
+        apply_table_tooltips(self.bg_table)
+        self.bg_table.setSortingEnabled(True)
+
+    def _selected_bg_apps(self) -> list:
+        rows = sorted({i.row() for i in self.bg_table.selectedIndexes()})
+        out = []
+        for r in rows:
+            it = self.bg_table.item(r, 0)
+            idx = it.data(Qt.ItemDataRole.UserRole + 1) if it else None
+            if isinstance(idx, int) and 0 <= idx < len(self.bg_apps):
+                out.append(self.bg_apps[idx])
+        return out
+
+    def _bg_menu_extras(self):
+        from ...core.win32_bridge import reveal_in_explorer
+
+        sel = self._selected_bg_apps()
+        if not sel:
+            return []
+        first = sel[0]
+        label = f"Cerrar {first.display}" if len(sel) == 1 else f"Cerrar {len(sel)} apps"
+        return [
+            (label, self._close_selected_bg_apps, True),
+            None,
+            ("Abrir ubicacion del archivo", lambda: reveal_in_explorer(first.exe), len(sel) == 1 and bool(first.exe)),
+            ("Copiar nombre", lambda: copy_text(", ".join(a.display for a in sel)), True),
+        ]
+
+    def _close_selected_bg_apps(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        from ...ai_optimizer.background_apps import caution_note, close_background_app
+
+        sel = self._selected_bg_apps()
+        if not sel:
+            self.notify_cb("Selecciona una o varias apps de la lista (Ctrl o Mayus para varias).")
+            return
+        lines = "\n".join(f"- {a.display} (~{a.ram_mb:.0f} MB): {caution_note(a.name)}" for a in sel[:8])
+        ans = QMessageBox.question(self, "Cerrar apps en segundo plano", f"Se cerraran:\n\n{lines}\n\nContinuar?")
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        self.bg_close_btn.setEnabled(False)
+
+        def _work(subtask_cb=None):
+            res = []
+            for a in sel:
+                if subtask_cb:
+                    subtask_cb(a.name, label=a.display, state="running", pct=30)
+                ok, msg = close_background_app(a)
+                if subtask_cb:
+                    subtask_cb(a.name, state="ok" if ok else "error", detail=msg)
+                res.append((a, ok, msg))
+            return res
+
+        def _done(res) -> None:
+            self.bg_close_btn.setEnabled(True)
+            ok_n = sum(1 for _a, ok, _m in res if ok)
+            freed = sum(a.ram_mb for a, ok, _m in res if ok)
+            for _a, ok, m in res:
+                self.policy.record_audit_event("usuario", "Cerrar app en segundo plano" if ok else "Cerrar app (fallo)", m)
+            self.notify_cb(f"{ok_n} de {len(res)} app(s) cerradas · ~{freed:.0f} MB liberados.")
+            self.refresh_background_apps()
+
+        def _err(_e: str) -> None:
+            self.bg_close_btn.setEnabled(True)
+
+        self.run_async(_work, _done, "Cerrar apps en segundo plano", notify_on_complete=False, on_error=_err)
 
     def set_focus_mode_active(self, active: bool) -> None:
         self.focus_btn.blockSignals(True)

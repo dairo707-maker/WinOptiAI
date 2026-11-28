@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         # v0.5.1: workers finalizados se retienen hasta el siguiente ciclo del event loop para
         # que su QObject de senales no se libere mientras su propia emision sigue en la pila.
         self._retired_workers: list[AsyncTask] = []
+        self._subtask_sync_pending = False  # v0.6.9: agrupa redibujos del panel de subtareas
         self._notif_dialog: NotificationsTasksDialog | None = None
 
         self.vault = QuarantineVault()
@@ -195,6 +196,7 @@ class MainWindow(QMainWindow):
             ("thermal", "nav_thermal"),
             ("apps", "nav_apps"),
             ("startup", "nav_startup"),
+            ("maintenance", "nav_maintenance"),  # v0.6.9
         ]
         self.nav_panel = SlidingNavPanel()
         self.nav_panel.set_items([(icon_name, tr(tr_key, lang)) for icon_name, tr_key in self._nav_spec])
@@ -387,6 +389,7 @@ class MainWindow(QMainWindow):
         self.overview_view = OverviewView(lang=lang, policy=self.policy)
         self.overview_view.trigger_ai_boost.connect(lambda: self._execute_ai_boost("usuario"))
         self.overview_view.trigger_focus_mode.connect(lambda: self._toggle_focus_mode())
+        self.overview_view.trigger_cool_mode.connect(self._toggle_cool_mode)
         self.overview_view.jump_tab_requested.connect(self._switch_tab)
         self.overview_view.attach_metrics(self.metrics_history, lambda: self.policy.config.ram_threshold_gb)
         self.storage_view = StorageView(
@@ -422,6 +425,9 @@ class MainWindow(QMainWindow):
         self.startup_view.summary_changed.connect(
             lambda txt, tone: self.overview_view.update_subsystem_semaphore("startup", txt, tone)
         )
+        from .views.maintenance_view import MaintenanceView
+
+        self.maintenance_view = MaintenanceView(self.policy, self._run_async, self._set_status, lang=lang)
 
         self.stack.addWidget(self.overview_view)
         self.stack.addWidget(self.storage_view)
@@ -429,6 +435,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.thermal_view)
         self.stack.addWidget(self.apps_view)
         self.stack.addWidget(self.startup_view)
+        self.stack.addWidget(self.maintenance_view)
         self.view_transition = ViewTransitionController(self.stack, guard=self.motion_guard)
         rc_layout.addWidget(self.stack, stretch=1)
         main_layout.addWidget(right_col, stretch=1)
@@ -634,6 +641,8 @@ class MainWindow(QMainWindow):
             self.processes_view.refresh_all()
         elif index == 4 and self.apps_view.needs_refresh() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.apps_view.refresh_apps()  # v0.6.6: tambien si el listado tiene mas de 30 min
+        elif index == 6 and not self.maintenance_view.volumes and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self.maintenance_view.refresh_all()  # v0.6.9: primera visita a Mantenimiento
         elif index == 5 and not self.startup_view.items and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             self.startup_view.refresh_startup()
 
@@ -773,6 +782,7 @@ class MainWindow(QMainWindow):
         self.thermal_view.apply_language_and_theme(lang, pal["icon_inverted"])
         self.apps_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
         self.startup_view.apply_language_and_theme(lang, pal["icon_inverted"], mode)
+        self.maintenance_view.apply_language_and_theme(lang, pal["icon_inverted"])
         self._sync_tray_state()
 
     def _open_about_dialog(self) -> None:
@@ -1030,7 +1040,12 @@ class MainWindow(QMainWindow):
             eta = lead.eta_label()
             eta_part = f" · {eta}" if eta else ""
             extra = f" (+{len(self._active_workers) - 1})" if len(self._active_workers) > 1 else ""
-            self.task_pill_btn.set_variants(_task_pill_variants(lead.title, lead.percent, eta_part, extra))
+            done_n, total_n = lead.subtask_counts() if hasattr(lead, "subtask_counts") else (0, 0)
+            lead_title = lead.title
+            if total_n:
+                running = [v.get("label", "") for _k, v in lead.subtask_snapshot() if v.get("state") == "running"]
+                lead_title = f"{lead.title} ({done_n}/{total_n}{': ' + running[0] if running else ''})"
+            self.task_pill_btn.set_variants(_task_pill_variants(lead_title, lead.percent, eta_part, extra))
         else:
             if self.task_eta_timer.isActive():
                 self.task_eta_timer.stop()
@@ -1050,6 +1065,7 @@ class MainWindow(QMainWindow):
         on_error=None,
         supports_save: bool = False,
         resume_meta: dict | None = None,
+        subtask_ui_cb=None,
     ) -> None:
         # RAM-aware concurrency guardrail
         free_gb = get_memory_snapshot()["free_gb"]
@@ -1107,6 +1123,17 @@ class MainWindow(QMainWindow):
                 except RuntimeError:
                     pass
 
+        def _on_subtask(_tid: str, key: str, info) -> None:
+            # v0.6.9: barra propia por elemento del lote (panel de tareas) + aviso a la vista
+            if info.get("state") != "running" or not self._subtask_sync_pending:
+                self._subtask_sync_pending = True
+                QTimer.singleShot(150, self._flush_subtask_sync)
+            if subtask_ui_cb is not None:
+                try:
+                    subtask_ui_cb(key, info)
+                except RuntimeError:
+                    pass
+
         def _cleanup_common(tid: str) -> None:
             finished = [w for w in self._active_workers if w.task_id == tid]
             self._active_workers[:] = [w for w in self._active_workers if w.task_id != tid]
@@ -1152,11 +1179,16 @@ class MainWindow(QMainWindow):
         # en el hilo GUI, nunca en el hilo del QThreadPool que emite la senal.
         queued = Qt.ConnectionType.QueuedConnection
         worker.signals.progress.connect(_on_progress, queued)
+        worker.signals.subtask.connect(_on_subtask, queued)
         worker.signals.finished.connect(_cleanup_and_emit, queued)
         worker.signals.paused_saved.connect(_cleanup_on_paused_saved, queued)
         worker.signals.canceled.connect(_cleanup_on_canceled, queued)
         worker.signals.error.connect(_cleanup_on_err, queued)
         self.pool.start(worker)
+
+    def _flush_subtask_sync(self) -> None:
+        self._subtask_sync_pending = False
+        self._sync_active_task_indicators()
 
     def _release_retired_workers(self) -> None:
         self._retired_workers.clear()
@@ -1175,7 +1207,7 @@ class MainWindow(QMainWindow):
             ).start()
         self._sync_active_task_indicators()
         self.overview_view.set_audit_rows(self.policy.read_recent_audit())
-        self.thermal_view.refresh_audit()
+        self.thermal_view.refresh_audit(announce=False)  # v0.6.9: sin aviso al arrancar
 
         def _retain_quarantine() -> dict[str, int]:
             return self.vault.purge_expired_items(max_age_days=30, only_junk_categories=True)
@@ -1387,6 +1419,31 @@ class MainWindow(QMainWindow):
             self._notify_user("COMPLETADO", "AI Boost", msg, action_tab=0, tray_toast=(actor == "sre_auto"))
 
         self._run_async(_work, _done, "AI Boost (RAM + EcoQoS)", notify_on_complete=False, on_error=_re_enable)
+
+    def _toggle_cool_mode(self) -> None:
+        """v0.6.9: Enfriar (como en Android): perfil Frio + EcoQoS en segundo plano; reversible."""
+        cfg = self.policy.config
+        if cfg.active_thermal_profile != "cool":
+            self._profile_before_cool = cfg.active_thermal_profile or "balanced"
+            self._tray_thermal("cool")
+            ok = cfg.active_thermal_profile == "cool"
+
+            def _done(res) -> None:
+                n = int(res.get("ecoqos_applied", 0)) if isinstance(res, dict) else 0
+                msg = f"Enfriar activo: perfil Frio y {n} app(s) en modo eficiencia. Pulsa de nuevo para revertir."
+                self.policy.record_audit_event("usuario", "Enfriar", msg)
+                self._notify_user("COMPLETADO", "Enfriar", msg, action_tab=3)
+
+            if ok:
+                self._run_async(lambda: run_ai_boost(trim_heavy_apps=False, apply_ecoqos=True), _done,
+                                "Enfriar", notify_on_complete=False)
+        else:
+            prev = getattr(self, "_profile_before_cool", "balanced") or "balanced"
+            self._tray_thermal(prev if prev != "cool" else "balanced")
+            self.policy.record_audit_event("usuario", "Enfriar (revertido)", f"Perfil restaurado: {prev}")
+        self.overview_view.cool_btn.blockSignals(True)
+        self.overview_view.cool_btn.setChecked(cfg.active_thermal_profile == "cool")
+        self.overview_view.cool_btn.blockSignals(False)
 
     def _toggle_focus_mode(self, target: bool | None = None) -> None:
         want = (not self.focus_mgr.active) if target is None else bool(target)

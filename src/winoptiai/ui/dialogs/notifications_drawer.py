@@ -48,6 +48,7 @@ class NotificationsTasksDialog(QDialog):
         self.on_resume_session = on_resume_session
         self.on_sync_tasks = on_sync_tasks
         self.on_open_diagnostics = on_open_diagnostics
+        self._expanded_tasks: set[str] = set()  # v0.6.9: tareas con el detalle por elemento abierto
 
         self.setWindowTitle("Procesos Activos, Sesiones y Notificaciones")
         self.resize(610, 620)
@@ -202,6 +203,21 @@ class NotificationsTasksDialog(QDialog):
             bar.setTextVisible(False)
             rl.addWidget(bar)
 
+            # v0.6.9: proceso agrupado -> submenu desplegable con una barra por elemento.
+            subtasks = task.subtask_snapshot() if hasattr(task, "subtask_snapshot") else []
+            if subtasks:
+                done_n = sum(1 for _k, v in subtasks if v.get("state") in ("ok", "error", "skipped"))
+                expanded = task.task_id in self._expanded_tasks
+                toggle = QPushButton(
+                    f"{'Ocultar' if expanded else 'Ver'} detalle ({done_n}/{len(subtasks)})"
+                )
+                toggle.setObjectName("GhostAction")
+                toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+                toggle.clicked.connect(lambda _=False, tid=task.task_id: self._toggle_task_detail(tid))
+                rl.addWidget(toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+                if expanded:
+                    rl.addWidget(self._build_subtask_list(subtasks))
+
             ctl = QHBoxLayout()
             ctl.setSpacing(6)
             ctl.addStretch()
@@ -227,6 +243,49 @@ class NotificationsTasksDialog(QDialog):
             ctl.addWidget(cancel_btn)
             rl.addLayout(ctl)
             self.tasks_container.addWidget(row_w)
+
+    _SUB_STATE_TXT = {
+        "pending": ("EN ESPERA", "neutral"),
+        "running": ("EN CURSO", "active"),
+        "ok": ("LISTO", "ok"),
+        "error": ("ERROR", "risk"),
+        "skipped": ("OMITIDO", "neutral"),
+    }
+
+    def _toggle_task_detail(self, task_id: str) -> None:
+        if task_id in self._expanded_tasks:
+            self._expanded_tasks.discard(task_id)
+        else:
+            self._expanded_tasks.add(task_id)
+        # Nunca reconstruir dentro del slot clicked del boton que se destruye (leccion v0.5.1).
+        QTimer.singleShot(0, self._render_tasks)
+
+    def _build_subtask_list(self, subtasks: list[tuple[str, dict]]) -> QWidget:
+        box = QWidget()
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(12, 2, 0, 2)
+        bl.setSpacing(4)
+        for _key, info in subtasks:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            name = QLabel(info.get("label", ""))
+            name.setMinimumWidth(150)
+            if info.get("detail"):
+                name.setToolTip(info["detail"])
+            row.addWidget(name, stretch=2)
+            sbar = QProgressBar()
+            sbar.setRange(0, 100)
+            sbar.setValue(int(info.get("pct", 0)))
+            sbar.setTextVisible(False)
+            sbar.setFixedHeight(6)
+            row.addWidget(sbar, stretch=3)
+            txt, tone = self._SUB_STATE_TXT.get(info.get("state", "pending"), ("", "neutral"))
+            tag = StatusTag(txt, tone)
+            if info.get("detail"):
+                tag.setToolTip(info["detail"])
+            row.addWidget(tag)
+            bl.addLayout(row)
+        return box
 
     def _render_sessions(self) -> None:
         self._clear_layout(self.sessions_container)

@@ -1,6 +1,6 @@
 # CLAUDE.md — Contexto de Ingenieria para Agentes (Claude Code / Antigravity / Codex)
 
-Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.8`, publicada en GitHub e instalada localmente) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
+Este archivo contiene el contexto operativo, arquitectonico y de diseno actual de **WinOptiAI · by TRODAI** (`v0.6.9`, publicada en GitHub) para garantizar continuidad exacta entre sesiones de agentes y desarrolladores.
 
 ## Perfil del Proyecto y Propietario
 
@@ -31,6 +31,21 @@ Este archivo contiene el contexto operativo, arquitectonico y de diseno actual d
    - **Monitoreo con historial (`v0.5.8`–`v0.6.1`):** `core/metrics_history.py` guarda 1 punto/min (promedio de lecturas de 2 s via `MinuteAggregator`) en `%LOCALAPPDATA%\WinOptiAI\metrics.sqlite` (retencion 7 dias) usando una hebra unica (`MetricsHistory.submit`, FIFO: escribir y luego recargar). `ui/history_charts.py` dibuja con QPainter (`TimeSeriesChart`, `FreedSpaceChart`, `_FreedLegend`, `SystemGaugesWidget` 2x2) con margenes dinamicos via `QFontMetrics` para no recortar ejes Y ni leyendas. Desde `v0.6.0`, `Resumen` va sin `QScrollArea` para caber limpio en `980x650`.
    - **Instancia unica (`v0.5.8` / `v0.6.2`, `core/single_instance.py`):** mutex `Local\WinOptiAI-<hash>` antes del crash guard; la segunda copia avisa por `QLocalSocket` y termina (tambien rechaza arranque duplicado en `ERROR_ACCESS_DENIED`). `--elevated-relaunch` espera 30 s al mutex y usa `run_elevated_command(..., track=False, directory=...)` para que `_shutdown_everything` no mate la nueva instancia elevada (`v0.6.2`). Causa de los AI Boost duplicados del 16/11: dos procesos abiertos.
    - **Modo Arbol (`v0.5.4`):** pestanas `Mapa jerarquico` (treemap squarified propio en `ui/treemap.py`, opaco con paleta por categoria, 2 niveles, clic = entrar, doble clic = Explorador, breadcrumbs clickables), `Carpetas y formatos` y `Archivos mas pesados` (top 100 global o agrupado por extension, filtro por categoria/extension, doble clic = Explorador con el archivo seleccionado). El analizador guarda solo tops acotados (60 subcarpetas por nivel, 30 archivos por extension, 100 global) para no inflar RAM.
+
+## Cambios Consolidados v0.6.9 (28/11/2026, Claude Code; release v0.6.9 publicado)
+
+- **Actualizaciones (`apps/app_manager.py`):** `upgrade_block_reason`/`can_upgrade` reemplazan el bloqueo por `protected_reason`: `_UPGRADE_OK_PROTECTED` (Visual C++, .NET, Desktop Runtime, ASP.NET Core) se actualiza pero nunca se desinstala; `_RETIRED_PACKAGES` (Teams clasico) -> `retired_reason`, estado RETIRADA. `classify_winget_failure` agrega `needs_interactive` (instalador 1603, p. ej. EULA de Epson) y `uninstall_failed` (1603 al quitar la version vieja). `upgrade_app_winget_interactive` = `winget upgrade --interactive` en consola nueva con PID protegido.
+- **Subtareas (`ui/workers.py`):** `AsyncTask.subtasks` + `_emit_subtask(key, label, pct, state, detail)` inyectado como `subtask_cb` si la funcion lo declara; senal `subtask`. `main_window._run_async(..., subtask_ui_cb=)`; panel `notifications_drawer` con "Ver detalle (k/n)" y barra por elemento (`_toggle_task_detail` difiere con `QTimer.singleShot`). `upgrade_apps_winget(subtask_cb=)`; `apps_view._run_upgrades` quita cada app al terminar (`_on_item`).
+- **Info de app:** `ui/dialogs/app_info_dialog.py`; `app_manager.parse_winget_show` (es/en), `winget_package_info`, `exe_version_info` (VerQueryValueW), `app_local_info` (descarta instaladores/desinstaladores).
+- **Hardware/BIOS:** `thermal_bios/driver_updates.py` (`Microsoft.Update.Session`, Type='Driver', sin UAC, ~15 s); `thermal_bios_view.refresh_audit(announce=)` avisa solo si lo pide la persona (arranque: `announce=False`); boton `wu_btn` -> `ms-settings:windowsupdate-optionalupdates`.
+- **Segundo plano:** `ai_optimizer/background_apps.py` (usuario actual, sin ventana visible, >=40 MB o >=2 % CPU; excluye sistema/escritorio, antivirus, instaladores, agentes IA); pestana en `processes_view.bottom_tabs`.
+- **Mantenimiento (`maintenance/registry_cleaner.py`, `maintenance/drives.py`, `ui/views/maintenance_view.py`, 7.a pestana, icono `maintenance.svg`):** Registro solo rotas (Uninstall no-MSI con desinstalador y carpeta inexistentes, App Paths, Run, Classes\Applications) en discos FIJOS; `reg export` antes de `reg delete`; HKLM con UAC (`elevated_delete_command`); `restore_backup`. Unidades via `Get-Volume/Get-PhysicalDisk` (desgaste solo admin); `Optimize-Volume -ReTrim` (SSD) o `-Analyze -Defrag` (HDD) con UAC. Espacio: WinSxS (DISM StartComponentCleanup), `vssadmin resize shadowstorage 5%`, `powercfg /hibernate off|on`, pagefile informativo.
+- **Enfriar:** `main_window._toggle_cool_mode` (perfil cool + `run_ai_boost(trim_heavy_apps=False)`), boton `overview_view.cool_btn`.
+- **Previsualizador:** `ui/dialogs/file_preview_dialog.py` (imagen, texto 256 KB, QtPdf, QtMultimedia); `build_exe.py` ya NO excluye QtPdf/QtMultimedia. Nunca solo-nube ni red.
+- **Reportes por correo:** `crash_reporter.REPORT_EMAIL = "datg.2007@hotmail.com"` (decision del propietario; queda publico en el repo), `build_mailto_url` (<=1900 caracteres; completo en portapapeles y `reports/`).
+- **Tema:** `QScrollArea` y su viewport transparentes (Centro de notificaciones blanco en oscuro).
+- **Pruebas:** `tests/test_v069_maintenance_updates.py`; `test_ui_smoke` ahora 7 pestanas.
+- **Modo administrador:** Windows no permite elevar un proceso abierto; "Elevar Admin" siempre relanza. Las acciones puntuales (sensores, Standby, winget, Registro HKLM, unidades, espacio) piden UAC solo para esa accion.
 
 ## Cambios Consolidados v0.6.8 (27/11/2026, Antigravity + Claude Code; release v0.6.8 publicado)
 
@@ -154,7 +169,7 @@ uv run --no-sync python scripts/build_exe.py
 ## Convenciones de Git, Versionado y Notas
 
 - Rama principal: `main`.
-- Version unica en `VERSION` (actualmente `0.6.8`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
+- Version unica en `VERSION` (actualmente `0.6.9`), sincronizada con `pyproject.toml`, `packaging/installer.iss`, `tests/test_sre_and_hardware.py` y `CHANGELOG.md`.
 - En Windows con `gh release create`, escribir notas en archivo temporal y pasar `--notes-file`.
 - Usar commits semanticos descriptivos en espanol (`feat(core): ...`, `fix(ui): ...`, `docs: ...`).
 - Adjuntar `git notes` tecnicas con contexto de verificacion a los commits principales (`git log --show-notes`, `git push origin main "refs/notes/*"`).
